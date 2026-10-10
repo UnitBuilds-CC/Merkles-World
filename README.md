@@ -10,9 +10,10 @@ No 3D modelling. No textures. No mesh pipeline. No per-tick chunk simulation.
 
 ## Where this came from
 
-Design conversations recorded in
-`C:\Users\visse\OneDrive\Documentos\How did minecraft get popular.txt` (1930 lines, read 2026-10-11).
-Everything in `docs/` traces back to that transcript — the traceability map in
+Design conversations recorded in the source transcript, cited throughout these docs as **`GS`**
+(1930 lines, read 2026-10-11). It is a working document and stays **outside this repository** — see
+[AGENTS.md](AGENTS.md).
+Everything in `docs/` traces back to it — the traceability map in
 [docs/00-vision.md](docs/00-vision.md) shows which section became which document. Anything
 *not* in the transcript is explicitly marked **[gap]** and lives in
 [docs/13-risks-open-questions.md](docs/13-risks-open-questions.md).
@@ -47,7 +48,8 @@ Public wiki mirror of these docs: <https://github.com/UnitBuilds-CC/Merkles-Worl
 |------|-------|
 | Architecture specified | **done** — design level only, all 15 docs + ADR log written |
 | Implementation | **none** — the repo contains documentation and contracts-to-be, no code |
-| Spec conflicts to resolve before coding (SPEC-01…08) | **open** — see [docs/13](docs/13-risks-open-questions.md) |
+| Spec conflicts to resolve before coding (SPEC-01…08) | **7 open**, 1 locked (SPEC-02 → ADR-017) — see [docs/13](docs/13-risks-open-questions.md) |
+| Open questions (OQ-01…43) | **43 tracked**; OQ-01 (macro causality) and OQ-02 (stateful circuits) gate the most code |
 | Blocking artifacts (A-01…A-09) | **not started** — [docs/11](docs/11-roadmap.md) |
 | Research spikes (S1–S9) | **not started**; S7 (macro causality) is the highest-risk |
 | Phase 0 / Phase 1 engine | **not started** |
