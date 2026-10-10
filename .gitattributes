@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.wgsl text eol=lf
+*.rs text eol=lf
+*.ron text eol=lf
+*.fbs text eol=lf
+*.wit text eol=lf
+*.md text eol=lf
+*.png binary
+*.bin binary
+*.wasm binary
+*.mpack binary
