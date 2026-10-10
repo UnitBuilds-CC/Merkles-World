@@ -8,34 +8,34 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [001](#adr-001) | Two-phase project: engine runtime, then the game | locked |
-| [002](#adr-002) | Rust for the engine core | locked |
-| [003](#adr-003) | WebGPU + WGSL as the rendering API and shader language | locked |
-| [004](#adr-004) | Single-player first; multiplayer consensus deferred | locked |
-| [005](#adr-005) | Stateless view-time evaluation instead of a hash chain | locked-contingent |
-| [006](#adr-006) | Localized octree Merkle roots, not one global world root | locked |
-| [007](#adr-007) | Sleep/epoch compaction of the delta mask (LSM analogy) | locked-contingent |
-| [008](#adr-008) | Slab allocator with bump-pointer reset for `O(1)` edits | locked |
-| [009](#adr-009) | Tiered slabs (L1 VRAM / L2 RAM) with LRU + background micro-checkpoints | locked |
-| [010](#adr-010) | Circuits as compiled graph topologies evaluated analytically | locked-contingent |
-| [011](#adr-011) | Assets are code: SDF raymarching, no meshes, no textures | locked |
-| [012](#adr-012) | Shape/material node grammar interpreted by one master shader | locked |
-| [013](#adr-013) | WASM (Component Model + WIT) as the modding and logic ABI | locked |
-| [014](#adr-014) | Universal authoring formats compiled on save; RON as canonical | locked |
-| [015](#adr-015) | FlatBuffers + bitpacked `u64` deltas for runtime/ledger data | locked |
-| [016](#adr-016) | 64-bit Hierarchical Double-Origin Coordinate System (HDCS) | locked |
-| [017](#adr-017) | Determinism boundary: simulation in Rust/WASM, GPU never authoritative | **locked — highest priority** |
-| [018](#adr-018) | Physics by analytic SDF gradient queries | locked |
-| [019](#adr-019) | Animation by domain deformation / time-warping | locked |
-| [020](#adr-020) | Audio occlusion by SDF sphere tracing | locked |
-| [021](#adr-021) | Multiplayer transmits signed intent streams, not state | locked |
-| [022](#adr-022) | WebRTC datachannels / QUIC with split reliable + unreliable channels | locked |
-| [023](#adr-023) | Desync detection by 32-byte epoch root exchange + bisection repair | locked-contingent |
-| [024](#adr-024) | Spatial BVH mapped to slabs for SDF culling | locked |
-| [025](#adr-025) | Contract-first agent swarm with architect + CI-gatekeeper roles | locked |
-| [026](#adr-026) | Reuse an existing GPU runtime; do not hand-write low-level plumbing | **proposed** |
-| [027](#adr-027) | Epoch-scoped transaction pool for multiplayer | proposed |
-| [028](#adr-028) | BLAKE3-256 as the ledger digest | proposed |
+| [001](#adr-001--two-phase-project-engine-runtime-then-the-game) | Two-phase project: engine runtime, then the game | locked |
+| [002](#adr-002--rust-for-the-engine-core) | Rust for the engine core | locked |
+| [003](#adr-003--webgpu--wgsl-as-the-rendering-api-and-shader-language) | WebGPU + WGSL as the rendering API and shader language | locked |
+| [004](#adr-004--single-player-first-multiplayer-consensus-deferred) | Single-player first; multiplayer consensus deferred | locked |
+| [005](#adr-005--stateless-view-time-evaluation-instead-of-a-hash-chain) | Stateless view-time evaluation instead of a hash chain | locked-contingent |
+| [006](#adr-006--localized-octree-merkle-roots-not-one-global-world-root) | Localized octree Merkle roots, not one global world root | locked |
+| [007](#adr-007--sleepepoch-compaction-of-the-delta-mask-lsm-analogy) | Sleep/epoch compaction of the delta mask (LSM analogy) | locked-contingent |
+| [008](#adr-008--slab-allocator-with-bump-pointer-reset-for-o1-edits) | Slab allocator with bump-pointer reset for `O(1)` edits | locked |
+| [009](#adr-009--tiered-slabs-with-lru-eviction-and-background-micro-checkpoints) | Tiered slabs (L1 VRAM / L2 RAM) with LRU + background micro-checkpoints | locked |
+| [010](#adr-010--circuits-as-compiled-graph-topologies-evaluated-analytically) | Circuits as compiled graph topologies evaluated analytically | locked-contingent |
+| [011](#adr-011--assets-are-code-sdf-raymarching-no-meshes-no-textures) | Assets are code: SDF raymarching, no meshes, no textures | locked |
+| [012](#adr-012--shapematerial-node-grammar-interpreted-by-one-master-shader) | Shape/material node grammar interpreted by one master shader | locked |
+| [013](#adr-013--wasm-component-model--wit-as-the-modding-and-logic-abi) | WASM (Component Model + WIT) as the modding and logic ABI | locked |
+| [014](#adr-014--universal-authoring-formats-compiled-on-save-ron-as-canonical) | Universal authoring formats compiled on save; RON as canonical | locked |
+| [015](#adr-015--flatbuffers--bitpacked-u64-deltas-for-runtimeledger-data) | FlatBuffers + bitpacked `u64` deltas for runtime/ledger data | locked |
+| [016](#adr-016--64-bit-hierarchical-double-origin-coordinate-system-hdcs) | 64-bit Hierarchical Double-Origin Coordinate System (HDCS) | locked |
+| [017](#adr-017--determinism-boundary-simulation-in-rustwasm-gpu-never-authoritative) | Determinism boundary: simulation in Rust/WASM, GPU never authoritative | **locked — highest priority** |
+| [018](#adr-018--physics-by-analytic-sdf-gradient-queries) | Physics by analytic SDF gradient queries | locked |
+| [019](#adr-019--animation-by-domain-deformation--time-warping) | Animation by domain deformation / time-warping | locked |
+| [020](#adr-020--audio-occlusion-by-sdf-sphere-tracing) | Audio occlusion by SDF sphere tracing | locked |
+| [021](#adr-021--multiplayer-transmits-signed-intent-streams-not-state) | Multiplayer transmits signed intent streams, not state | locked |
+| [022](#adr-022--webrtc-datachannels--quic-with-split-channels) | WebRTC datachannels / QUIC with split reliable + unreliable channels | locked |
+| [023](#adr-023--desync-detection-by-32-byte-epoch-root-exchange--bisection-repair) | Desync detection by 32-byte epoch root exchange + bisection repair | locked-contingent |
+| [024](#adr-024--spatial-bvh-mapped-to-slabs-for-sdf-culling) | Spatial BVH mapped to slabs for SDF culling | locked |
+| [025](#adr-025--contract-first-agent-swarm-with-architect--ci-gatekeeper-roles) | Contract-first agent swarm with architect + CI-gatekeeper roles | locked |
+| [026](#adr-026--reuse-an-existing-gpu-runtime-do-not-hand-write-low-level-plumbing) | Reuse an existing GPU runtime; do not hand-write low-level plumbing | **proposed** |
+| [027](#adr-027--epoch-scoped-transaction-pool-for-multiplayer) | Epoch-scoped transaction pool for multiplayer | proposed |
+| [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | proposed |
 
 ---
 
