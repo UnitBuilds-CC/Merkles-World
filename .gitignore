@@ -1,0 +1,27 @@
+# Rust / build artifacts
+/target/
+**/target/
+Cargo.lock.local
+
+# Generated asset caches (authoring sources are committed; compiled binaries are not)
+**/*.bin.cache
+/.cache/
+build/
+dist/
+
+# Compiled mod/asset artifacts — distribution packs are released, not committed
+**/*.wasm
+**/*.mpack
+
+# Editors & OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Local, never published
+*.log
+/tmp/
+/local/
