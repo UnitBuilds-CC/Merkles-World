@@ -6,7 +6,7 @@ A voxel sandbox in the Minecraft lineage, built on an engine where the world is 
 database of blocks but a **deterministic function of position and epoch**, and where every
 asset, rule, and machine is **code that an LLM (or a modder) can write**.
 
-Two deliverables, strictly separated ([ADR-001](decisions.md#adr-001)):
+Two deliverables, strictly separated ([ADR-001](decisions.md#adr-001--two-phase-project-engine-runtime-then-the-game)):
 
 | Phase | Name | It knows about | Output |
 |-------|------|----------------|--------|
@@ -54,7 +54,7 @@ transferable causes, not nostalgia:
 | MineColonies / Millénaire already do the two-tier unloaded-town + realized-town trick | That two-tier trick, generalized, *is* the engine. |
 
 Note what we are **not** copying: tick-by-tick cellular redstone (incompatible with pillar 2 —
-[ADR-010](decisions.md#adr-010)), stored-per-block world saves, and mesh/texture asset
+[ADR-010](decisions.md#adr-010--circuits-as-compiled-graph-topologies-evaluated-analytically)), stored-per-block world saves, and mesh/texture asset
 pipelines.
 
 ## What "done" feels like from the player's chair
@@ -70,10 +70,10 @@ while you weren't looking, and it can *prove* it aged the same way for everyone 
 | Transcript section (approx. line) | Becomes |
 |-----------------------------------|---------|
 | 1–64 Minecraft popularity, why Java | This doc (pillars, lessons) |
-| 65–137 C++ vs Rust, Rust benefits | [ADR-002](decisions.md#adr-002), doc 01 tech stack |
+| 65–137 C++ vs Rust, Rust benefits | [ADR-002](decisions.md#adr-002--rust-for-the-engine-core), doc 01 tech stack |
 | 139–222 Why Minecraft AI is shallow; two-tier sim; ground-truth problem | Doc 05, doc 13 OQ-01 |
 | 224–329 Game of Life, hash-anchored macro state, delta mask | Docs 03, 05 |
-| 331–451 Merkle tick chain rejected; localized trees; O(1) fast-forward | Docs 03, 05, [ADR-005/006](decisions.md#adr-005) |
+| 331–451 Merkle tick chain rejected; localized trees; O(1) fast-forward | Docs 03, 05, [ADR-005/006](decisions.md#adr-005--stateless-view-time-evaluation-instead-of-a-hash-chain) |
 | 453–553 Sleep = LSM compaction; causality as observation; feasibility table | Docs 03, 05 |
 | 555–623 Two-layer ledger, mempool transactions, epoch commitment | Docs 03, 10 |
 | 625–729 Redstone as compiled graphs, O(1) clocks | Doc 06 |
@@ -82,7 +82,7 @@ while you weren't looking, and it can *prove* it aged the same way for everyone 
 | 904–964 Five accelerations (reuse runtime, WGSL, orchestration, noise trees, SP first) | Docs 04, 08, 11, 12 |
 | 974–1169 Modder-friendly: JSON/WASM/WIT/polyglot | Docs 08, 09 |
 | 1171–1240 Two-phase project split | Docs 00, 11 |
-| 1242–1460 JSON overhead → FlatBuffers/Cap'n Proto/bitpacking; authoring vs runtime | Doc 09, [ADR-014/015/016](decisions.md#adr-014) |
+| 1242–1460 JSON overhead → FlatBuffers/Cap'n Proto/bitpacking; authoring vs runtime | Doc 09, [ADR-014/015](decisions.md#adr-014--universal-authoring-formats-compiled-on-save-ron-as-canonical) |
 | 1472–1557 Collision, audio, animation, input prediction | Docs 07, 10 |
 | 1559–1609 Slab writes | Doc 03 |
 | 1611–1688 BVH culling, agent CI/CD, VRAM budgeting, vector clocks | Docs 04, 12, 10 |
