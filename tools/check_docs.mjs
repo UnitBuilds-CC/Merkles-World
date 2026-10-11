@@ -173,7 +173,20 @@ for (const [f, t] of text) {
       const next = code[j + 1];
       if (lineComment) { if (c === "\n") lineComment = false; continue; }
       if (quote) { if (c === "\\") j++; else if (c === quote) quote = null; continue; }
-      if (c === '"' || c === "'") { quote = c; continue; }
+      if (c === '"') { quote = c; continue; }
+      if (c === "'") {
+        // Rust spells lifetimes (`&'a mut [T]`) and char literals with the same tick. Opening a
+        // quote on every tick makes an odd number of lifetimes swallow the braces around them, so a
+        // verbatim contract mirror reports a phantom imbalance. Only a well-formed char literal —
+        // one non-space character, a `\` escape, or a `\u{..}` form between the ticks — opens one.
+        const close = code.indexOf("'", j + 1);
+        const inner = close === -1 ? "" : code.slice(j + 1, close);
+        const isChar = /^.$/.test(inner) && !/\s/.test(inner)
+          || /^\\.$/.test(inner)
+          || /^\\u\{[0-9a-fA-F]+\}$/.test(inner);
+        if (isChar) j = close;
+        continue;
+      }
       if (c === "/" && next === "/") { lineComment = true; continue; }
       if (c === "/" && next === "*") { j += 2; while (j < code.length && !(code[j] === "*" && code[j + 1] === "/")) j++; continue; }
       if (PAIRS[c]) stack.push(c);
