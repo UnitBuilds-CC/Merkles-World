@@ -23,6 +23,9 @@
 
 #![no_std]
 
+/// The epoch commit path: records out of the slabs, roots a peer compares.
+pub mod commit;
+
 use contracts::coords::RegionKey;
 use contracts::delta::{DeltaRecord, EpochHeader, PAYLOAD_BITS};
 use contracts::errors::ROOT_BYTES;
@@ -166,38 +169,31 @@ impl EmptyLadder {
     }
 }
 
-/// The order the octree visits leaves: octant index at level `OCTREE_DEPTH` first, down to level 1.
-/// That is Z-order expressed **as a comparator, never as a number** — no 36-bit index is formed, so
-/// docs/02's ban holds while `region_root` still sees one contiguous run per subtree.
-#[inline]
-pub const fn walk_less(a: &Leaf, b: &Leaf) -> bool {
-    let mut level = OCTREE_DEPTH;
-    while level >= 1 {
-        let ka = octant_at(a.x, a.y, a.z, level);
-        let kb = octant_at(b.x, b.y, b.z, level);
-        if ka != kb {
-            return ka < kb;
+/// Rearrange `leaves` into the octants of level `level`, in octant index order, so each octant's
+/// leaves form one contiguous run and a subtree's slice can be recursed into directly.
+///
+/// **In place, allocation-free, and O(8·len) per call** — one forward selection scan per octant,
+/// swapping matches to the front. That is deliberately not a comparison sort: `core` has no sort
+/// without an allocator, and spike S2 measured the obvious allocation-free alternative (an insertion
+/// sort over a walk-order comparator) at O(N²), which dominated the whole pass — 10,000 edits cost
+/// 133 ms where the 120,000 BLAKE3 calls behind them cost about 8 ms. The ordering is a scaffolding
+/// detail of the builder, not part of the digest: the root is position-keyed, so any arrangement
+/// that keeps a subtree's leaves together hashes to the same value (proved by
+/// `region_root_is_position_keyed_not_arrival_keyed`, and re-proved after each of these passes
+/// changes).
+fn partition_by_octant(level: u32, leaves: &mut [Leaf]) {
+    let mut write = 0;
+    let mut octant = 0usize;
+    while octant < OCTREE_ARITY {
+        let mut read = write;
+        while read < leaves.len() {
+            if octant_at(leaves[read].x, leaves[read].y, leaves[read].z, level) == octant {
+                leaves.swap(write, read);
+                write += 1;
+            }
+            read += 1;
         }
-        level -= 1;
-    }
-    // Same path means same position: a region holds at most one leaf per position, and duplicates
-    // are resolved before the tree is built (docs/03 § Epoch roots).
-    false
-}
-
-/// In place, allocation-free, and **O(N²)** for the initial segment step. A priced cost, not an
-/// oversight: `core` has no sort, and the ordering a real epoch wants comes from how the slab walks
-/// its own dirty set, which SPEC-06 has not fixed and spike S2 has not measured. Gate P1.3 is where
-/// this becomes a number; nothing here claims it is affordable.
-pub fn sort_walk_order(leaves: &mut [Leaf]) {
-    let mut i = 1;
-    while i < leaves.len() {
-        let mut j = i;
-        while j > 0 && walk_less(&leaves[j], &leaves[j - 1]) {
-            leaves.swap(j, j - 1);
-            j -= 1;
-        }
-        i += 1;
+        octant += 1;
     }
 }
 
@@ -206,40 +202,42 @@ pub fn sort_walk_order(leaves: &mut [Leaf]) {
 /// The caller resolves multiple writes to one voxel **before** calling this, in causal append order.
 /// A duplicate position here is therefore a bug upstream, not a state this function represents.
 pub fn region_root(leaves: &mut [Leaf], ladder: &EmptyLadder) -> Root {
-    sort_walk_order(leaves);
     build_branch(OCTREE_DEPTH, leaves, ladder)
 }
 
-fn build_branch(level: u32, leaves: &[Leaf], ladder: &EmptyLadder) -> Root {
+fn build_branch(level: u32, leaves: &mut [Leaf], ladder: &EmptyLadder) -> Root {
     if leaves.is_empty() {
         return ladder.empty(level);
     }
     if level == 0 {
         return voxel_leaf(leaves[0].payload);
     }
-    let mut children = [[0u8; ROOT_BYTES]; OCTREE_ARITY];
-    let mut rest = leaves;
+    partition_by_octant(level, leaves);
+    // One scan of the partitioned range gives the eight run boundaries; a run of length zero is the
+    // ladder, which is why an absent octant costs no hashing at all.
+    let mut starts = [0usize; OCTREE_ARITY + 1];
     let mut octant = 0usize;
+    let mut cursor = 0;
     while octant < OCTREE_ARITY {
-        let head = if rest.is_empty() {
-            OCTREE_ARITY
-        } else {
-            octant_at(rest[0].x, rest[0].y, rest[0].z, level)
-        };
-        if head > octant {
-            // No edit in this octant: its subtree is the ladder, not a special case.
-            children[octant] = ladder.empty(level - 1);
-        } else {
-            let mut run = 0;
-            while run < rest.len()
-                && octant_at(rest[run].x, rest[run].y, rest[run].z, level) == octant
-            {
-                run += 1;
-            }
-            children[octant] = build_branch(level - 1, &rest[..run], ladder);
-            rest = &rest[run..];
+        starts[octant] = cursor;
+        while cursor < leaves.len()
+            && octant_at(leaves[cursor].x, leaves[cursor].y, leaves[cursor].z, level) == octant
+        {
+            cursor += 1;
         }
         octant += 1;
+    }
+    starts[OCTREE_ARITY] = leaves.len();
+
+    let mut children = [[0u8; ROOT_BYTES]; OCTREE_ARITY];
+    let mut k = 0;
+    while k < OCTREE_ARITY {
+        children[k] = if starts[k] == starts[k + 1] {
+            ladder.empty(level - 1)
+        } else {
+            build_branch(level - 1, &mut leaves[starts[k]..starts[k + 1]], ladder)
+        };
+        k += 1;
     }
     octant_branch(level, &children)
 }

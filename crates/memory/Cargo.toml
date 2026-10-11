@@ -1,0 +1,14 @@
+[package]
+name = "memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Artifact A-03's slab side (docs/03 § Slab allocation): append-only record buffers with O(1) write and O(1) reset"
+
+[dependencies]
+contracts = { path = "../../contracts" }
+
+[lints]
+workspace = true
