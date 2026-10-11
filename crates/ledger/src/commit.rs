@@ -45,52 +45,37 @@ pub struct EpochCommit {
     pub epoch: Root,
 }
 
-/// Records in append order → at most one leaf per voxel, **last writer wins**.
+/// Records in append order → the leaves the octree walks, `append` carrying the causal position.
 ///
-/// `None` means the scratch was too short, which can only happen if a region edited more distinct
-/// voxels than `out.len()` — SPEC-06's capacity question wearing its operational clothes.
+/// This used to be a separate O(N²) dedupe — `resolve_last_write_wins` — and spike S2 priced it at
+/// 46 ms per full 64 KB slab, more than the entire hashing pass. It is now one pass that writes
+/// `records.len()` leaves and lets the walk resolve collisions at the leaf (`build_branch`,
+/// level 0), so resolution is `O(N)` here and `O(1)` per collision at the tree.
 ///
-/// The scan is O(n²) in distinct positions: `core` has no map without an allocator, and a hash map
-/// here would be a determinism exposure (which hasher? which seed?) of exactly the kind ADR-028 was
-/// written to close. The cost is stated, and spike S2 measures it against a sorted-array merge.
-pub fn resolve_last_write_wins<'out>(
+/// `None` when the leaf space cannot hold every record: SPEC-06's capacity question wearing its
+/// operational clothes.
+pub fn leaves_from_records<'out>(
     records: &[DeltaRecord],
     out: &'out mut [Leaf],
 ) -> Option<&'out mut [Leaf]> {
-    let mut count = 0;
-    for record in records.iter().copied() {
-        let leaf = Leaf::from_record(record);
-        let mut index = 0;
-        let mut found = None;
-        while index < count {
-            if out[index].x == leaf.x && out[index].y == leaf.y && out[index].z == leaf.z {
-                found = Some(index);
-                break;
-            }
-            index += 1;
-        }
-        match found {
-            // Same voxel, later record: the payload is what changes, the position is not.
-            Some(index) => out[index].payload = leaf.payload,
-            None => {
-                if count >= out.len() {
-                    return None;
-                }
-                out[count] = leaf;
-                count += 1;
-            }
-        }
+    if out.len() < records.len() {
+        return None;
     }
-    Some(&mut out[..count])
+    let mut index = 0;
+    while index < records.len() {
+        out[index] = Leaf::from_record(records[index], index as u32);
+        index += 1;
+    }
+    Some(&mut out[..records.len()])
 }
 
-/// A region's root from the records its slab holds. `None` if the leaf scratch was too short.
+/// A region's root from the records its slab holds. `None` if the leaf space was too short.
 pub fn region_root_for(
     records: &[DeltaRecord],
     scratch: &mut [Leaf],
     ladder: &EmptyLadder,
 ) -> Option<Root> {
-    let leaves = resolve_last_write_wins(records, scratch)?;
+    let leaves = leaves_from_records(records, scratch)?;
     Some(region_root(leaves, ladder))
 }
 
@@ -112,7 +97,7 @@ pub struct CommitRequest<'a> {
 /// arena owns the scratch — which is SPEC-06's question wearing a parameter.
 ///
 /// `slot_rows` and `region_leaves` need `region_slots.len()` entries; `leaf_space` needs the busiest
-/// region's distinct-voxel count. Short scratch is a refusal, never a truncated root.
+/// region's record count. Short space is a refusal, never a truncated root.
 pub struct CommitScratch<'a> {
     pub slot_rows: &'a mut [Root],
     pub region_leaves: &'a mut [Root],

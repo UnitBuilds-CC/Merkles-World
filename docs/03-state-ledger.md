@@ -582,9 +582,13 @@ That is what keeps the octree free of a flat voxel index — `octant_at` reads o
 `LocalOffset` axis per call, and no 36-bit interleaved coordinate is ever formed
 ([docs/02 § Octree keys and Morton codes](02-coordinate-system.md)).
 
-Multiple records for one voxel resolve **before** the tree is built: the epoch's record list is
-walked in append order and the last writer wins, so the octree holds at most one leaf per position.
-The consequence for determinism is precise and worth stating twice —
+Multiple records for one voxel resolve **as the tree is walked**: the caller hands the ledger every
+record in causal append order, each leaf carries that order as its `append`, and at level 0 the
+greatest `append` in the run is the state the epoch commits. The octree therefore never holds two
+leaves for one position in its digest, whichever way the run was partitioned. (It used to be a
+separate O(N²) pre-pass; spike S2 measured that at 46 ms per full slab and it was replaced — same
+digests, one pass, see § Region roots.) The consequence for determinism is precise and worth stating
+twice —
 
 - the root is **position-keyed**: reordering records that touch *different* voxels does not change it;
 - the root is **not** arrival-order-independent: reordering two records that touch the *same* voxel
@@ -596,32 +600,46 @@ Cost, as arithmetic — and now as a measurement too. The model says an epoch wi
 region recomputes at most `N × 12` branches, so `N = 10⁵` is ≈1.3×10⁶ BLAKE3 calls. Spike S2 ran on
 x86-64 Windows, release profile, `cargo run --release --example merkle_pass -p ledger`:
 
-| Edits in one region | Pass time | Implied hashes (`12N`) | ns per hash |
-|---|---|---|---|
-| 10³ | 907 µs | 12,000 | 75 |
-| 10⁴ | 5.813 ms | 120,000 | 48 |
-| 10⁵ | 52.236 ms | 1,200,000 | 43 |
-| 8,192 (one full 64 KB slab) | 4.928 ms | 98,304 | 50 |
+| Edits in one region | Arrangement | Pass time | **Digests computed** | `12N` bound | ns per digest |
+|---|---|---|---|---|---|
+| 10³ | clustered (consecutive voxels) | 1.236 ms | 2,003 | 12,000 | 617 |
+| 10³ | scattered | 7.007 ms | 9,346 | 12,000 | 749 |
+| 10⁴ | clustered | 7.245 ms | 14,999 | 120,000 | 483 |
+| 10⁴ | scattered | 63.217 ms | 82,731 | 120,000 | 764 |
+| 10⁵ | clustered | 58.758 ms | 134,507 | 1,200,000 | 436 |
+| 10⁵ | scattered | 511.243 ms | 716,411 | 1,200,000 | 713 |
+| 8,192 (one full 64 KB slab) | scattered | 52.058 ms | 68,524 | 98,304 | 759 |
 
-Three things follow, and the third is the one that matters. **The pass is linear** at ~43–75 ns per
-hash, so the `12N` model is the right shape. **The first implementation was not**: an insertion sort
-over a walk-order comparator dominated it — 10⁴ edits cost 133 ms and 10⁵ cost 18.2 s, superlinear,
-because sorting is O(N²) while hashing is O(N). Replacing the sort with an in-place octant partition
+The digest count is measured, not modelled (`region_root_counted`), which is what makes the table
+worth anything: **`12N` is an upper bound, not a cost.** A thousand consecutive edits share most of
+their paths and compute 2,003 digests; a thousand scattered ones compute 9,346. Same `N`, same shape,
+4.6× the work — so any statement about P1.3 that does not name the arrangement is unfalsifiable.
+
+Four things follow. **The pass scales with digests computed, not with `N`** — the two columns move
+together across the six rows. **The first implementation was not that**: an insertion sort over a
+walk-order comparator dominated everything — 10⁴ edits cost 133 ms and 10⁵ cost 18.2 s, superlinear,
+because sorting is O(N²) while hashing is O(N). Replacing it with an in-place octant partition
 (`partition_by_octant`, O(8·len) per level) produced the table above and changed **no digest**: the
-region roots before and after are identical (`af275f30…`, `a505e6b2…`, `e064430b…`, and `d919613c…`
-for a full slab), which is this section's position-keyed claim doing real work rather than sitting in
-prose.
+roots before and after are identical (`af275f30…`, `a505e6b2…`, `e064430b…`, and `d919613c…` for a
+full slab), which is this section's position-keyed claim doing real work rather than sitting in prose.
+**And the per-digest cost is BLAKE3's, not ours**: hashing 68,524 identical 266-byte preimages
+directly costs 508 ns each against the pass's 759 ns, so preimage construction adds ~250 ns and the
+floor is the hash function. That is the number OQ-49 has to argue with.
 
-And **gate P1.3's `< 1 ms` is not met.** One full 64 KB slab region costs 4.9 ms, and the model's own
-arithmetic puts the floor there: 98,304 hashes at ~50 ns is ~5 ms whatever the code looks like.
-Meeting it would mean changing what the gate measures, or shrinking the outstanding `N` per epoch, or
-batching hashes across regions — none of which is a decision to make quietly, so it is
-[OQ-49](13-risks-open-questions.md). The pipeline around the pass is worse again:
-`resolve_last_write_wins` is O(n²) per region (46 ms for a full slab) and is now the dominant term,
-kept naive on purpose — a hash map on the digest path would be a new determinism exposure
-([OQ-44](13-risks-open-questions.md)) before it was an optimisation. Fold the resolution into the
-walk (stable partition, last record at the leaf wins) as the next step, which removes the scan
-instead of making it cleverer.
+And **gate P1.3's `< 1 ms` is not met, by about two orders of magnitude at a full scattered slab**
+(52 ms, of which ~35 ms is BLAKE3 itself). Solving the gate for its own arithmetic means one of: a
+much smaller outstanding `N` per epoch per region (≈250 clustered edits is where ~1 ms lands, which
+is a *compaction-frequency* decision, not a hashing one), batching or parallelising the hash pass
+across regions, or re-scoping what the gate measures. None of those is a change to make quietly, so
+it is [OQ-49](13-risks-open-questions.md) with the numbers attached.
+
+What is **fixed** since the first S2 report: the resolution pass. `resolve_last_write_wins` was an
+O(N²) pre-pass costing 46 ms per full slab — more than the hashing — and it is gone:
+`leaves_from_records` now writes one leaf per record with its `append` index, and the walk resolves
+collisions at the leaf by taking the greatest `append` (docs/03 § Epoch roots, the paragraph below).
+The feed costs 20–80 µs, the digest for every published vector is unchanged, and a hash map never
+appeared on the digest path, which would have been a fresh [OQ-44](13-risks-open-questions.md)
+exposure dressed up as an optimisation.
 
 ### Epoch roots: the lists
 
@@ -992,7 +1010,7 @@ pub fn preimage<'buffer>(
 |------|------|--------|
 | P1.1 | Every delta encodes/decodes to the same `(RegionKey, [u16; 3], value)` across the i64 range, including negatives | doc 02 + [ADR-029](decisions.md) — runs as `p1_1_delta_record_round_trip` (`contracts/tests/delta_record.rs`) against A-03; only the payload's internals are open, as [OQ-45](13-risks-open-questions.md) |
 | P1.2 | 10⁶ writes/sec sustained, `p99 < 1 µs` | **our target** — the transcript only claims a slab write is "a pointer offset store instruction… This takes nanoseconds" (GS 1594) and "<1 ns (Direct RAM write)". **Measured 2026-10-12:** 57.2 M appends/sec with p99 200 ns on x86-64 Windows (`crates/memory/examples/slab_throughput.rs`) — met on that one machine, and its clock granularity (~100 ns) is why the percentiles read as multiples of 100 |
-| P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "Sub-millisecond batch pass" (GS 1606) — a claim, not a measurement. **Measured 2026-10-12: NOT met.** One full 64 KB slab region hashes in 4.9 ms, and the `12N` model puts the floor at ~5 ms (98,304 hashes at ~50 ns); the pipeline around it costs 93 ms while `resolve_last_write_wins` is still O(n²). What the gate measures, and whether the budget or the target moves, is [OQ-49](13-risks-open-questions.md) |
+| P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "Sub-millisecond batch pass" (GS 1606) — a claim, not a measurement. **Measured 2026-10-12: NOT met.** One full 64 KB slab of scattered edits passes in **52 ms** (68,524 digests at 759 ns each, of which raw BLAKE3 on identical 266-byte preimages accounts for 508 ns), and the same edit count clustered takes 7 ms — so the pass tracks digests computed, not `N`, and `12N` is a bound rather than a cost. The O(N²) resolution pre-pass that once pushed this to 93 ms is gone (resolution now happens at the leaf, and the feed costs microseconds). Which arrangement the gate means, and whether the target, the budget, the compaction frequency or the scope moves, is [OQ-49](13-risks-open-questions.md) |
 | P1.4 | LRU eviction + region re-entry restores all edits with no visible pop-in | ADR-009 |
 | P1.5 | Byte-identical roots for the same seed/transaction sequence on N2600 / RTX 3060 / Linux-Mesa / M1-browser | ADR-017 |
 | P1.6 | Two clients with one divergent voxel detect it via 32-byte root exchange and repair by bisection | ADR-023 |

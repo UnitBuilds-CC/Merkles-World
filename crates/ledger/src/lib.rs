@@ -90,18 +90,35 @@ pub struct Leaf {
     pub y: u16,
     pub z: u16,
     pub payload: u16,
+    /// Where this record sat in the epoch's append order. **This is what resolves two writes to one
+    /// voxel**: the walk takes the greatest `append` at the leaf, so last-write-wins costs one
+    /// comparison instead of a pre-pass (docs/03 § Epoch roots, spike S2). Unique positions never
+    /// consult it, and a hand-built leaf can leave it `0`.
+    pub append: u32,
+}
+
+/// A zeroed leaf, for callers filling arrays before the records arrive.
+impl Leaf {
+    pub const DEFAULT: Self = Self {
+        x: 0,
+        y: 0,
+        z: 0,
+        payload: 0,
+        append: 0,
+    };
 }
 
 impl Leaf {
-    /// The leaf a record writes inside its own region.
+    /// The leaf a record writes inside its own region, at its position in the epoch's append order.
     #[inline]
-    pub const fn from_record(record: DeltaRecord) -> Self {
+    pub const fn from_record(record: DeltaRecord, append: u32) -> Self {
         let offset = record.intra_region();
         Self {
             x: offset.x,
             y: offset.y,
             z: offset.z,
             payload: record.payload(),
+            append,
         }
     }
 }
@@ -199,18 +216,48 @@ fn partition_by_octant(level: u32, leaves: &mut [Leaf]) {
 
 /// A region's root: its edited voxels and nothing else, everything unedited being the ladder.
 ///
-/// The caller resolves multiple writes to one voxel **before** calling this, in causal append order.
-/// A duplicate position here is therefore a bug upstream, not a state this function represents.
+/// Duplicate positions are allowed and **resolved by the walk**: two leaves for one voxel commit the
+/// one with the greater `append`, which is docs/03's last-write-wins in causal order, applied at the
+/// leaf instead of in a pass before it. A caller with no causal order to offer (a fresh, unique set
+/// of positions) can leave every `append` at `0` and get the same root either way.
 pub fn region_root(leaves: &mut [Leaf], ladder: &EmptyLadder) -> Root {
-    build_branch(OCTREE_DEPTH, leaves, ladder)
+    let mut counted = 0usize;
+    build_branch(OCTREE_DEPTH, leaves, ladder, &mut counted)
 }
 
-fn build_branch(level: u32, leaves: &mut [Leaf], ladder: &EmptyLadder) -> Root {
+/// `region_root`, but reporting how many digests it actually computed — one per node visited, leaf
+/// and branch alike. Spike S2 needs this because docs/03's `12N` cost model is an **upper bound**:
+/// leaves that share a path cost one branch between them, so a clustered epoch recomputes far fewer
+/// nodes than `12N` and a scattered one approaches it. Dividing a measured pass by `12N` instead of
+/// by the node count understates the per-hash cost, which is exactly the arithmetic OQ-49 turns on.
+pub fn region_root_counted(leaves: &mut [Leaf], ladder: &EmptyLadder, digests: &mut usize) -> Root {
+    build_branch(OCTREE_DEPTH, leaves, ladder, digests)
+}
+
+fn build_branch(
+    level: u32,
+    leaves: &mut [Leaf],
+    ladder: &EmptyLadder,
+    counted: &mut usize,
+) -> Root {
     if leaves.is_empty() {
         return ladder.empty(level);
     }
     if level == 0 {
-        return voxel_leaf(leaves[0].payload);
+        // Last write wins, in the walk rather than in a pre-pass: the run holds every record that
+        // touched this voxel, and the one with the greatest `append` is the state the epoch commits.
+        // Spike S2 measured the alternative (a separate O(N²) resolution scan) at 46 ms per full
+        // 64 KB slab — more than the entire hashing pass cost.
+        let mut winner = 0;
+        let mut index = 1;
+        while index < leaves.len() {
+            if leaves[index].append > leaves[winner].append {
+                winner = index;
+            }
+            index += 1;
+        }
+        *counted += 1;
+        return voxel_leaf(leaves[winner].payload);
     }
     partition_by_octant(level, leaves);
     // One scan of the partitioned range gives the eight run boundaries; a run of length zero is the
@@ -235,10 +282,16 @@ fn build_branch(level: u32, leaves: &mut [Leaf], ladder: &EmptyLadder) -> Root {
         children[k] = if starts[k] == starts[k + 1] {
             ladder.empty(level - 1)
         } else {
-            build_branch(level - 1, &mut leaves[starts[k]..starts[k + 1]], ladder)
+            build_branch(
+                level - 1,
+                &mut leaves[starts[k]..starts[k + 1]],
+                ladder,
+                counted,
+            )
         };
         k += 1;
     }
+    *counted += 1;
     octant_branch(level, &children)
 }
 

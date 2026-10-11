@@ -9,7 +9,7 @@
 use contracts::coords::{LocalOffset, RegionKey};
 use contracts::delta::{DeltaRecord, RegionSlot};
 use ledger::commit::{
-    commit_epoch, resolve_last_write_wins, CommitRequest, CommitScratch, RegionEdits,
+    commit_epoch, leaves_from_records, CommitRequest, CommitScratch, RegionEdits,
 };
 use ledger::{event_leaf, genesis_root, EmptyLadder, Leaf};
 
@@ -60,6 +60,7 @@ fn the_commit_path_reproduces_the_frozen_vectors() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 3];
 
     let commit = commit_epoch(
@@ -94,9 +95,14 @@ fn the_commit_path_reproduces_the_frozen_vectors() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 3];
-    let leaves = resolve_last_write_wins(&records, &mut standalone).expect("three distinct voxels");
+    let leaves = leaves_from_records(&records, &mut standalone).expect("three records");
     assert_eq!(leaves.len(), 3);
+    assert_eq!(
+        leaves[2].append, 2,
+        "the append order travels with the leaf into the walk"
+    );
     // The region the commit hashed is the published one, reached through records rather than beside
     // them.
     let mut region = [Leaf {
@@ -104,6 +110,7 @@ fn the_commit_path_reproduces_the_frozen_vectors() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 3];
     let built = ledger::commit::region_root_for(&records, &mut region, &ladder).expect("fits");
     assert_eq!(hex(&built), REGION_0);
@@ -123,16 +130,21 @@ fn last_write_wins_takes_the_later_payload_and_order_matters_there() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 4];
-    let resolved = resolve_last_write_wins(&a_then_b, &mut scratch).expect("one voxel");
-    assert_eq!(resolved.len(), 1, "two records, one position, one leaf");
-    assert_eq!(resolved[0].payload, 0x2, "the later record wins");
+    let fed = leaves_from_records(&a_then_b, &mut scratch).expect("two records");
+    assert_eq!(fed.len(), 2, "no pre-pass: both records reach the walk");
+    assert_eq!(
+        (fed[0].payload, fed[1].payload, fed[1].append),
+        (0x1, 0x2, 1)
+    );
 
     let mut root_a = [Leaf {
         x: 0,
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 4];
     let first = ledger::commit::region_root_for(&a_then_b, &mut root_a, &ladder).expect("fits");
     let mut root_b = [Leaf {
@@ -140,6 +152,7 @@ fn last_write_wins_takes_the_later_payload_and_order_matters_there() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 4];
     let second = ledger::commit::region_root_for(&b_then_a, &mut root_b, &ladder).expect("fits");
 
@@ -157,6 +170,7 @@ fn voxel_leaf_in_tree(ladder: &EmptyLadder, payload: u16) -> [u8; 32] {
         y: 0,
         z: 0,
         payload,
+        append: Leaf::DEFAULT.append,
     }];
     ledger::region_root(&mut leaves, ladder)
 }
@@ -182,6 +196,7 @@ fn distinct_voxels_commit_identically_whatever_the_arrival_order() {
             y: 0,
             z: 0,
             payload: 0,
+            append: Leaf::DEFAULT.append,
         }; 3];
         commit_epoch(
             &ladder,
@@ -220,6 +235,7 @@ fn an_untouched_slot_and_an_empty_edit_row_are_the_same_world() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 4];
     let without = commit_epoch(
         &ladder,
@@ -249,6 +265,7 @@ fn an_untouched_slot_and_an_empty_edit_row_are_the_same_world() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 4];
     let with = commit_epoch(
         &ladder,
@@ -295,6 +312,7 @@ fn short_scratch_refuses_rather_than_hashing_half_a_table() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 3];
     assert!(
         commit_epoch(
@@ -327,6 +345,7 @@ fn short_scratch_refuses_rather_than_hashing_half_a_table() {
         y: 0,
         z: 0,
         payload: 0,
+        append: Leaf::DEFAULT.append,
     }; 2];
     assert!(
         commit_epoch(

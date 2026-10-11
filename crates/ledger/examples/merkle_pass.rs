@@ -11,8 +11,8 @@
 use contracts::coords::LocalOffset;
 use contracts::delta::{DeltaRecord, RegionSlot};
 use core::time::Duration;
-use ledger::commit::{region_root_for, resolve_last_write_wins};
-use ledger::{region_root, EmptyLadder, Leaf};
+use ledger::commit::leaves_from_records;
+use ledger::{region_root_counted, EmptyLadder, Leaf};
 use std::time::Instant;
 
 /// A full 64 KB slab's worth of records — the "full dirty slab array" of gate P1.3 at docs/03's
@@ -51,6 +51,7 @@ fn distinct_leaves(n: usize) -> Vec<Leaf> {
             y: ((index / 4096) % 4096) as u16,
             z: ((index / 1_048_576) % 4096) as u16,
             payload: (index % 4096) as u16,
+            append: Leaf::DEFAULT.append,
         })
         .collect()
 }
@@ -66,79 +67,117 @@ fn main() {
     println!("// gate P1.3's claim: a full dirty slab array in < 1 ms. docs/03's model: at most 12N branch hashes for N edits.");
     println!();
     println!(
-        "N edits in one region | sort+hash pass | hashes implied (12N) | ns per hash | digests"
+        "N edits | arrangement | pass time | digests computed | 12N bound | ns per digest | region root"
     );
 
     for n in LADDER {
-        let mut leaves = distinct_leaves(n);
+        // Two arrangements of the SAME count, because the cost model does not say which it means:
+        // consecutive voxels share most of their paths, scattered ones share almost none.
+        let mut clustered = distinct_leaves(n);
+        let mut cluster_digests = 0usize;
         let start = Instant::now();
-        let root = region_root(&mut leaves, &ladder);
-        let elapsed = start.elapsed();
-        let hashes = 12 * n;
-        let per_hash = elapsed.as_nanos() / (hashes.max(1) as u128);
+        let cluster_root = region_root_counted(&mut clustered, &ladder, &mut cluster_digests);
+        let cluster_time = start.elapsed();
+
+        let scattered: Vec<Leaf> = (0..n)
+            .map(|index| Leaf::from_record(edit(index), index as u32))
+            .collect();
+        let mut scattered = scattered;
+        let mut scatter_digests = 0usize;
+        let start = Instant::now();
+        let scatter_root = region_root_counted(&mut scattered, &ladder, &mut scatter_digests);
+        let scatter_time = start.elapsed();
+
         println!(
-            "{n:>18} | {:>13} | {:>17} | {:>10} | {}",
-            human(elapsed),
-            hashes,
-            format!("{per_hash} ns"),
-            hex(&root)
+            "{n:>7} | clustered  | {:>9} | {:>16} | {:>8} | {:>14} | {}",
+            human(cluster_time),
+            cluster_digests,
+            12 * n,
+            format!(
+                "{} ns",
+                cluster_time.as_nanos() / (cluster_digests.max(1) as u128)
+            ),
+            hex(&cluster_root)
+        );
+        println!(
+            "{n:>7} | scattered  | {:>9} | {:>16} | {:>8} | {:>14} | {}",
+            human(scatter_time),
+            scatter_digests,
+            12 * n,
+            format!(
+                "{} ns",
+                scatter_time.as_nanos() / (scatter_digests.max(1) as u128)
+            ),
+            hex(&scatter_root)
         );
     }
 
     println!();
-    println!("// A full slab through the pipeline (resolve last-write-wins, then the pass):");
+    println!("// One full 64 KB slab, end to end — the array gate P1.3 names:");
     let records: Vec<DeltaRecord> = (0..FULL_SLAB).map(edit).collect();
-    let mut scratch = vec![
-        Leaf {
-            x: 0,
-            y: 0,
-            z: 0,
-            payload: 0
-        };
-        FULL_SLAB
-    ];
+    let mut scratch = vec![Leaf::DEFAULT; FULL_SLAB];
 
     let start = Instant::now();
-    let resolved = resolve_last_write_wins(&records, &mut scratch).expect("one leaf per record");
-    let resolve_time = start.elapsed();
-    let count = resolved.len();
+    let fed = leaves_from_records(&records, &mut scratch).expect("one leaf per record");
+    let feed_time = start.elapsed();
+    let count = fed.len();
 
-    let mut leaves = distinct_leaves(FULL_SLAB);
+    let mut digests = 0usize;
     let start = Instant::now();
-    let _ = region_root(&mut leaves, &ladder);
+    let root = region_root_counted(&mut scratch, &ladder, &mut digests);
     let pass_time = start.elapsed();
-
-    let start = Instant::now();
-    let root = region_root_for(&records, &mut scratch, &ladder).expect("fits");
-    let together = start.elapsed();
+    let together = feed_time + pass_time;
 
     println!(
-        "resolve {FULL_SLAB} records : {} ({} distinct voxels) — the O(n²) dedupe, priced",
-        human(resolve_time),
-        count
+        "feed {count} records into the walk : {} — O(N); the O(N²) pre-pass it replaced cost 46 ms at this size",
+        human(feed_time)
     );
-    println!("hash pass {FULL_SLAB} leaves : {}", human(pass_time));
     println!(
-        "both, one region           : {}   → gate P1.3 ({} vs < 1 ms) for ONE full slab",
-        human(together),
+        "counted pass, scattered        : {} for {digests} digests (the 12N bound says {})",
+        human(pass_time),
+        12 * count
+    );
+    println!(
+        "one slab, end to end           : {}   → gate P1.3 asks for < 1 ms",
         human(together)
     );
     println!(
-        "eight full slabs           : ~{} if the per-region cost is flat (not measured here)",
+        "eight full slabs in one epoch  : ~{} if the per-region cost is flat (not measured here)",
         human(together * 8)
     );
-    println!("digest of the full slab    : {}", hex(&root));
+    println!("region root of the full slab   : {}", hex(&root));
+
+    // Attribution. At ~660 ns per digest the pass is not BLAKE3-bound on its face — a 266-byte hash
+    // should be far cheaper — so measure the hasher alone, over the same number of identical-size
+    // preimages, and separate "what BLAKE3 costs" from "what our preimage construction costs".
+    let preimage = [7u8; 8 + 2 + 256];
+    let mut acc = 0u8;
+    let start = Instant::now();
+    for _ in 0..digests {
+        acc = acc.wrapping_add(blake3::hash(&preimage).as_bytes()[0]);
+    }
+    let raw_time = start.elapsed();
+    println!(
+        "raw BLAKE3, {} identical {}-byte preimages : {} = {} ns each (sink {acc})",
+        digests,
+        preimage.len(),
+        human(raw_time),
+        raw_time.as_nanos() / (digests.max(1) as u128)
+    );
+    println!(
+        "so the pass's per-digest cost is {} ns, of which BLAKE3 itself is {} ns",
+        pass_time.as_nanos() / (digests.max(1) as u128),
+        raw_time.as_nanos() / (digests.max(1) as u128)
+    );
     println!();
+    println!("// The finding is not only that the target is missed. The same N costs different");
     println!(
-        "// What this says about the claim: the pass itself is one number and the pipeline around"
+        "// passes depending on how the edits are arranged, so `12N` is a bound and not a cost"
     );
     println!(
-        "// it is another. docs/03 quotes the sub-1 ms figure as a batch pass over hashed records;"
+        "// — and OQ-49 has to say whether P1.3 means the clustered case, the scattered case,"
     );
-    println!(
-        "// whether gate P1.3 means the pass or the whole commit is OQ-47's neighbour and is now"
-    );
-    println!("// a question with two measured answers next to it, which it did not have before.");
+    println!("// the pass, or the whole commit before anyone can call it met or missed.");
 }
 
 fn human(elapsed: Duration) -> String {

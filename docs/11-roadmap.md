@@ -38,7 +38,7 @@ writing them is how the questions get answered.
 | ID | Question | Success looks like | Feeds |
 |----|----------|--------------------|-------|
 | **S1** | Can SDF raymarching hold 60 FPS on a mid-range dGPU at our content budgets? | a marching WGSL compute pass with N entities + a real frame-time curve | doc 04 budget, ADR-026 |
-| **S2** | Is slab-allocator throughput real? | 10⁶ writes/sec, `p99 < 1 µs`, and a measured sub-ms Merkle pass (P1.2/P1.3) | doc 03. **First numbers 2026-10-12** (x86-64 Windows, release): P1.2 **met** — 57.2 M appends/sec, p99 200 ns. P1.3 **not met** — the pass is linear at 4.9 ms per full 64 KB slab region (the `12N` model puts the floor there) and the whole commit is 93 ms while the dedupe stays O(n²). Partly open: the four targets of P1.5 are still one machine, and 64 KB vs 1 MB is still a budget question, not a decision — see [OQ-49](13-risks-open-questions.md) |
+| **S2** | Is slab-allocator throughput real? | 10⁶ writes/sec, `p99 < 1 µs`, and a measured sub-ms Merkle pass (P1.2/P1.3) | doc 03. **First numbers 2026-10-12** (x86-64 Windows, release): P1.2 **met** — 57.2 M appends/sec, p99 200 ns. P1.3 **not met** — **52 ms** for one full 64 KB slab (68,524 digests at 759 ns, 508 ns of that being BLAKE3 itself), 7 ms for the same count clustered; the pass follows digests computed, so `12N` is a bound and not a cost. Still owed: P1.5's other machines, the 64 KB vs 1 MB choice, and the re-scope question itself — [OQ-49](13-risks-open-questions.md) |
 | **S3** | Are BLAKE3 roots bit-identical across targets? | N2600 / RTX 3060 / Linux-Mesa / M1-browser agree (P1.5) | ADR-017/028 |
 | **S4** | FlatBuffers → GPU: zero-copy upload actually work? | RON→`.bin`→storage buffer, no allocation churn (AS1/AS4) | doc 09 |
 | **S5** | wasmtime + WIT determinism across languages | Rust/TS/Python mods agree bit-for-bit (W1–W3) | doc 08 |
@@ -132,8 +132,8 @@ epoch pipeline, and `crates/memory` is A3's half: the slab that holds the record
   `O(1)` bump-pointer reset, `crates/ledger::commit` resolves last-write-wins and roots them, and the
   test suite proves the pipeline reproduces `EPOCH_0` from raw `DeltaRecord`s rather than from
   hand-fed leaves. Spike S2's first pass measured it (docs/03 § Slab allocation, § Region roots):
-  **P1.2 met** at 57.2 M appends/sec with p99 200 ns, **P1.3 not met** at 4.9 ms for the pass over one
-  full 64 KB slab region and 93 ms for the whole commit — which is why [OQ-49](13-risks-open-questions.md)
+  **P1.2 met** at 57.2 M appends/sec with p99 200 ns, **P1.3 not met** at **52 ms** for the pass over one
+  full 64 KB slab of scattered edits and 7 ms for the same count clustered — two orders of magnitude off, and hash-limited rather than code-limited (BLAKE3 alone is 508 ns of the 759 ns per digest), which is why [OQ-49](13-risks-open-questions.md) now asks whether the gate, the budget, the compaction frequency or the scope is the thing that moves. The O(N²) resolution pre-pass is folded into the walk at the leaf, so the feed costs microseconds.
   now asks whether the gate, the budget, or the scope is the thing that moves. Still unmeasured: the
   four devices of gate P1.5 (this is one machine), and [OQ-47](13-risks-open-questions.md)'s frame-0
   visibility, which needs the projection into `M_active` that no crate owns yet.

@@ -66,9 +66,9 @@ fn main() {
         ),
     ];
     let mut leaves: [Leaf; 3] = [
-        Leaf::from_record(records[0]),
-        Leaf::from_record(records[1]),
-        Leaf::from_record(records[2]),
+        Leaf::from_record(records[0], 0),
+        Leaf::from_record(records[1], 0),
+        Leaf::from_record(records[2], 0),
     ];
     let region_root_0 = region_root(&mut leaves, &ladder);
 
@@ -143,7 +143,7 @@ fn main() {
         hex(&slot_table)
     );
     println!(
-        "const REGION_0: &str = \"{}\";  // three edits, arrival order, walk-sorted",
+        "const REGION_0: &str = \"{}\";  // three edits, handed over in arrival order",
         hex(&region_root_0)
     );
     println!(

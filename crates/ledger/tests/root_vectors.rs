@@ -50,29 +50,34 @@ fn hex(root: &Root) -> String {
 /// them, which is deliberately not the order the octree visits them.
 fn arrival_leaves() -> [Leaf; 3] {
     [
-        Leaf::from_record(DeltaRecord::new(
-            RegionSlot(0),
-            LocalOffset {
-                x: 2048,
-                y: 0,
-                z: 4095,
-            },
-            0x7,
-        )),
-        Leaf::from_record(DeltaRecord::new(
-            RegionSlot(0),
-            LocalOffset { x: 0, y: 0, z: 0 },
-            0x1,
-        )),
-        Leaf::from_record(DeltaRecord::new(
-            RegionSlot(0),
-            LocalOffset {
-                x: 4095,
-                y: 4095,
-                z: 4095,
-            },
-            0x0ABC,
-        )),
+        Leaf::from_record(
+            DeltaRecord::new(
+                RegionSlot(0),
+                LocalOffset {
+                    x: 2048,
+                    y: 0,
+                    z: 4095,
+                },
+                0x7,
+            ),
+            0,
+        ),
+        Leaf::from_record(
+            DeltaRecord::new(RegionSlot(0), LocalOffset { x: 0, y: 0, z: 0 }, 0x1),
+            1,
+        ),
+        Leaf::from_record(
+            DeltaRecord::new(
+                RegionSlot(0),
+                LocalOffset {
+                    x: 4095,
+                    y: 4095,
+                    z: 4095,
+                },
+                0x0ABC,
+            ),
+            2,
+        ),
     ]
 }
 
@@ -152,18 +157,21 @@ fn region_root_is_position_keyed_not_arrival_keyed() {
             y: 0,
             z: 0,
             payload: 0x1,
+            append: Leaf::DEFAULT.append,
         },
         Leaf {
             x: 2048,
             y: 0,
             z: 4095,
             payload: 0x7,
+            append: Leaf::DEFAULT.append,
         },
         Leaf {
             x: 4095,
             y: 4095,
             z: 4095,
             payload: 0x0ABC,
+            append: Leaf::DEFAULT.append,
         },
     ];
     let by_walk = region_root(&mut walked, &ladder);
@@ -211,6 +219,7 @@ fn child_order_is_x_low_bit_at_every_level() {
         y: 0,
         z: 0,
         payload: 0x1,
+        append: Leaf::DEFAULT.append,
     }];
     let built = region_root(&mut leaf, &ladder);
 
