@@ -708,7 +708,12 @@ handed over in arrival order rather than walk order:
 
 These are measured, not asserted: `REGION_0` is identical whether the three edits arrive in walk order
 or in the shuffled order the example uses (`region_root_is_position_keyed_not_arrival_keyed`), and
-`EPOCH_1 ≠ EPOCH_0` is what gate P1.5's comparison is even for.
+`EPOCH_1 ≠ EPOCH_0` is what gate P1.5's comparison is even for. Cross-machine, as of CI run
+`38181630859`: all fifteen digests print **byte-identically** on x86-64 Linux, x86-64 Windows and
+ARM64 macOS — `EPOCH_0 91b97a52fc5137b50ec64550a94220daab0ffe05575bac6dbfda825a9947cc61` on each —
+which is the first epoch root this project has had three machines agree on. It is not yet gate P1.5:
+spike S3 names four particular devices and the browser half needs a WASM runner (OQ-41), not merely a
+compile.
 
 That the literals genuinely guard the shape was checked the way SPEC-01's masking rule was: the child
 iteration in `octant_branch` was reversed — x's bit read as the high bit rather than the low one, a
