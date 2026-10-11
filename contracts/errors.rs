@@ -1,8 +1,10 @@
 //! A-09 — error taxonomy and determinism violation codes. **DRAFT**, in the specific sense that
 //! the split is deliberate: the codes and their bands are final for this draft (they are what CI
 //! routes on), while every payload width named in a `// pending` note below waits on the artifact
-//! that owns it — A-01 for coordinates, A-02/A-08 for module and wire identities, A-05 for event
-//! tags, A-07 for source spans.
+//! that owns it — A-02/A-08 for module and wire identities, A-05 for event tags, A-07 for source
+//! spans. Coordinates are no longer on that list: A-01 (`coords.rs`) froze on 2026-10-11, so the
+//! plain-integer payloads here adopt its newtypes as a scheduled migration (AGENTS.md §2), not as
+//! an unresolved dependency.
 //!
 //! Why this file exists: docs/12-agent-operations.md routes a *classified* failure back to the
 //! owning agent with a fixed prompt. Classification must therefore be a machine-comparable
@@ -107,7 +109,7 @@ pub const ROOT_BYTES: usize = 32;
 /// The evidence pair a root comparison carries: two opaque 32-byte digests (ADR-023, ADR-028).
 ///
 /// Deliberately root-bytes-only — no `RegionKey`, no slab addressing — because which region
-/// disagreed is the outcome of the bisection walk, not an input to it (SPEC-09 is unresolved).
+/// disagreed is the outcome of the bisection walk, not an input to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RootCompare {
     /// Digest computed locally.
@@ -162,8 +164,9 @@ pub enum DeterminismViolation {
         roots: RootCompare,
     },
     /// Bisection localised the disagreement to one region branch (ADR-023, doc 10 § Verification).
-    // pending SPEC-09/SPEC-06: the branch is addressed by a region/slot tuple whose widths are
-    // undecided, so no addressing payload is committed here.
+    // the widths are no longer the blocker: ADR-029 (locked 2026-10-11) fixes them and frozen A-01
+    // supplies the branch key. What is still missing is A-03's epoch region-slot table and
+    // SPEC-06's slab geometry, so no addressing payload is committed here yet.
     RegionRootMismatch {
         /// The two subtree roots that disagree at the located branch.
         roots: RootCompare,
@@ -253,8 +256,9 @@ pub enum CoordsError {
     /// A Morton code was computed on raw voxel coordinates, which doc 02 forbids (tree shape must be peer-agreable).
     VoxelLevelMortonForbidden,
     /// A slab plane index fell outside its region's plane set (SPEC-06 canonical `(region_key, axis, plane_index)`).
-    // pending SPEC-06/SPEC-09: slab geometry and index width are unresolved, so no `SlabKey`
-    // payload is committed; this variant adopts A-01's `SlabKey` once coords.rs freezes.
+    // SPEC-06 still decides what a plane set contains, so the valid `plane` range is not pinned
+    // here. A-01 froze on 2026-10-11, so carrying its `SlabKey` as this variant's payload is now a
+    // scheduled migration (AGENTS.md §2) rather than a blocked one.
     PlaneIndexOutOfRange,
     /// An `AabbI64` arrived with `min > max` on some axis (doc 02: integer bounds, never f32).
     AabbInverted,
@@ -281,11 +285,14 @@ impl CoordsError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerError {
     /// A packed delta did not decode back to the record it was encoded from (gate P1.1).
-    // pending SPEC-03/SPEC-09: the 16/16/32 record layout and slab addressing do not close, so
-    // no `(RegionKey, [u16; 3], value)` tuple is carried here; A-03 supplies it once SPEC-09 lands.
+    // the layout closes: ADR-029 (locked 2026-10-11) fixes the record as 16 region-slot / 36
+    // intra-region / 12 payload. The tuple `(RegionKey, [u16; 3], value)` is not carried here yet
+    // only because A-03 is unwritten — it is unblocked, not undecided.
     DeltaRecordRoundTripFailed,
     /// The per-epoch distinct-region count crossed the region-slot ceiling (doc 03: a hard, checked limit).
-    // pending SPEC-09: whether the slot field stays 16 bits decides this ceiling's value.
+    // decided by ADR-029: the slot field stays 16 bits, so the ceiling is 65,536 regions per epoch
+    // record stream. Past it the stream partitions per region (or micro-commits early) rather than
+    // widening the field.
     EpochRegionSlotsExhausted,
     /// A requested epoch is outside the retained window and no snapshot anchors it (doc 03: the ledger is a bounded window).
     EpochWindowUnderrun,
@@ -308,8 +315,10 @@ pub enum LedgerError {
         kind: u16,
     },
     /// Re-entering a modified region did not restore every edit it had outstanding (gate P1.4).
-    // pending SPEC-09: the count of outstanding records per region depends on how the record
-    // addresses a slab, so no region identity or record index is carried here.
+    // ADR-029 (locked 2026-10-11) addresses a record inside the region, not inside a slab, so the
+    // open question here is capacity — how many records a region can hold outstanding, which is
+    // SPEC-06's and spike S2's to measure. Frozen A-01 supplies the region identity; A-03 supplies
+    // the record, and until it exists no region or record index is committed into this variant.
     TierRestoreIncomplete,
 }
 
@@ -334,8 +343,9 @@ impl LedgerError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryError {
     /// No slab could be reserved for a region's working set (doc 03: slab size and count are budgets, not guesses).
-    // pending SPEC-09 + spike S2: the 64 KB / 1 MB budgets are unreconciled with the record's
-    // addressable range, so no byte count is committed into this variant.
+    // ADR-029 removed the addressing conflict this note used to record, so the 64 KB / 1 MB figures
+    // are now purely a capacity question for spike S2. No byte count is committed into this variant
+    // until a measurement picks one.
     SlabPoolExhausted,
     /// An LRU eviction targeted a slab still bound to the GPU (doc 03 `M_active`, ADR-009).
     PinnedSlabEviction,
@@ -667,8 +677,9 @@ impl AssetError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetError {
     /// An `ActionTx` envelope did not decode (artifact A-08, doc 10 § The shift).
-    // pending A-08 / SPEC-09: the wire layout and the delta payload's widths are undecided, so no
-    // field index or byte offset is committed.
+    // the delta payload's widths are decided (ADR-029: 16 slot / 36 intra-region / 12 payload); what
+    // is missing is A-08's envelope layout itself, which that sign-off unblocked. Until A-08 is
+    // written no field index or byte offset is committed.
     ActionTxMalformed,
     /// A transaction's signature did not verify against its claimed proposer (ADR-021, OQ-11).
     // pending OQ-11 / OQ-14: signature scheme, sizes, and what a divergent root cost a proposer are
@@ -679,12 +690,14 @@ pub enum NetError {
     /// A client assumed state read at its `HLC_max` could still be rolled back (doc 10 staleness bound).
     StaleReadAfterHlcBound,
     /// A peer sent a slab mutation for a region it does not own (doc 10 single-writer-per-region).
-    // pending OQ-18 / SPEC-09: ownership surviving real RTT is unproven and the region-slot width
-    // is unresolved, so neither peer nor region identity is committed here.
+    // pending OQ-18: whether single-writer-per-region ownership survives real RTT is unproven. The
+    // region-slot field is settled at 16 bits (ADR-029) and the region identity is frozen A-01's, so
+    // this variant could carry both — it does not yet, because the ownership model is what is open.
     RegionOwnershipDenied,
     /// The bisection walk could not localise the disagreeing branch (ADR-023, gate P1.6).
-    // pending SPEC-09: the branch the walk lands on is addressed by slab/region indices that are
-    // still open, so no located region payload is committed.
+    // SPEC-09 no longer holds this open: ADR-029 fixes the slot field and frozen A-01 supplies the
+    // region index. A located-branch payload waits on A-03's epoch region-slot table, which is now
+    // unblocked and simply unwritten.
     BisectionRepairExhausted,
     /// Concurrent operations on one field had no defined merge rule (gate M5/M6, OQ-35).
     // pending OQ-35: merge rules cover aggregate fields, not arbitrary mod state; the variant is

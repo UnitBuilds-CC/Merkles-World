@@ -166,20 +166,23 @@ tools/ci/         ← gate harness (A10)
 docs/             ← this documentation
 ```
 
-**`contracts/coords.rs` is artifact A-01 and the first contract to be *frozen*** — the design
-conversation said the coordinate system "should probably be the first part of the engine" (GS 1690).
-Freezing it is gated, not first-in-line: doc 02 records that **SPEC-01/03/06/09 must be resolved
-first**, and doc 11's order is resolve → spike → freeze → build. Drafting A-01 early is fine and
-encouraged; *locking* it is what waits for those IDs.
+**`contracts/coords.rs` is artifact A-01 and the first contract frozen** — the design conversation
+said the coordinate system "should probably be the first part of the engine" (GS 1690). Its freeze
+was gated on **SPEC-01/03/06/09**; [ADR-029](decisions.md)'s sign-off on 2026-10-11 discharged that
+gate: SPEC-09 locked, SPEC-01 and SPEC-03 settled, and SPEC-06 moved out of the address into doc
+03's allocation question. Doc 11's order was resolve → spike → freeze → build, and the resolve step
+is what closed. From here a change to A-01 is a contract change in the AGENTS.md §2 sense:
+migration note + version bump + ADR, never an edit to make one agent's test pass.
 
 **What is in the tree now (Phase 0):**
 
-- **A-01 `contracts/coords.rs`** — drafted, with gates C1–C4 as real tests in
-  `crates/coords/tests/gates.rs`. **DRAFT**, because SPEC-09 is still open.
+- **A-01 `contracts/coords.rs`** — **frozen 2026-10-11**, with gates C1–C4 as real tests in
+  `crates/coords/tests/gates.rs`. Its `SlabKey` stays a lookup identity; what a slab physically
+  holds is SPEC-06's, and that is deliberately outside the frozen surface.
 - **A-09 `contracts/errors.rs`** — drafted: banded integer `u16` codes, one stable literal per
-  class, and a determinism band that routes separately (above). **DRAFT**, and its coordinate
-  payloads stay plain integers until A-01 freezes — that adoption is one migration, never a code
-  change.
+  class, and a determinism band that routes separately (above). **DRAFT**: its remaining waits are
+  A-02/A-08/A-05/A-07 payloads, not A-01. Now that A-01 has frozen, adopting its newtypes for the
+  coordinate payloads is a **scheduled migration** — one version bump, never a code change.
 - The `contracts` crate is `#![no_std]`, which is a *structural* guard for
   [AGENTS.md](../AGENTS.md) §3/§4: no contract type can reach a clock, a filesystem, a process or
   `alloc`. CI proves the guard still bites by building the crate for `wasm32-unknown-unknown`.

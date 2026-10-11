@@ -2,11 +2,11 @@
 //! smallest thing that qualifies: an integer lattice hash of `(seed, position)`.
 //!
 //! Scope warning. SPEC-04 registers two hashing roles — BLAKE3-256 for ledger identity (ADR-028,
-//! which belongs to docs/03 and is blocked by SPEC-09), and an integer spatial hash for terrain
-//! continuity. **This is the second role, and only a harness for it:** the terrain lattice itself
-//! is unspecified (OQ-27) — no doc yet says how base `f(pos, t)` stays coherent across region
-//! boundaries. Nothing here is a terrain design; changing this function changes every C2 test
-//! vector in the repo.
+//! which belongs to docs/03 and whose record layout ADR-029 unlocked on 2026-10-11), and an integer
+//! spatial hash for terrain continuity. **This is the second role, and only a harness for it:** the
+//! terrain lattice itself is unspecified (OQ-27) — no doc yet says how base `f(pos, t)` stays
+//! coherent across region boundaries. Nothing here is a terrain design; changing this function
+//! changes every C2 test vector in the repo.
 //!
 //! Determinism contract (AGENTS.md §4): wrapping integer ops only. No float, no transcendental,
 //! no allocator, no clock, so the result is bit-identical on x86-64, ARM64 and `wasm32`.

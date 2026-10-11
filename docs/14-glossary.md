@@ -44,7 +44,7 @@ lives in the doc named here.
 | **Rollback** | Reverting an optimistic local edit by storing its previous `u64` back into its slab slot. | [10](10-multiplayer.md) |
 | **Sector** | 16³ regions; the granularity of named event tags. | [02](02-coordinate-system.md) |
 | **SDF** | Signed distance function: negative inside, zero at surface, positive outside. The only geometry primitive. | [04](04-rendering.md) |
-| **Slab** | Pre-allocated contiguous fixed-size memory keyed by region. Writes are `O(1)` stores; resets are bump-pointer → 0. Its exact length and addressing are unsettled (**SPEC-09**). | [03](03-state-ledger.md) |
+| **Slab** | Per-region append-only record buffer (since [ADR-029](decisions.md)), pre-allocated and contiguous. Writes are `O(1)` appends; resets are bump-pointer → 0. Its geometry and capacity are unsettled (**SPEC-06**, measured by spike S2), its addressing is not. | [03](03-state-ledger.md) |
 | **Sphere tracing** | Raymarching where each step equals the SDF value — a guaranteed-empty distance. | [04](04-rendering.md) |
 | **Watch-list** | A region's registered interest in another region's field, for continuous drain/refill relationships. | [10](10-multiplayer.md) |
 | **WIT** | WASM Interface Types — the typed contract between the host engine and mods. | [08](08-wasm-modding.md) |

@@ -232,7 +232,8 @@ fn c4_casting_globals_to_f32_first_is_the_far_lands_bug() {
 }
 
 /// The slab key must stay 3-axis aware: `Axis` is part of identity, so an X-plane and a Y-plane in
-/// the same region are different slabs. Pending SPEC-09 for what the slab actually contains.
+/// the same region are different slabs. Pending SPEC-06 for what the slab actually contains —
+/// ADR-029 took the slab out of the record's address, so this type is identity only.
 #[test]
 fn slab_key_identity_includes_axis_and_plane() {
     use contracts::coords::SlabKey;

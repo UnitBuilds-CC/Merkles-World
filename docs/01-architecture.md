@@ -1,6 +1,8 @@
 # 01 — Architecture overview
 
-**Status:** architecture specified; contracts **not** frozen. A layer whose subsystem doc cites an
+**Status:** architecture specified. **A-01 `contracts/coords.rs` is frozen** (2026-10-11, on
+[ADR-029](decisions.md)'s sign-off) — every layer may now implement against the coordinate surface.
+The rest of `contracts/` is **not** frozen. A layer whose subsystem doc cites an
 open `SPEC`/`OQ` is a description, not a build target.
 **Depends on:** [doc 00](00-vision.md), [docs/13](13-risks-open-questions.md), the ADR log.
 **Consumed by:** docs 02–14.

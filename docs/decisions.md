@@ -36,7 +36,7 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 | [026](#adr-026--reuse-an-existing-gpu-runtime-do-not-hand-write-low-level-plumbing) | Reuse an existing GPU runtime; do not hand-write low-level plumbing | **proposed** |
 | [027](#adr-027--epoch-scoped-transaction-pool-for-multiplayer) | Epoch-scoped transaction pool for multiplayer | proposed |
 | [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | proposed |
-| [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **proposed — needs sign-off** |
+| [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **locked 2026-10-11** — signed off; resolves SPEC-09 |
 
 ---
 
@@ -255,9 +255,12 @@ whether 10 or 10,000,000 blocks changed.
 **Re-open if** fragmentation across region boundaries bites (slabs are per-region, so this is
 mostly bounded).
 
-**Contingent on** [SPEC-09](13-risks-open-questions.md): the 64 KB / 1 MB sizes and the "packed
-`u64`" store are both written against a record layout that doc 02 shows cannot address the slab it
-describes. Spike S2 measures the sizes; SPEC-09 fixes the addressing.
+**Contingent on** [SPEC-06](13-risks-open-questions.md): [ADR-029](decisions.md) (locked 2026-10-11)
+settles the record layout that made this store un-implementable — `SPEC-09` is closed — but it
+deliberately leaves the slab's *shape* open. Whether "`*slab_ptr = packed_u64`" stays literal
+depends on that choice: if a region's append-only record buffer is replayed into a dense overlay on
+load, an edit is a pointer-offset store; if it is indexed, the read path differs. Spike **S2**
+measures the 64 KB / 1 MB sizes; SPEC-06 decides the read-back.
 
 ---
 
@@ -397,8 +400,9 @@ mods (breaks portability).
 
 **Cost.** WASM's linear-memory model keeps v1 addressing at 32 bits (`memory64` is still new), so
 the WIT boundary hands mods **slab-relative integer handles**, never pointers and never absolute
-world coordinates — a mod asks the host about an offset inside a region it was given. That is a
-consequence of SPEC-03/SPEC-09's packing question, not a reason to shrink `RegionKey`, which stays
+world coordinates — a mod asks the host about an offset inside a region it was given. That follows
+the record packing [ADR-029](decisions.md) settled for SPEC-03/SPEC-09; it is not a reason to
+shrink `RegionKey`, which stays
 3×`i64` ([doc 02](02-coordinate-system.md) rejects 2×`i64` key packing).
 
 **Re-open if** a needed host capability can't cross the WIT boundary cheaply — solve it with a
@@ -447,16 +451,20 @@ authoring (unreadable, un-diffable); one blessed text format only (needless modd
 | Asset/SDF definitions, scene graphs, network payloads | **FlatBuffers** (with FlexBuffers for dynamic cases) | zero-copy access at byte offsets, direct `memcpy` into storage buffers, `.fbs` generates Rust/WASM/Python/C++ bindings |
 | Entity/material/biome configs | static data exported from WASM (`#[repr(C)]` arrays) | `O(1)` pointer read from linear memory; the compiler enforces types, so no runtime schema errors |
 | Ledger delta records | bitpacked `u64` | hashes computed on raw integers in SIMD registers, no string conversion, minimal storage |
-| Wire deltas | `{region-slot index, intra-slab offset, packed value}` — ordered by `(HLC, PeerID)` | no global coordinate travels on the wire; field widths pending [SPEC-09](13-risks-open-questions.md) |
+| Wire deltas | `{region-slot index, intra-region triple (3×12 bits), 12-bit payload}` — ordered by `(HLC, PeerID)` | no global coordinate travels on the wire; field widths fixed by [ADR-029](decisions.md) |
 
 **Rejected.** Cap'n Proto (better mutability than we need; FlatBuffers' tooling and GPU-upload
 story win). BSON (needs a parse step). Custom bit layouts *everywhere* — one audited packed
 record is accepted, a different hand-rolled layout per subsystem is not.
 Runtime JSON (ADR-014).
 
-**Contingent on** [SPEC-03](13-risks-open-questions.md) and [SPEC-09](13-risks-open-questions.md) —
-the exact bit layout and where the region identifier lives. (SPEC-01 settles only the
-`LocalOffset` storage width.)
+**Contingencies closed 2026-10-11.** [ADR-029](decisions.md) fixes the exact bit layout — 16-bit
+region slot, 36 intra-region bits (three 12-bit offsets), 12 payload — and leaves the region
+identifier itself in the epoch header's slot table, which is precisely what
+[SPEC-03](13-risks-open-questions.md) and [SPEC-09](13-risks-open-questions.md) were holding open.
+The record is still one `u64`, so this ADR is kept rather than amended. Still not this ADR's call:
+`LocalOffset`'s storage width (SPEC-01) and how the 12 payload bits divide between material, flags
+and quantity (doc 03).
 
 ---
 
@@ -480,11 +488,14 @@ coordinates fail at distance (the Far Lands: jitter, tearing, and *broken Merkle
   `RegionKey`, shaders by the camera anchor uniform, circuits by relative `(Δx, Δy, Δz)` edges,
   physics gradients relative to `-Y`.
 
-**Status caveat.** The source's own numbers conflict (12-bit vs `u16` offsets; 48-bit packed
-delta vs `i64` coordinates; slab geometry; Y-axis range). Those are SPEC-01/03/06/**09** — resolve
-them, *then* freeze `contracts/coords.rs` as the first artifact of Phase 1 (the user asked for
-exactly that, and it is the one part of the design with nothing downstream of it that can be built
-first). SPEC-09 in particular means the *record* and the *slab* cannot be frozen independently.
+**Status caveat — closed 2026-10-11.** The source's own numbers conflicted (12-bit vs `u16`
+offsets; 48-bit packed delta vs `i64` coordinates; slab geometry). Those were SPEC-01/03/06/**09**,
+and the rule was: resolve them, *then* freeze `contracts/coords.rs` as the first artifact (GS 1690 —
+the coordinate system is the one part of the design with nothing downstream of it that can be built
+first). That freeze happened: [ADR-029](decisions.md)'s sign-off locked SPEC-09, settled SPEC-01 and
+SPEC-03, and left SPEC-06 as doc 03's slab allocation choice. Taking the slab out of the record is
+exactly what let the *record* and the *slab* be decided independently — the thing SPEC-09 reported
+could not be done.
 
 **Rejected.** Single 64-bit float world coordinates (precision drift); f32 everywhere (breaks
 hashing past ~10,000 units); 3×`i64` per delta (192 bits and a WASM ABI liability).
@@ -590,8 +601,9 @@ ActionTx = ⟨SequenceID, ActorID, Kind, Target, Payload, TickEpoch, Signature�
 ```
 
 `SequenceID` is the `(HLC, PeerID)` pair of ADR-027 / doc 10 — causal order inside an epoch is
-Lamport, not wall-clock. Payload types: **slab delta mutate** (per-epoch region-slot index, intra-slab
-offset, packed value — width pending [SPEC-09](13-risks-open-questions.md)) for breaks/places;
+Lamport, not wall-clock. Payload types: **slab delta mutate** (per-epoch region-slot index + the
+intra-region triple + payload, exactly ADR-029's `|16 slot|36 intra-region|12 payload|` `u64`) for
+breaks/places;
 **entity kinematics** (camera-relative position, velocity, quaternion) for movement; **WASM signal
 trigger** (`ModuleID`, `FunctionIndex`, bytes) for switches, spells, inventories. Remote peers resolve
 the slot through the epoch header's slot table and apply the same mutation at the same spatial
@@ -749,10 +761,9 @@ compliance). xxHash/SeaHash (**not** collision-resistant; a world-state root mus
 
 ## ADR-029 — Delta records address voxels by region slot + intra-region triple
 
-**Status: proposed — needs sign-off.** It exists because [SPEC-09](13-risks-open-questions.md)
-blocks the freeze of **A-01** (`contracts/coords.rs`) and the layout of **A-03** / **A-08**, and
-both are currently DRAFT in the tree. Nothing here is implemented until the record split below is
-accepted.
+**Status: locked — signed off 2026-10-11** by the operator, which is what [SPEC-09](13-risks-open-questions.md)
+was waiting on. SPEC-09 is now **locked** on this record split, and with it **A-01** (`contracts/coords.rs`)
+freezes and **A-03** / **A-08** have a byte layout to be written against.
 
 **Context.** ADR-015 fixes the runtime delta record at one `u64`. SPEC-03's proposal spent those 64
 bits as `|16 region slot|16 intra-slab|32 value|`, and SPEC-06's proposal made the slab a
@@ -761,7 +772,7 @@ index either, so the two proposals are individually plausible and jointly unusab
 obvious repairs each cost something the design cares about: widening the record breaks ADR-015's
 premise, and routing the 16 bits through a side list puts an unbounded structure on the append path.
 
-**Decision (proposed).** Drop the slab from the address entirely and let the record name the
+**Decision.** Drop the slab from the address entirely and let the record name the
 position inside the region:
 
 ```
@@ -798,9 +809,10 @@ addressable by design — cross-region edits are just two records.
   memory geometry, so SPEC-06's slab size stops being tunable, and it multiplies per-slab metadata
   for regions that are mostly empty.
 
-**Consequences.** A-01 can freeze once this is accepted (its `LocalOffset` stays as drafted; the
-`SlabKey` stays a `(region, axis, plane)` identity but is no longer embedded in a record). A-03 and
-A-08 get a byte layout, so doc 03's record section and doc 10's wire format change together.
+**Consequences.** This acceptance freezes **A-01** (`contracts/coords.rs` froze with it: its
+`LocalOffset` stays as drafted, and the `SlabKey` stays a `(region, axis, plane)` identity but is
+no longer embedded in a record). **A-03** and **A-08** are unblocked — they now have a byte layout,
+so doc 03's record section and doc 10's wire format change together.
 ADR-015 is kept, not amended — the record is still one `u64`.
 
 **Re-open if** the region edge stops being 4096 voxels (ADR-016): 3×12 = 36 only holds for a

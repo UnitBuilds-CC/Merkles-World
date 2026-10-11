@@ -18,14 +18,14 @@ SPEC/OQ resolution  →  spikes S1–S10  →  contracts/ frozen  →  P0 harnes
 
 | ID | Artifact | Blocked by |
 |----|----------|-----------|
-| A-01 | `contracts/coords.rs` — `GlobalVoxelPos`, `RegionKey`, `LocalOffset`, `SlabKey`, `SectorKey`, `AabbI64`, octree key derivation, `region_key()` / `local_offset()` | SPEC-01/03/06 + **SPEC-09** |
+| A-01 | `contracts/coords.rs` — `GlobalVoxelPos`, `RegionKey`, `LocalOffset`, `SlabKey`, `SectorKey`, `AabbI64`, octree key derivation, `region_key()` / `local_offset()` | **frozen 2026-10-11.** Was SPEC-01/03/06 + **SPEC-09**: [ADR-029](decisions.md) locks SPEC-09, pins SPEC-01/03, and reclassifies SPEC-06 as doc 03's allocation choice rather than an addressing constraint |
 | A-02 | `contracts/ledger-api.wit` — the frozen v1 host surface | OQ-34, ADR-013 |
-| A-03 | delta record layout — the packed `u64`, region-slot table, epoch header | SPEC-03 + **SPEC-09**, gate P1.1 |
+| A-03 | delta record layout — the packed `u64`, region-slot table, epoch header | **unblocked 2026-10-11** — SPEC-09 locked by ADR-029 (`\|16 slot\|36 intra-region\|12 payload\|`); gate P1.1 still to write, the 12-bit payload's division and SPEC-06's slab capacity are this file's to decide |
 | A-04 | macro field schema + rule library interfaces (what a field *is*) | OQ-01, OQ-08 |
 | A-05 | event tag registry (enumerated, versioned) | OQ-08, gate SM1 / spike S7 |
 | A-06 | circuit graph IR + stateful node interface | OQ-02 |
 | A-07 | SDF node grammar schema (`.fbs` + interpreter signature) | ADR-012 |
-| A-08 | `ActionTx` wire layout | SPEC-03 + **SPEC-09**, doc 10 |
+| A-08 | `ActionTx` wire layout | **unblocked 2026-10-11** — SPEC-09 locked; doc 10 supplies the envelope, A-03 supplies the record |
 | A-09 | error taxonomy + determinism violation codes | doc 12 agent loop |
 
 Each is a small, reviewable file. Writing them is a **couple of days** of work and they are the
@@ -83,13 +83,14 @@ Each row is the command's real result, not a plan; per-gate evidence lives in do
 | `no_std` / WASM | `cargo build --target wasm32-unknown-unknown -p contracts -p coords` | `Finished` — the `#![no_std]` guard on `contracts/` still bites |
 | C2 vectors | `cargo run --release --example gate_vectors` | prints the six `u64` digests that `c2_test_vectors_are_frozen` pins as literals in `crates/coords/tests/gates.rs` (doc 02 § C2 names the test, not the values) |
 | C4 demo | `cargo run --release --example camera_f32_demo` | max error `0` at radii 512 / 2048 / 4096; the cast-then-subtract counterfactual returns `0.0` for one voxel at 10⁹ |
-| Dependency policy | `cargo deny check all -s` | `advisories ok: 0 errors` / `bans ok: 0 errors` / `licenses ok: 0 errors, 11 notes` (an empty graph never encounters an allow-listed license; `unused-allowed-license` flips those to warnings with the first real dependency) / `sources ok: 0 errors`. The graph is empty, so this is prophylactic; the licence itself is still [OQ-43](13-risks-open-questions.md) |
-| Doc integrity | `node tools/check_docs.mjs` | `18 files, 221 local links, 44 OQ + 9 SPEC + 29 ADR + 9 artifacts + 10 spikes defined` → `OK: no findings` |
+| Dependency policy | `cargo deny check all -s` | `advisories ok: 0 errors` / `bans ok: 0 errors` / `licenses ok: 0 errors, 0 warnings, 9 notes` / `sources ok: 0 errors`. The 9 notes are one per unused allowance in `deny.toml` — an empty dependency graph never encounters any of them. The count was 11 until the licence landed: the two extra were the workspace members being skipped as unlicensed, and they are now license-checked against **MIT OR Apache-2.0** ([OQ-43](13-risks-open-questions.md)), whose naming half still keeps `publish = false` |
+| Doc integrity | `node tools/check_docs.mjs` | `18 files, 242 local links, 44 OQ + 9 SPEC + 29 ADR + 9 artifacts + 10 spikes defined` → `OK: no findings` |
 
-**In the tree:** A-01 `contracts/coords.rs` and A-09 `contracts/errors.rs`, both under explicit
-**DRAFT** headers. A-01 is *not* frozen: freezing it waits on
-[SPEC-09](13-risks-open-questions.md), whose recommendation is now written up as
-[ADR-029](decisions.md) and is still `proposed` — unsigned.
+**In the tree:** A-01 `contracts/coords.rs` — **frozen 2026-10-11**, its DRAFT header removed when
+[ADR-029](decisions.md) was signed off and locked [SPEC-09](13-risks-open-questions.md). A-09
+`contracts/errors.rs` — still **DRAFT**: it waits on A-02/A-08/A-05/A-07 payload shapes, and now
+that A-01 is frozen, adopting its newtypes for coordinate payloads is a scheduled migration rather
+than a blocked one.
 
 **Not yet met (the rest of Phase 0's exit criteria):**
 
@@ -98,7 +99,9 @@ Each row is the command's real result, not a plan; per-gate evidence lives in do
 - The **dev profile** (edit a RON file, see the change) needs `assetc`, which is Phase 1.
 - **WASM execution** of the C2 vectors: CI compiles for `wasm32-unknown-unknown` but runs nothing
   there, so C2 is gated on x86-64/ARM64 execution + WASM compilation, not on three executions.
-- **A-02…A-08** are unwritten, so the exit clause "every contract is frozen enough" is not met.
+- **A-02…A-08 are unwritten**, so the exit clause "every contract is frozen enough" is not met.
+  ADR-029 changed the shape of that work: **A-03 and A-08 are no longer blocked** — they have a byte
+  layout and can be written now — while A-02/A-04/A-05/A-06/A-07 still wait on their own OQs.
 
 ## Phase 1 — Engine runtime (domain-agnostic)
 

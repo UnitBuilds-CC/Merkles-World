@@ -1,7 +1,9 @@
 # 03 — State, ledger and memory
 
-**Status:** specified; implementation blocked on SPEC-01, SPEC-03, SPEC-06, **SPEC-09**,
-SPEC-08, OQ-01, OQ-23.
+**Status:** specified, and the delta record is now decidable — [ADR-029](decisions.md) (locked
+2026-10-11) settles the record layout, and **SPEC-01/03/09** closed with A-01's freeze.
+Implementation still blocked on SPEC-06 (slab geometry, and how a region's record buffer reads
+back), SPEC-08, OQ-01, OQ-23.
 **Depends on:** [doc 02](02-coordinate-system.md). **Consumed by:** docs 04, 05, 06, 10.
 
 ```
@@ -47,28 +49,36 @@ SPEC-08, OQ-01, OQ-23.
 
 - A delta targets **one slab per region**: a 256² × 64 plane tile = 2²² voxels, the edit envelope
   around the player, *not* a 4096² column and *not* a region-sized volume ([SPEC-06](13-risks-open-questions.md)).
-- Addressing is `GlobalVoxelPos → (RegionKey, [u16; 3])`; `LocalOffset` is 3×`u16` (SPEC-01).
-- The packed delta is 8 bytes: 16 bits region-slot, 16 bits intra-slab, 32 bits value
-  ([SPEC-03](13-risks-open-questions.md)).
+- Addressing is `GlobalVoxelPos → (RegionKey, [u16; 3])`; `LocalOffset` is 3×`u16` masked to the
+  12-bit range (SPEC-01, pinned by A-01's freeze).
+- The packed delta is 8 bytes: 16 bits region-slot, **36 bits intra-region** (doc 02's three
+  12-bit `LocalOffset` components), 12 bits payload
+  ([SPEC-03](13-risks-open-questions.md), locked by [ADR-029](decisions.md) on 2026-10-11).
   16 bits indexes a set of **≤65536 distinct regions per epoch**, which is a hard, checked
   limit — exceeding it before compaction triggers an early micro-commit rather than corruption.
-- **The middle field does not fit (SPEC-09).** 16 bits gives 65,536 addresses against a slab of
-  2²² voxels, so it cannot be a voxel index inside the slab; read as a *record index* instead, it
-  caps a slab at 65,536 × 8 B = 512 KiB, which is a third number next to the 4 MiB slab and the
-  64 KB / 1 MB allocation budgets below. The three figures are one unresolved decision, not three
-  tunables. [ADR-029](decisions.md) proposes the resolution: take the slab out of the address and
-  split the record as 16 region-slot / **36 intra-region (three 12-bit local offsets)** / 12 payload
-  — exactly 64 bits, which dissolves the middle-field conflict and leaves slab geometry an
-  allocation question. **Until ADR-029 is signed off this file stays unimplemented**, and the 16/16/32
-  line above is the superseded draft, not the plan.
+- **The middle field was pointed at the wrong thing (SPEC-09, now locked).** The split first
+  written here spent 16 bits on an *intra-slab* offset: 2¹⁶ addresses inside a slab of 2²² voxels —
+  neither a voxel index nor a usable record index, and it made one decision out of three different
+  numbers (the 4 MiB tile, the 512 KiB cap, the 64 KB / 1 MB budgets). ADR-029 resolves it by
+  dropping the slab from the address entirely and spending the 36 bits inside the region, which is
+  exact: 3×12 = `log2(4096³)`.
+- **What it deliberately leaves open, and this file must still answer:** how the 12-bit payload
+  divides between material, flags and quantity; [SPEC-06](13-risks-open-questions.md)'s slab
+  geometry, now an allocation/streaming choice rather than an addressing constraint; and how a
+  region's append-only record buffer is read back — if it is replayed into a dense overlay on load
+  the write below stays a pointer-offset store, if it is indexed it is not.
+  Spike **S2** measures the sizes.
+  **The addressing conflict is closed, so this file is implementable**: A-03's record layout has a
+  byte layout, and A-01 froze alongside it.
 
 ## Slab allocation
 
-Pre-allocate contiguous fixed-size slabs keyed by region index. The two sizes historically
-written here (**64 KB / 1 MB**) are unreconciled budgets, not a decision: 1 MB of 8-byte records
-is 131,072 entries, which the 16-bit record index above cannot address. Spike S2 measures the
-real per-epoch edit volume, and SPEC-09 fixes the addressing width; whichever survives sets this
-number.
+Pre-allocate contiguous fixed-size slabs keyed by region index. Under ADR-029 a slab is an
+**append-only record buffer**, so its entry count is bounded by the buffer's size rather than by a
+field width: 1 MB of 8-byte records holds 131,072 edits for one region, 64 KB holds 8,192. Whether
+either is the right number is still **spike S2's** to measure against real per-epoch edit volume —
+two sizes are written here (**64 KB / 1 MB**) precisely because nobody has measured which survives.
+What is no longer open is the addressing: S2 chooses a capacity, it does not have to fit an index.
 
 ```rust
 let slot = slab.base.add(offset * 8);          // pointer arithmetic, no allocator
@@ -179,7 +189,7 @@ Merkle–Damgård constructions in general (length-extension liability).
 
 | Gate | Test | Source |
 |------|------|--------|
-| P1.1 | Every delta encodes/decodes to the same `(RegionKey, [u16; 3], value)` across the i64 range, including negatives | doc 02 — **tuple shape provisional until SPEC-09** |
+| P1.1 | Every delta encodes/decodes to the same `(RegionKey, [u16; 3], value)` across the i64 range, including negatives | doc 02 + [ADR-029](decisions.md) — field split locked (16 slot / 3×12 intra-region / 12 payload); only the payload's internals are doc 03's to decide |
 | P1.2 | 10⁶ writes/sec sustained, `p99 < 1 µs` | **our target** — the transcript only claims a slab write is "a pointer offset store instruction… This takes nanoseconds" (GS 1594) and "<1 ns (Direct RAM write)" |
 | P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "Sub-millisecond batch pass" (GS 1606) — a claim, not a measurement |
 | P1.4 | LRU eviction + region re-entry restores all edits with no visible pop-in | ADR-009 |

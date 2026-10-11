@@ -31,10 +31,11 @@ CLIENT A                                    CLIENT B
 
 No 3D block data crosses the wire, and the server never holds a voxel array — it holds roots,
 the transaction pool and the event log. The saving is in the **payload**, not the envelope: a slab
-mutation carries the 8-byte packed delta of doc 03 (width provisional, see
-[SPEC-09](13-risks-open-questions.md)), while the `ActionTx` around it — `SequenceID`, `ActorID`,
-`Kind`, `Target`, `TickEpoch`, `Signature` — is tens of bytes and is dominated by the signature,
-which is the one field that cannot shrink without giving up the anti-spoofing story (OQ-11/OQ-14).
+mutation carries doc 03's 8-byte packed delta — 16-bit region slot, 36 intra-region bits, 12 payload
+([ADR-029](decisions.md), locked 2026-10-11) — while the `ActionTx` around it — `SequenceID`,
+`ActorID`, `Kind`, `Target`, `TickEpoch`, `Signature` — is tens of bytes and is dominated by the
+signature, which is the one field that cannot shrink without giving up the anti-spoofing story
+(OQ-11/OQ-14).
 Compare "block array per chunk" and the difference is orders of magnitude, not bytes.
 
 **Rejected:** streaming chunk bytes (bandwidth, and discards determinism); delta-compressed

@@ -1,10 +1,13 @@
 # 02 — Coordinate system (HDCS)
 
-**Status:** specified. SPEC-01's `u16` answer is verified against the contract snippet below but
-still needs sign-off (docs/13 lists it as a proposal);
-SPEC-03/SPEC-06 are **proposals blocked by [SPEC-09](13-risks-open-questions.md)** (the delta
-record cannot address the slab geometry they assume) — **none of the rest of the engine may be
-implemented until SPEC-01/03/06/09 are resolved and `contracts/coords.rs` is frozen.**
+**Status:** **A-01 is frozen** — `contracts/coords.rs`, 2026-10-11. The freeze was gated on
+SPEC-01/03/06/09; [ADR-029](decisions.md)'s sign-off on 2026-10-11 resolves that gate. It **locks
+SPEC-09** and settles **SPEC-03** (the record split below), **pins SPEC-01** as written here
+(`u16` fields, 12-bit range, masked not clamped), and moves **SPEC-06** out of the address — the
+slab's geometry survives as doc 03's allocation/streaming choice, not a coordinate-system question.
+The rest of the engine now implements *against* this contract; changing the contract itself follows
+[AGENTS.md](../AGENTS.md) §2 — migration note + version bump + ADR, never an edit to make one's own
+test pass.
 **Implements:** ADR-016.
 
 > *"I think probably the most important part is that we're missing a coordinates system...
@@ -55,7 +58,7 @@ converts once at its boundary and never leaks it.
 | Level | Extent | Address |
 |-------|--------|---------|
 | Voxel | 1 unit | `GlobalVoxelPos` (3×i64) |
-| Slab | plane tile: 256² voxels × 64 deep = 2²² voxels (4 MiB @ 1 B/voxel), 3 orientations | `(RegionKey, axis, plane_index)` — **geometry pending [SPEC-09](13-risks-open-questions.md)** |
+| Slab | plane tile: 256² voxels × 64 deep = 2²² voxels (4 MiB @ 1 B/voxel), 3 orientations | `(RegionKey, axis, plane_index)` — a lookup identity, **not** a delta-record field since [ADR-029](decisions.md); geometry still [SPEC-06](13-risks-open-questions.md)'s |
 | Region | 4096³ voxels = 2³⁶ voxels | `RegionKey` (3×i64) |
 | Sector | 16 regions per axis (16³ = 4096 regions) | `(Rx>>4, Ry>>4, Rz>>4)` |
 | Epoch | whole world per commit | BLAKE3 digest ([ADR-028](decisions.md)) |
@@ -70,30 +73,37 @@ fourth authority.
 
 **Canonical slab order** (SPEC-06): `(region_key, axis, plane_index)` — the plane's index along
 its normal axis. This one tuple is the key for slab lookup, the Merkle leaf, the `M_active ↔
-M_cold` transport unit, the GPU binding slot, the network region identifier, and the
-`global_origin` anchor. The last two elements are derived by division:
-`axis, plane_index = f(GlobalVoxelPos, RegionKey)`.
+M_cold` transport unit, the GPU binding slot, and the `global_origin` anchor. The last two elements
+are derived by division: `axis, plane_index = f(GlobalVoxelPos, RegionKey)`. Since
+[ADR-029](decisions.md) it is **not** a delta-record field and **not** a wire identifier — what
+crosses the network is the epoch's 16-bit region-slot index (doc 10), and the slab key stays local
+to the machine that owns the memory.
 
-**Delta addressing is bounded — and today it does not close (SPEC-09).** An epoch can only contain
-edits inside the player's interaction radius, so a 36-bit intra-region position is not obviously
-needed. The record is:
+**Delta addressing closes on [ADR-029](decisions.md)** (locked 2026-10-11). The record is one `u64`
+and it names the position *inside the region*, not inside a slab:
 
 ```
-| region-slot 16 bits | intra-slab offset 16 bits | material+flags value 32 bits |  = u64
+| region-slot 16 bits | intra-region 36 bits (x:12, y:12, z:12) | payload 12 bits |  = u64
 ```
 
 Regions get a temporary per-epoch slot index (0..65535) assigned in first-touch order; the slot
-table lives in the epoch header and is rebuilt deterministically at replay. But 16 bits addresses
-**2¹⁶ = 65,536** positions, while the slab above holds **2²²** voxels and a region holds **2³⁶** —
-so `intra-slab offset` cannot be a voxel position in either. Three ways out, none chosen: widen the
-record (16 + 36 + 32 = 84 bits → a 96- or 128-bit record), shrink the slab to ≤2¹⁶ voxels, or make
-the 16 bits an index into a per-region *sparse edit list* whose entries carry the full position.
-This is [SPEC-09](13-risks-open-questions.md), and it gates freezing both A-01 (`coords.rs`) and
-A-03 (the record layout). A recommendation is now on file as
-[ADR-029](decisions.md): take the slab out of the address and split the record as
-`| region-slot 16 | intra-region 36 (3×12) | payload 12 |` — exactly 64 bits, with the 36 being the
-three 12-bit local offsets this doc already defines. **ADR-029 is `proposed`, not accepted**, so the
-three ways out above stay live and both artifacts carry DRAFT headers until it closes.
+table lives in the epoch header and is rebuilt deterministically at replay. The **36** is not a new
+width: it is this doc's three 12-bit `LocalOffset` components concatenated — 3×12 = 36 =
+`log2(4096³)`, a region's volume exactly — so the masked-not-clamped rule composes with the record
+unchanged. The **12-bit payload** is the same pocket ADR-015's sketch spent on a material ID; how it
+divides between material, flags and quantity is doc 03's decision, and region keys themselves stay
+3×`i64` and are never packed. One epoch's record stream therefore addresses at most **65,536
+distinct regions**; past that the stream partitions per region rather than widening the field.
+
+**What it replaced.** The split first written here was
+`|16 region slot|16 intra-slab|32 value|` while SPEC-06's slab held 2²² voxels — 16 bits addresses
+neither a 2²² slab nor a 2³⁶ region, so the record could not name the position it claimed to carry.
+That was [SPEC-09](13-risks-open-questions.md). Widening the record to 84 bits (rounded to 96 or
+128), shrinking the slab to ≤2¹⁶ voxels, and routing the 16 bits through a per-region *sparse edit
+list* were all considered and rejected in ADR-029, which resolves the conflict by dropping the slab
+from the address. **SPEC-09 is locked, A-01 froze with it, and A-03 has a byte layout.** Slabs become
+append-only record buffers, which is what leaves SPEC-06's geometry a streaming question rather than
+an addressing one.
 Coordinates that exceed a plane's range roll into the next plane —
 **never clamped** (a clamped negative index silently writes to the wrong region).
 
@@ -116,7 +126,9 @@ value) and a `to_voxel_offset()` whose name promised voxel granularity while ret
 locality. Both are fixed here.
 
 ```rust
-// contracts/coords.rs — artifact A-01, DRAFT: freeze is gated on SPEC-01/03/06/09 (docs/13).
+// contracts/coords.rs — artifact A-01, FROZEN 2026-10-11. ADR-029 (docs/decisions.md) was signed
+// off and locked SPEC-09, which was the last thing gating this freeze. Nothing in the surface
+// below may change except by the AGENTS.md §2 route: migration note + version bump + ADR entry.
 // This block is mirrored by docs/02-coordinate-system.md § The Rust contract; the
 // `contract_matches_spec_document` test in crates/coords fails if the two ever diverge.
 
@@ -137,8 +149,10 @@ pub struct RegionKey {
     pub z: i64,
 }
 
-/// Plane-tile slab = 256²×64 voxels (4 MiB at 1 byte/voxel), addressable along X (terrain),
-/// Y, or Z. Final geometry is pending SPEC-09.
+/// A region's edit buffer, keyed for lookup, Merkle leaves, GPU bindings and transport: the
+/// proposed plane tile 256²×64 voxels (4 MiB at 1 byte/voxel), addressable along X (terrain),
+/// Y, or Z. Since ADR-029 the slab is not part of a delta record's address, so this type pins the
+/// identity only — what the slab physically holds is still SPEC-06's open choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SlabKey {
     pub region: RegionKey,
@@ -294,24 +308,22 @@ data, never hashed. Anything that must be canonical uses integers.
 ## Open questions
 
 - [SPEC-01](13-risks-open-questions.md) — `LocalOffset` width: 12-bit range stored in `u16`
-  (transcript wrote both). **Proposal, verified: `u16` fields, 12-bit valid range, masked not
-  clamped** — docs/13 still lists it as a proposal, not a resolution.
-  Needs sign-off because it changes slab byte sizes. Verified in code by
-  `spec01_local_offset_masks_instead_of_clamping`: `-1` masks to `4095`, and the C1 round-trip holds
-  across `[−2^34, 2^34]`.
+  (transcript wrote both). **Pinned by A-01's freeze, 2026-10-11: `u16` fields, 12-bit valid range,
+  masked not clamped.** It was the last thing standing between this contract and a freeze, and
+  freezing is the sign-off — changing the answer now costs a contract change (AGENTS.md §2), not an
+  edit. Verified in code by `spec01_local_offset_masks_instead_of_clamping`: `-1` masks to `4095`,
+  and the C1 round-trip holds across `[−2^34, 2^34]`.
 - [SPEC-03](13-risks-open-questions.md) — delta record bit layout: 3×12 offset + 12 value = 48
-  bits of a `u64` cannot carry an `i64` triple. **Proposal: region-slot indirection. The
-  original 16/16/32 split is superseded by [ADR-029](decisions.md)'s proposed 16/36/12 — not
-  accepted, see SPEC-09 below.**
+  bits of a `u64` cannot carry an `i64` triple. **Locked — [ADR-029](decisions.md)'s region-slot
+  indirection with the 16/36/12 split, § Delta addressing above.** The 12-bit payload's internal
+  division is still doc 03's.
 - [SPEC-06](13-risks-open-questions.md) — slab identity: plane vs volume vs column. **Proposal:
-  256²×64 plane tile, 3 orientations, canonical `(region_key, axis, plane_index)` — not closed.
-  Under ADR-029 it stops being an addressing constraint and becomes an allocation/streaming
-  choice; still undecided.**
-- **SPEC-09** — the proposal above does not fit: 16 intra-slab bits address 2¹⁶ positions, the
-  slab holds 2²² voxels and a region holds 2³⁶. Widen the record, shrink the slab, or make the
-  16 bits an index into a per-region sparse edit list — or take the slab out of the address, which
-  is what [ADR-029](decisions.md) proposes. **Still open, still blocks A-01 and A-03**; A-01 is
-  drafted in the tree (`contracts/coords.rs`) under a DRAFT header for exactly this reason. Full
-  row in [docs/13](13-risks-open-questions.md).
+  256²×64 plane tile, 3 orientations, canonical `(region_key, axis, plane_index)` — still
+  undecided.** Under ADR-029 it is doc 03's allocation/streaming choice (including how a region's
+  append-only record buffer is read back), not an addressing constraint, and it does not gate A-01.
+- **SPEC-09** — 16 intra-slab bits address 2¹⁶ positions while the slab holds 2²² and a region
+  holds 2³⁶. **Locked 2026-10-11 by [ADR-029](decisions.md)**, which takes the slab out of the
+  address; A-01 froze with it, so `contracts/coords.rs` no longer carries a DRAFT header. Full row
+  in [docs/13](13-risks-open-questions.md).
 - [OQ-15](13-risks-open-questions.md) — does anything ever need sub-voxel coordinate precision,
   and if so which layer supplies it (camera-space f32 only)?

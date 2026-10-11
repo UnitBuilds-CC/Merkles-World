@@ -1,4 +1,6 @@
-// contracts/coords.rs — artifact A-01, DRAFT: freeze is gated on SPEC-01/03/06/09 (docs/13).
+// contracts/coords.rs — artifact A-01, FROZEN 2026-10-11. ADR-029 (docs/decisions.md) was signed
+// off and locked SPEC-09, which was the last thing gating this freeze. Nothing in the surface
+// below may change except by the AGENTS.md §2 route: migration note + version bump + ADR entry.
 // This block is mirrored by docs/02-coordinate-system.md § The Rust contract; the
 // `contract_matches_spec_document` test in crates/coords fails if the two ever diverge.
 
@@ -19,8 +21,10 @@ pub struct RegionKey {
     pub z: i64,
 }
 
-/// Plane-tile slab = 256²×64 voxels (4 MiB at 1 byte/voxel), addressable along X (terrain),
-/// Y, or Z. Final geometry is pending SPEC-09.
+/// A region's edit buffer, keyed for lookup, Merkle leaves, GPU bindings and transport: the
+/// proposed plane tile 256²×64 voxels (4 MiB at 1 byte/voxel), addressable along X (terrain),
+/// Y, or Z. Since ADR-029 the slab is not part of a delta record's address, so this type pins the
+/// identity only — what the slab physically holds is still SPEC-06's open choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SlabKey {
     pub region: RegionKey,
