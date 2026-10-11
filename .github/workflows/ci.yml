@@ -1,12 +1,14 @@
 # CI — the Phase 0 gate harness (docs/11 § Phase 0, docs/12 § merge rules, ADR-025).
 #
 # What this file proves, in the order the jobs run:
-#   gates    — fmt, clippy -D warnings, and the C1–C4 + A-09 tests on the architectures that
-#              must agree (x86-64 Linux, x86-64 Windows, ARM64 macOS), plus the C2 vectors and the
-#              C4 demo printed to the log so a divergence is visible, not just red.
-#   wasm     — contracts and coords compile for `wasm32-unknown-unknown`: the third architecture
-#              gate C2 names, and the only proof here that `#![no_std]` still bites.
-#   deny     — dependency hygiene against `deny.toml`.
+#   gates    — fmt, clippy -D warnings, and the C1–C4 + A-09 + A-10 tests on the architectures that
+#              must agree (x86-64 Linux, x86-64 Windows, ARM64 macOS), plus the C2 and A-10 root
+#              vectors and the C4 demo printed to the log so a divergence is visible, not just red.
+#   wasm     — contracts, coords and the ledger hasher compile for `wasm32-unknown-unknown`: the
+#              third architecture gate C2 names, the only proof here that `#![no_std]` still bites,
+#              and the reason a canonical root is computable in a browser (gate P1.5's fourth target).
+#   deny     — dependency hygiene against `deny.toml`. Since BLAKE3 (ADR-028) this graph is not
+#              empty, so the job checks something rather than proving a config parses.
 #   docs     — links, anchors, tables and the spec↔contract mirror in docs/ (the docs are the spec;
 #              a broken reference in a public repo is a product defect).
 #
@@ -16,8 +18,9 @@
 #   * The S6 headless shader check that docs/11 lists for Phase 0. Spike S6 has not run, there is
 #     no WGSL in the tree yet, and a job that gates on a harness which does not exist teaches
 #     everyone to ignore red CI. It joins this file when S6 lands.
-#   * `cargo build --workspace` of engine crates: `contracts` and `crates/coords` are the only
-#     members, and `gates` already builds them.
+#   * Running the A-10 vectors *inside* a WASM runtime: they compile for the browser target, and the
+#     runner that executes them there is spike S6's sibling, OQ-41. Until then P1.5 is three targets,
+#     not four, and docs/11 says so.
 
 name: CI
 
@@ -62,11 +65,14 @@ jobs:
       - name: Lints (clippy -D warnings, all targets)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Gates C1–C4, A-09 taxonomy, spec↔contract mirror
+      - name: Gates C1–C4, A-09 taxonomy, A-10 shape, spec↔contract mirror
         run: cargo test --workspace
 
       - name: Gate C2 vectors for this architecture
         run: cargo run --release --example gate_vectors
+
+      - name: A-10 root vectors for this architecture
+        run: cargo run --release --example root_vectors -p ledger
 
       - name: Gate C4 camera-relative demo
         run: cargo run --release --example camera_f32_demo
@@ -78,8 +84,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup show
-      - name: Build contracts and coords for the browser target
-        run: cargo build --target wasm32-unknown-unknown -p contracts -p coords
+      - name: Build contracts, coords and the ledger hasher for the browser target
+        run: cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger
 
   deny:
     name: cargo-deny

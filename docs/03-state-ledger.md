@@ -519,9 +519,9 @@ that orders children differently computes a different root while believing it is
 same failure doc 02 guards against when it forbids voxel-level Morton codes, one level up the tree.
 The shape is now written down: **artifact A-10**
 (`contracts/tree.rs`, [ADR-030](decisions.md)) is that contract, and § The tree shape below is its
-mirrored prose. The prose is all A-10 can supply on its own — `contracts/` holds no behaviour, and
-the hasher that turns these rules into digests (`crates/ledger`, [docs/12](12-agent-operations.md)'s
-A2 crate) is not in the tree yet, so § The tree shape publishes rules rather than roots.
+mirrored prose. The prose used to be all A-10 could supply on its own, because `contracts/` holds no
+behaviour. `crates/ledger` — [docs/12](12-agent-operations.md)'s A2 crate — is the hasher that
+executes these rules, so § The tree shape now publishes both the rules and the roots they produce.
 
 **Rejected for this role:** SHA-256 (correct class, ~20x slower for no benefit), xxHash/SeaHash
 (fast but **not** collision-resistant — a world root must be), raw CRC (not a hash),
@@ -609,8 +609,18 @@ Then, in this byte order and no other:
 
 ```text
 epoch_root = H(kind = NODE_EPOCH_ROOT, level = 0,
-    genesis_root ‖ slot_table_root ‖ region_list_root ‖ event_list_root ‖ LE fields of EpochHeader)
+    genesis_root ‖ slot_table_root ‖ region_list_root ‖ event_list_root
+    ‖ LE_u64(EpochHeader.epoch_index) ‖ LE_u32(EpochHeader.record_count))
 ```
+
+**Which header fields, and why only those two.** "The LE fields of `EpochHeader`" was the phrase
+ADR-030 signed off with, and `crates/ledger` could not compute a vector without naming them. Of
+`EpochHeader`'s five fields: `base_genesis_root` **is** `genesis_root` and `event_log_root` **is**
+`event_list_root`, so they enter once, from the header, rather than twice as a copy; `region_slots`
+is the source of `slot_table_root`, not a separate commitment; and what remains is
+`epoch_index` then `record_count`, in that order. A header whose `base_genesis_root` disagrees with
+the genesis handed to the same call is a caller bug, and `epoch_root`'s doc comment says so instead
+of hashing both and letting the world fork.
 
 ### What the base terrain commits to, and why it is not a hash
 
@@ -641,13 +651,74 @@ without a store) is a **storage** concern: [OQ-07](13-risks-open-questions.md) a
 [OQ-23](13-risks-open-questions.md) own it, and if chaining is adopted it becomes A-10 v2 with an
 ADR and a migration note, not an extra 32 bytes in one implementation.
 
-**No voxel-level Morton code**, per the paragraph above; sorting uses
-`(x, y, z, append_index)` lexicographically, which is the same order the octree walks without ever
-naming a voxel by a single integer.
+**No voxel-level Morton code**, per the paragraph above. This had a consequence writing the hasher
+exposed: the order a caller hands records over in never reaches a preimage, because the root is
+**position-keyed** — the octree places each leaf by the axis bits at each level, so arrival order,
+`(x, y, z, append_index)` lexicographic order and octree order all produce the same root (pinned by
+`region_root_is_position_keyed_not_arrival_keyed`). What the earlier sentence here claimed — that
+lexicographic order *is* the order the octree walks — is simply false: the walk order is Z-order,
+which groups by interleaved high bits rather than by `x`. It did not matter for the digest, which is
+exactly why nobody had checked. `crates/ledger::walk_less` therefore sorts by octant index per level,
+from `OCTREE_DEPTH` down to 1 — Z-order expressed as a comparator, so no 36-bit index is ever formed,
+and a subtree's leaves stay one contiguous run for the builder to recurse over.
 
 **No behaviour.** `contracts/` is the shared grammar; `crates/ledger` is the hasher. A WASM binding
 builds its preimages with `preimage()` below and hashes them with its own BLAKE3, and that is the
 entire agreement it has to keep.
+
+### The published vectors
+
+ADR-028's second half — "published test vectors so Rust, WASM and any future language binding agree
+bit-for-bit". They exist now, produced by `crates/ledger` and pinned as literals in
+`crates/ledger/tests/root_vectors.rs`; reproduce them with
+
+```text
+cargo run --release --example root_vectors -p ledger
+```
+
+The scenario is deliberately small enough to rebuild by hand, because a vector nobody can trace is a
+number, not evidence. Seed `0x5EED_0000_0000_0001`, `base_rule_id = 0`, `rule_version = 0` (OQ-27 still
+open), two regions in the slot table — slot 0 at `(0, 0, 0)` and slot 1 at **`(-1, 2, 0)`**, so the
+`i64` little-endian encoding is exercised on both sides of zero — and three edits in region slot 0,
+handed over in arrival order rather than walk order:
+
+| Input | Digest |
+|-------|--------|
+| `(0, 0, 0) → payload 1` | one leaf of the octree, position from the path |
+| `(2048, 0, 4095) → payload 7` | sets bit 11 of `x` and bit 11 of `z` |
+| `(4095, 4095, 4095) → payload 0x0ABC` | the far octant, every bit set |
+
+| Name | 32-byte digest, hex | What it pins |
+|------|---------------------|--------------|
+| `EMPTY_0` | `427c29d266d450a69922e414274d5a1629d0d64eb3a14287b64e39ee15fe5c76` | `H(kind 2, 0, ∅)` — the ladder's base |
+| `EMPTY_12` | `15773ea10c73687eba1425aa12f0979c80b072f699d1e4fecebf85a23553d4ce` | the derived top; also **any untouched region's** root |
+| `LEAF_0ABC` | `48cb92891609b2b4c1666825fc734a3beec5f892dba4d4643530dbeba9aed21c` | `H(kind 0, 0, LE_u16(0x0ABC))` |
+| `LEAF_0FFF` | `f396d68bd4df28e86892b9347bfa839639aa9d9c0a0c0ec938fc48346d33d4cc` | `voxel_leaf(0xFFFF)` **masked**, not widened (ADR-029's field arithmetic) |
+| `GENESIS` | `a367342aaf99f03043f1bf26431e370a66018052e405a3d5d60f9b6436456fee` | the intensional base-terrain commitment |
+| `SLOT_LEAF_0` | `e33aa6d522d2842324a0e67100616ebe80d47694685f2dce62dc370e591b598c` | `H(kind 7, 0, 0 ‖ (0,0,0))` |
+| `SLOT_LEAF_1` | `305ed78e618947ab1bfab3e93048a0470f5e5412526af121d8cfacb4b7fa55ca` | the same over a **negative** region coordinate |
+| `SLOT_TABLE` | `1aa6a154af1de795cafe245752d51df583008abd84ccec3976547a2477f069ab` | ADR-029's first-touch mapping, under its own root |
+| `REGION_0` | `97627e3290a2b4f34e708359af9235d6e2d6d417e1491380d37e58178f9bdcbc` | the three edits above, in a 12-level octree |
+| `REGIONS` | `0f70e649b228e5d132332b51cfff3aa11badb2199e2cd3980eb4bf16cb6d9a0f` | list over `(slot 0, REGION_0)` and `(slot 1, EMPTY_12)` |
+| `EVENTS_EMPTY` | `23b60201bc628839bd07b1d9f891798e30f79183a4db0b1bcbcaefd235238cb8` | kind 3 — an empty epoch, distinct from `EMPTY_12` |
+| `EVENTS_ONE` | `ef8d20bb6bf31520bc8188ef8f9b47926536e3edd446999070c091d822fb2795` | a one-item list is the item, **unwrapped** |
+| `EVENTS_TWO` | `87b6b9984adcd5486c24746571ec399b04cb7459d995fec050ebfa9f5239bb10` | the kind-8 binary branch over two event leaves |
+| `EPOCH_0` | `91b97a52fc5137b50ec64550a94220daab0ffe05575bac6dbfda825a9947cc61` | **the root a peer sends** |
+| `EPOCH_1` | `44de758bdfb3eff0c7b431f78ae9b9a8bae4f5c02972e5c60da79c11ccb379a7` | same world, one more event, `epoch_index` 1 |
+
+These are measured, not asserted: `REGION_0` is identical whether the three edits arrive in walk order
+or in the shuffled order the example uses (`region_root_is_position_keyed_not_arrival_keyed`), and
+`EPOCH_1 ≠ EPOCH_0` is what gate P1.5's comparison is even for.
+
+That the literals genuinely guard the shape was checked the way SPEC-01's masking rule was: the child
+iteration in `octant_branch` was reversed — x's bit read as the high bit rather than the low one, a
+peer's plausible mistake rather than a fictional one — and `published_vectors_are_frozen` failed with
+`REGION_0` computing `d748c899bb444357a0e1f1bcc767bc2c275208719a5bb44bd0f33a7112cc1265` against the
+pinned `97627e32…`; `region_root_is_position_keyed_not_arrival_keyed` failed with the same pair, and
+the injection was reverted. Worth stating plainly: `child_order_is_x_low_bit_at_every_level` **stayed
+green under that injection**, because it re-derives its expectation through the same builder. Only a
+pinned literal catches a shape change — which is the argument for publishing vectors rather than
+properties alone.
 
 ### The contract
 
@@ -674,7 +745,9 @@ Mirrored verbatim from `contracts/tree.rs`; the `tree_contract_matches_spec_docu
 //   the type signature is the current guard, and it is a weak one that a lint should replace.
 // - **No voxel-level Morton code.** docs/02 forbids one, so the octree path is derived *per level*
 //   from `LocalOffset`'s own axis bits (`octant_at`), never by interleaving 36 bits into a flat
-//   voxel index. Sorting uses `(x, y, z, append)` lexicographically for the same reason.
+//   voxel index. Nor does an arrival order or a lexicographic one ever reach a preimage: the root is
+//   position-keyed, so the only ordering that matters is the octant path itself (docs/03 § Epoch
+//   roots, where `crates/ledger`'s `walk_less` sorts by octant index per level for its own sake).
 // - **Core-only, zero dependencies.** Same guard as coords.rs and delta.rs: verified on
 //   wasm32-unknown-unknown in CI.
 //

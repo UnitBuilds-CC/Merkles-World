@@ -197,7 +197,10 @@ migration note + version bump + ADR, never an edit to make one agent's test pass
   little-endian byte order, epoch-root composition). Mirrored into docs/03 § The tree shape and pinned
   by `tree_contract_matches_spec_document`, same guard as the two above. A-10 is the grammar **A2
   Ledger** hashes against; the hasher itself is behaviour, so it lives in `crates/ledger` and not here.
-  A2 may not redefine any of it — a shape change is an ADR-030 re-open plus regenerated root vectors.
+  **A2's crate landed on 2026-10-12** with that hasher: `node_parts` is the only place a preimage is
+  built, `EmptyLadder` derives the 13 absent-subtree digests, and
+  `cargo run --release --example root_vectors -p ledger` prints the vectors docs/03 tabulates. A2 may
+  not redefine any of it — a shape change is an ADR-030 re-open plus regenerated root vectors.
 - The `contracts` crate is `#![no_std]`, which is a *structural* guard for
   [AGENTS.md](../AGENTS.md) §3/§4: no contract type can reach a clock, a filesystem, a process or
   `alloc`. CI proves the guard still bites by building the crate for `wasm32-unknown-unknown`.

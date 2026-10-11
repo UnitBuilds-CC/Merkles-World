@@ -27,7 +27,7 @@ SPEC/OQ resolution  →  spikes S1–S10  →  contracts/ frozen  →  P0 harnes
 | A-07 | SDF node grammar schema (`.fbs` + interpreter signature) | ADR-012 |
 | A-08 | `ActionTx` wire layout | **drafted 2026-10-11** as `contracts/tx.rs` (DRAFT) — doc 10's envelope, split as ADR-015 splits its wire-delta row: `Target` is the address, `TxPayload` the value, and a slab mutation's address+value *is* an A-03 record. Freeze waits on **OQ-46** (what the ids are, how wide, and which scheme signs) and on **OQ-30**/**OQ-23** for the serialized byte format |
 | A-09 | error taxonomy + determinism violation codes | doc 12 agent loop |
-| A-10 | Merkle tree shape — node kinds, arity, child order, empty rules, canonical byte order, epoch-root composition | **drafted 2026-10-11** as `contracts/tree.rs` (DRAFT) on [ADR-030](decisions.md), the half [ADR-028](decisions.md) explicitly left open. Mirrored into [docs/03 § The tree shape](03-state-ledger.md) and pinned by `tree_contract_matches_spec_document`; gates P1.3/P1.5/P1.6 are only meaningful once it exists. Freeze waits on **ADR-030 sign-off** — a changed rule is a shape break, so every published root vector moves with it |
+| A-10 | Merkle tree shape — node kinds, arity, child order, empty rules, canonical byte order, epoch-root composition | **drafted 2026-10-11** as `contracts/tree.rs` (DRAFT) on [ADR-030](decisions.md), the half [ADR-028](decisions.md) explicitly left open, and **executed 2026-10-12** by `crates/ledger`, the hasher — which is where the shape stopped being prose: the derived empty ladder, the octant order, the list's odd-item pairing and the epoch-root field order are all pinned as digest literals now ([docs/03 § The published vectors](03-state-ledger.md)). Mirrored into docs/03 and held by `tree_contract_matches_spec_document`. Freeze waits on **ADR-030 sign-off** — a changed rule is a shape break, so every published root vector moves with it |
 
 Each is a small, reviewable file. Writing them is a **couple of days** of work and they are the
 only things that can be written while the open questions are still open — because the act of
@@ -102,9 +102,13 @@ payload field is opaque and A-08's identity widths are labelled drafts on purpos
 freezing (A-08 now *exists*, so what it owes A-09 is a decision, not a file), and now
 that A-01 is frozen, adopting its newtypes for coordinate payloads is a scheduled migration rather
 than a blocked one. A-10 `contracts/tree.rs` — **drafted 2026-10-11, DRAFT** on
-[ADR-030](decisions.md): the tree shape ADR-028 deliberately left open. It is the grammar only.
-`contracts/` holds no behaviour, so **nothing in this workspace computes a BLAKE3 digest yet** —
-the vectors ADR-028 promised are owed by `crates/ledger`, the hasher, which is not in the tree.
+[ADR-030](decisions.md): the tree shape ADR-028 deliberately left open. It stays the grammar only,
+and that division is now load-bearing rather than theoretical: `crates/ledger` is the workspace's
+**first crate with behaviour**, holding the hasher while `contracts/` still holds none. BLAKE3
+(ADR-028) is its one external dependency and the workspace's first, taken with
+`default-features = false` so `no_std` keeps biting — CI compiles the hasher for
+`wasm32-unknown-unknown`, which is what a root that has to agree in a browser requires. Its
+`root_vectors` example publishes the digests docs/03 now tabulates.
 
 **Not yet met (the rest of Phase 0's exit criteria):**
 
@@ -118,11 +122,14 @@ the vectors ADR-028 promised are owed by `crates/ledger`, the hasher, which is n
   before: four artifacts now need *decisions* (OQ-45, OQ-46, ADR-030's sign-off, and the payload
   shapes A-09 inherits from A-02/A-05/A-07) rather than files, while the five unwritten ones still
   wait on their own open questions (OQ-34, OQ-01, OQ-08, OQ-02, ADR-012).
-- **There is no hasher.** Every rule A-10 pins is exercised as a *byte layout* test, not as a
-  digest: no leaf, branch, slot-table or epoch root has ever been computed here, so gates P1.3,
-  P1.5 and P1.6 have nothing to measure yet. The first behaviour-bearing crate — `crates/ledger`,
-  BLAKE3 as its first external dependency (ADR-028) — is the next unit of work, and publishing its
-  vectors is what turns ADR-030 from proposed into signable.
+- **There is a hasher now, and only a hasher.** `crates/ledger` computes leaves, branches, the empty
+  ladder, the slot table, the region roots and the epoch root, and it is `no_std` on purpose so the
+  browser target compiles it. What it does **not** do is the commit path: nothing writes a delta into
+  a slab, so gate **P1.2**'s throughput, gate **P1.3**'s sub-ms Merkle pass and
+  [OQ-47](13-risks-open-questions.md)'s frame-0 visibility still have no code to measure, and the
+  `12N`-hash cost model in docs/03 remains a hypothesis. `sort_walk_order` is an O(N²) insertion sort
+  for the same reason: correct, allocation-free, and waiting on SPEC-06 and spike S2 to say what the
+  real ordering costs.
 
 ## Phase 1 — Engine runtime (domain-agnostic)
 

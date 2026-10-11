@@ -1,9 +1,10 @@
 # cargo-deny — the dependency half of the CI gate (docs/11 Phase 0, ADR-025's merge rules).
 #
-# The workspace has **zero third-party dependencies** today: `contracts` and `crates/coords` are
-# `no_std` and std-free by design. So nothing here is fixing a known problem — this file is the
-# check that catches the *first* crate anyone adds, which is the moment `AGENTS.md` §3 (hot-path
-# bans) and §4 (determinism) start being at risk from a transitive dependency.
+# The workspace's first third-party dependency landed with ADR-028: **BLAKE3**, via `crates/ledger`,
+# and its own transitive set (`cc`, `cfg-if`, `arrayvec`, `constant_time_eq`, `cpufeatures` — the
+# SIMD build). `contracts` and `crates/coords` stay std-free by design, and `ledger` is `no_std` with
+# `default-features = false` precisely so the browser target keeps compiling. So this file is no
+# longer only a check that catches the first crate: it is the check that audits the one we took.
 
 [graph]
 # The three architectures gate C2 names (docs/02). A dependency that does not build for one of
@@ -39,10 +40,11 @@ deny = []
 # removed upstream). A per-category policy (copyleft, OSI/FSF) is a product decision that travels
 # with OQ-43, not a dependency-hygiene one.
 confidence-threshold = 0.93
-# While the graph is empty, every entry below is "not encountered" by definition — one warning per
-# allowance per run, all of them meaningless. Set this back to "warn" in the commit that adds the
-# first dependency, so the allowance list gets pruned against crates we actually ship.
-unused-allowed-license = "allow"
+# While the graph was empty, every entry below was "not encountered" by definition — one warning per
+# allowance per run, all of them meaningless. BLAKE3 is the commit that adds the first dependency, so
+# as this file instructed: back to `warn`, which prunes the allowance list against crates we actually
+# ship. Warnings do not fail the job; a licence outside `allow` does.
+unused-allowed-license = "warn"
 allow = [
     "MIT",
     "Apache-2.0",

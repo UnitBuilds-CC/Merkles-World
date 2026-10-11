@@ -17,7 +17,9 @@
 //   the type signature is the current guard, and it is a weak one that a lint should replace.
 // - **No voxel-level Morton code.** docs/02 forbids one, so the octree path is derived *per level*
 //   from `LocalOffset`'s own axis bits (`octant_at`), never by interleaving 36 bits into a flat
-//   voxel index. Sorting uses `(x, y, z, append)` lexicographically for the same reason.
+//   voxel index. Nor does an arrival order or a lexicographic one ever reach a preimage: the root is
+//   position-keyed, so the only ordering that matters is the octant path itself (docs/03 § Epoch
+//   roots, where `crates/ledger`'s `walk_less` sorts by octant index per level for its own sake).
 // - **Core-only, zero dependencies.** Same guard as coords.rs and delta.rs: verified on
 //   wasm32-unknown-unknown in CI.
 //
