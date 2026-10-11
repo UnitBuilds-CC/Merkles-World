@@ -16,5 +16,5 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 # Hot-path discipline (AGENTS.md §3): a frame must not allocate or format.
-alloc-instead-of-core = "deny"
-std-instead-of-core = "deny"
+alloc_instead_of_core = "deny"
+std_instead_of_core = "deny"
