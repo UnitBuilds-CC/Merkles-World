@@ -33,9 +33,9 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 | [023](#adr-023--desync-detection-by-32-byte-epoch-root-exchange--bisection-repair) | Desync detection by 32-byte epoch root exchange + bisection repair | locked-contingent |
 | [024](#adr-024--spatial-bvh-mapped-to-slabs-for-sdf-culling) | Spatial BVH mapped to slabs for SDF culling | locked |
 | [025](#adr-025--contract-first-agent-swarm-with-architect--ci-gatekeeper-roles) | Contract-first agent swarm with architect + CI-gatekeeper roles | locked |
-| [026](#adr-026--reuse-an-existing-gpu-runtime-do-not-hand-write-low-level-plumbing) | Reuse an existing GPU runtime; do not hand-write low-level plumbing | **proposed** |
+| [026](#adr-026--reuse-an-existing-gpu-runtime-do-not-hand-write-low-level-plumbing) | Reuse an existing GPU runtime; do not hand-write low-level plumbing | **locked 2026-10-11** — signed off: `wgpu` is the substrate, the raymarcher is ours as a WGSL compute pipeline. Answers [OQ-26](13-risks-open-questions.md)'s choice half; spike **S9** still owes the cost half |
 | [027](#adr-027--epoch-scoped-transaction-pool-for-multiplayer) | Epoch-scoped transaction pool for multiplayer | proposed |
-| [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | proposed |
+| [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | **locked 2026-10-11** — signed off: locks [SPEC-04](13-risks-open-questions.md)'s hashing half and makes BLAKE3 the first external dependency the workspace takes |
 | [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **locked 2026-10-11** — signed off; resolves SPEC-09 |
 
 ---
@@ -686,7 +686,9 @@ interfaces.
 
 ## ADR-026 — Reuse an existing GPU runtime; do not hand-write low-level plumbing
 
-**Status: proposed — the design was internally inconsistent and needs sign-off.**
+**Status: locked 2026-10-11 — signed off.** It was flagged `proposed` because the design
+contradicted itself; the sign-off settles which statement wins: `wgpu` is the substrate, and the
+raymarcher is written by us as a WGSL pipeline on top of it.
 
 **Context.** The acceleration analysis says writing a custom Vulkan/WebGPU raymarcher,
 allocator and compute pipeline from scratch costs 2–3 months of the worst kind of LLM
@@ -696,7 +698,7 @@ also says "your rendering pipeline (ideally Vulkan or WebGPU)", and doc 04's ray
 custom WGSL compute pipeline. An existing voxel engine (Luanti) has a *mesh* renderer, which
 ADR-011 rejects.
 
-**Decision (proposed).** Adopt **`wgpu` as the GPU layer** (it *is* the WebGPU-idiomatic Rust
+**Decision.** Adopt **`wgpu` as the GPU layer** (it *is* the WebGPU-idiomatic Rust
 runtime, satisfying both statements) and use Bevy *only* if its ECS/windowing/input plumbing
 pays for itself. Reject Luanti/Minetest as a base — its mesh+node model conflicts with
 ADR-011/ADR-005. Write the raymarcher ourselves as a WGSL compute pipeline on top of `wgpu`,
@@ -738,14 +740,17 @@ commit per action (the cost this architecture exists to avoid).
 
 ## ADR-028 — BLAKE3-256 as the ledger digest
 
-**Status: proposed.**
+**Status: locked 2026-10-11 — signed off.** This is the decision that makes the workspace take its
+first external dependency, and it moves the digest out of prose: the 32-byte length and the
+leaf / branch / event-tag domain separation become something a contract pins with test vectors, not
+something two implementations each remember.
 
 **Context.** The source asks for *"cryptographic hashes (like SHA-256)"* (GS 323) and labels the
 ledger step simply `Cryptographic Hash` (GS 274) — it never chooses an algorithm. The hash is on the
 hot path of both compaction and verification, and the design's "Sub-millisecond batch pass" claim
 (GS 1606) depends on that choice.
 
-**Decision (proposed).** **BLAKE3-256** (32-byte digests): orders of magnitude faster than
+**Decision.** **BLAKE3-256** (32-byte digests): orders of magnitude faster than
 SHA-256, SIMD and intrinsically parallel (perfect for hashing contiguous slab arrays and Merkle
 levels), and widely implemented for Rust and WASM.
 

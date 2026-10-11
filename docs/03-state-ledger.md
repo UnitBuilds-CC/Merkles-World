@@ -452,9 +452,13 @@ Sleep is a *meaningful* pause, which is why it was chosen as the commit boundary
 catch-up (apply the pool for Δt), batch compression (thousands of micro-edits → one root), and
 far consequences (dried lake bed, dead vegetation, migrated fauna) already encoded in the new
 root when the player arrives. It is an optimization of the same primitive as an
-**auto-commit epoch timer** (proposal, unfixed: a wall-clock fallback *and* an N-region change
-count) — needed because some players won't sleep, and because multiplayer has no single sleeper
-([SPEC-08](13-risks-open-questions.md)). The source's cadence was "every 1,000 ticks or when a
+**auto-commit epoch timer** (unowned proposal — a wall-clock fallback, or a pending-pool size
+threshold, neither decided, [OQ-24](13-risks-open-questions.md)) — needed because some players won't
+sleep, and because multiplayer has no single sleeper
+([SPEC-08](13-risks-open-questions.md)). Do not confuse that policy question with the
+**capacity micro-commit**, which is not a policy: exceeding an epoch's 65,536 region slots forces a
+commit because the 16-bit field cannot name another region ([ADR-029](decisions.md), checked in
+`RegionSlotTable::assign`). The source's cadence was "every 1,000 ticks or when a
 player sleeps" (GS 1898); neither 1,000 ticks nor any wall-clock equivalent is adopted here,
 because Δt has no declared unit yet ([OQ-42](13-risks-open-questions.md)) — fixing this timer
 *without* fixing OQ-42 would bake in an ambiguity. Compaction is a policy callback, never a call site
@@ -498,12 +502,20 @@ Corollaries:
 
 ## Digest
 
-**Proposed: BLAKE3-256, 32-byte digests** (ADR-028). Domain-separated prefixes for leaf /
+**Locked 2026-10-11 — [ADR-028](decisions.md) signed off: BLAKE3-256, 32-byte digests.**
+Domain-separated prefixes for leaf /
 branch / event-tag / entity-state nodes so a delta can't collide with a macro event, and
 published test vectors so Rust, WASM and any future language binding agree bit-for-bit. The
 source conversation wrote the root as `Hash(...)` without choosing an algorithm — the choice is
 ours, and the Merkle pass plus every network comparison inherit it, so it is logged here
 explicitly rather than silently picked in code.
+
+**What the sign-off does *not* settle:** the tree **shape**. Arity, the order children are hashed
+in, and the rule for an absent/empty node are written nowhere in this repo, and an epoch root is
+not canonical until they are. Pinning them here is `crates/ledger`'s first job, and whatever it
+picks becomes a contract with published vectors, because a peer that orders children differently
+computes a different root while believing it is consistent — the same failure doc 02 guards against
+when it forbids voxel-level Morton codes, one level up the tree.
 
 **Rejected for this role:** SHA-256 (correct class, ~20x slower for no benefit), xxHash/SeaHash
 (fast but **not** collision-resistant — a world root must be), raw CRC (not a hash),
