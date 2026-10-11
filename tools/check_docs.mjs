@@ -199,7 +199,9 @@ for (const [f, t] of text) {
 const FORBIDDEN = [
   [/\b[A-Za-z]:\\Users\\/g, "a Windows user-home path"],
   [/\/c\/Users\//g, "a Git-Bash user-home path"],
-  [/\/Users\/(?!runner\/)[A-Za-z0-9._-]+\//g, "a macOS user-home path"],
+  // `(?<!\/c)` keeps the Git-Bash form above from being reported twice, once as macOS. One leaked
+  // line must produce one finding, or the report lies about how many problems there are.
+  [/(?<!\/c)\/Users\/(?!runner\/)[A-Za-z0-9._-]+\//g, "a macOS user-home path"],
   [/\/home\/(?!runner\/)[A-Za-z0-9._-]+\/(?!\/)/g, "a Linux user-home path"],
   [/<<(<<+)|>>(>>+)/g, "a merge-conflict marker"],
   [/\b(TODO|TBD|FIXME|lorem ipsum)\b/g, "an unfinished marker"],
