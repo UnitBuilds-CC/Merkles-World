@@ -29,6 +29,9 @@ pub mod commit;
 /// Gate P1.6's bisection walk: locate the divergent voxel behind a differing root.
 pub mod repair;
 
+/// The read side: what a voxel commits to at the end of an epoch.
+pub mod read;
+
 use contracts::coords::RegionKey;
 use contracts::delta::{DeltaRecord, EpochHeader, PAYLOAD_BITS};
 use contracts::errors::ROOT_BYTES;
