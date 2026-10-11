@@ -510,16 +510,340 @@ source conversation wrote the root as `Hash(...)` without choosing an algorithm 
 ours, and the Merkle pass plus every network comparison inherit it, so it is logged here
 explicitly rather than silently picked in code.
 
-**What the sign-off does *not* settle:** the tree **shape**. Arity, the order children are hashed
-in, and the rule for an absent/empty node are written nowhere in this repo, and an epoch root is
-not canonical until they are. Pinning them here is `crates/ledger`'s first job, and whatever it
-picks becomes a contract with published vectors, because a peer that orders children differently
-computes a different root while believing it is consistent — the same failure doc 02 guards against
-when it forbids voxel-level Morton codes, one level up the tree.
+**What the sign-off did *not* settle, and what was settled after it:** the tree **shape** — arity,
+the order children are hashed in, the rule for an absent/empty node, the byte order of every integer
+in a preimage. Those were written nowhere, and an epoch root is not canonical until they are: a peer
+that orders children differently computes a different root while believing it is consistent — the
+same failure doc 02 guards against when it forbids voxel-level Morton codes, one level up the tree.
+`crates/ledger`'s first job was to pin them, and it now has: **artifact A-10**
+(`contracts/tree.rs`, [ADR-030](decisions.md)) is that contract, and § The tree shape below is its
+mirrored prose plus its published vectors.
 
 **Rejected for this role:** SHA-256 (correct class, ~20x slower for no benefit), xxHash/SeaHash
 (fast but **not** collision-resistant — a world root must be), raw CRC (not a hash),
 Merkle–Damgård constructions in general (length-extension liability).
+
+## The tree shape
+
+**Drafted 2026-10-11 as artifact A-10 (`contracts/tree.rs`) — recorded in [ADR-030](decisions.md).**
+§ Digest chose the hash; this chooses the structure fed to it. Six rules, and all six are load-bearing:
+get one wrong and two honest machines produce different roots from the same world, in the same code,
+with nothing raising an error.
+
+### The rules, in one table
+
+| Rule | Choice | Why this rather than the obvious alternative |
+|------|--------|----------------------------------------------|
+| Leaf payload width | 2 bytes for the record's 12 bits, masked | The leaf hashes the payload **opaquely**, so the shape does not wait on [OQ-45](13-risks-open-questions.md) deciding what those bits mean |
+| Octree arity / depth | 8 children, 12 levels, one bit of each axis per level | Derived from the region: `4096³ = 2³⁶ = 12 levels × 3 bits`. Not a tunable — it moves only with ADR-029's re-open trigger |
+| Child order | `x_bit \| y_bit<<1 \| z_bit<<2` — **x is the low bit**, at every level | Any fixed order works; a *different* fixed order does not. Pinning it as literals is the point |
+| Level convention | `level` = branch **height above the voxel leaves** (leaf 0, region root 12) | The standard Merkle count. Mirrored indexing (`level 1` = top) reads more naturally in a loop and corrupts every published vector if the two are mixed |
+| Empty subtree | `empty(0) = H(kind 2, level 0, ∅)`; `empty(l) = H(kind 1, level l, [empty(l−1); 8])` | One derived rule instead of a per-level special case, so an implementation cannot disagree about "how empty is level 7" |
+| Integer encoding | fixed width, **little-endian**, always | Endianness is the classic silent fork. Pinned once as `i64_bytes`/`u64_bytes`/`u32_bytes`/`u16_bytes` instead of left to each binding |
+
+### Region roots: the octree
+
+A region's root commits to its edited voxels and nothing else. Everything unedited is the empty
+ladder, which is a **constant of the grammar** — 13 digests computed once at startup, not per region.
+
+```text
+leaf(x, y, z)     = H(kind = NODE_VOXEL_LEAF,  level = 0, LE_u16(payload_12_bits))
+node(l, children) = H(kind = NODE_OCTANT_BRANCH, level = l, d(children[0]) ‖ … ‖ d(children[7]))
+region_root       = node(12, …)      # children selected by octant_at(offset, l) at level l
+```
+
+Position comes from the **path**, never from the payload: a leaf says only what the voxel holds.
+That is what keeps the octree free of a flat voxel index — `octant_at` reads one bit of each
+`LocalOffset` axis per call, and no 36-bit interleaved coordinate is ever formed
+([docs/02 § Octree keys and Morton codes](02-coordinate-system.md)).
+
+Multiple records for one voxel resolve **before** the tree is built: the epoch's record list is
+walked in append order and the last writer wins, so the octree holds at most one leaf per position.
+The consequence for determinism is precise and worth stating twice —
+
+- the root is **position-keyed**: reordering records that touch *different* voxels does not change it;
+- the root is **not** arrival-order-independent: reordering two records that touch the *same* voxel
+  changes which payload survives. The caller must feed the ledger the causal order (§ The commit
+  pipeline, step 2), because tie-breaking by anything else — peer identity, wall clock — is
+  [OQ-46](13-risks-open-questions.md)'s question, not this contract's.
+
+Cost, as arithmetic and **not** as a measurement: an epoch with *N* edits in one region recomputes
+at most `N × 12` branches, so `N = 10⁵` is ≈1.3×10⁶ BLAKE3 calls. Gate **P1.3** ("Merkle pass over a
+full dirty slab array `< 1 ms`") is the spike that decides whether that is affordable; nothing here
+claims it is.
+
+### Epoch roots: the lists
+
+Three ordered collections feed the epoch root, each hashed as a **binary** tree — binary so that a
+disagreement bisects into a single differing leaf (gate **P1.6**) instead of rescanning an 8-way fan:
+
+```text
+list(∅)        = H(kind = NODE_EMPTY_LIST, level = 0, ∅)
+list([e])      = e
+list(items)    = H(kind = NODE_LIST_BRANCH, level = 0, d(left) ‖ d(right))
+                 # halve at the midpoint; an odd trailing item is paired with itself
+```
+
+The odd-count rule is a decision, not a detail: pairing an odd item with *itself* makes a one-item
+list and a two-item list of the same element produce different digests (the single item is not
+wrapped), while the alternative — carrying it up unchanged — would let a truncated list and a longer
+one agree at the top. Rejected: carry-forward.
+
+| Collection | Leaf | Order |
+|-----------|------|-------|
+| Region-slot table | `H(NODE_SLOT_LEAF, 0, LE_u16(slot) ‖ LE_i64(x) ‖ LE_i64(y) ‖ LE_i64(z))` | ascending slot index |
+| Region contributions | `H(NODE_REGION_LEAF, 0, LE_u16(slot) ‖ region_root₃₂)` | ascending slot index |
+| Event tags | `H(NODE_EVENT_TAG, 0, LE_u16(tag_id) ‖ opaque bytes)` | emission order (§ commit pipeline, step 5) |
+
+The slot-table root is the one piece that looks redundant and is not. ADR-029 assigns slots on
+*first touch* within an epoch, so the mapping from a 16-bit slot to a `RegionKey` is derived from
+arrival order. If the epoch root committed only to `(slot, region_root)` pairs, two peers that had
+assigned slot 7 to different regions could still agree on the root while disagreeing about the
+world — ADR-029's hazard, closed by putting the mapping itself under a root.
+
+Then, in this byte order and no other:
+
+```text
+epoch_root = H(kind = NODE_EPOCH_ROOT, level = 0,
+    genesis_root ‖ slot_table_root ‖ region_list_root ‖ event_list_root ‖ LE fields of EpochHeader)
+```
+
+### What the base terrain commits to, and why it is not a hash
+
+A region holds 2³⁶ voxels. Hashing the un-edited base field voxel by voxel is not an optimisation
+problem, it is a category error — so the base state is committed **intensionally**:
+
+```text
+genesis_root = H(kind = NODE_GENESIS, level = 0, LE_u64(seed) ‖ LE_u32(base_rule_id) ‖ LE_u32(rule_version))
+```
+
+The root then commits to *the rule that generates the terrain*, not to its output, which is exactly
+the move A-03's `EpochHeader::base_genesis_root` field was already making. Two consequences to keep
+in view:
+
+- `base_rule_id = 0` currently means "the base rule is not specified yet" —
+  [OQ-27](13-risks-open-questions.md) is still open. That is honest, not a placeholder to be
+  forgotten: the day the macro rule set is fixed, this field's value changes, and every world root
+  changes with it. A shape break that visible cannot happen silently.
+- Two peers with different `rule_version` cannot agree on a root, which is the property the
+  broadcast-incompatibility check in [docs/10](10-multiplayer.md) wants.
+
+### What this shape deliberately does not do
+
+**No `prev_root`.** An epoch root commits to that epoch's contents and to no predecessor — because
+A-03's `EpochHeader` has no predecessor field, and inventing one here would be a contract change to
+A-03 rather than a decision about the tree. Chaining roots (a lineage a peer can walk backwards
+without a store) is a **storage** concern: [OQ-07](13-risks-open-questions.md) and
+[OQ-23](13-risks-open-questions.md) own it, and if chaining is adopted it becomes A-10 v2 with an
+ADR and a migration note, not an extra 32 bytes in one implementation.
+
+**No voxel-level Morton code**, per the paragraph above; sorting uses
+`(x, y, z, append_index)` lexicographically, which is the same order the octree walks without ever
+naming a voxel by a single integer.
+
+**No behaviour.** `contracts/` is the shared grammar; `crates/ledger` is the hasher. A WASM binding
+builds its preimages with `preimage()` below and hashes them with its own BLAKE3, and that is the
+entire agreement it has to keep.
+
+### The contract
+
+Mirrored verbatim from `contracts/tree.rs`; the `tree_contract_matches_spec_document` test in
+`contracts/tests/tree_shape.rs` fails the build if the two diverge.
+
+```rust
+// contracts/tree.rs — artifact A-10, DRAFT 2026-10-11: the Merkle tree **shape**.
+//
+// ADR-028 (docs/decisions.md, locked 2026-10-11) chose the digest — BLAKE3-256, 32 bytes — and said
+// plainly that it did *not* choose the shape. Arity, child order, the rule for an absent subtree and
+// the byte order of every integer in a preimage appear nowhere else in this repo, and an epoch root
+// is not canonical until they do: a peer that orders children differently computes a different root
+// while believing it is consistent. ADR-030 records the choices made here.
+//
+// What this file is and is not. It is the shared, hashable *grammar* — the thing the ledger, the
+// network (docs/10) and a future WASM binding must agree on word for word. It is not the hasher:
+// `crates/ledger` owns the implementation, because hashing is behaviour and contracts hold none.
+//
+// Rules this contract keeps (AGENTS.md §3/§4):
+// - **Integer math only.** Every preimage is built from shifts, masks and fixed-width little-endian
+//   bytes. There is no float here and no way to feed one in: the encoders below take `u64`/`u32`/`u16`
+//   and nothing else. This is the exposure [OQ-44](docs/13-risks-open-questions.md) asks about —
+//   the type signature is the current guard, and it is a weak one that a lint should replace.
+// - **No voxel-level Morton code.** docs/02 forbids one, so the octree path is derived *per level*
+//   from `LocalOffset`'s own axis bits (`octant_at`), never by interleaving 36 bits into a flat
+//   voxel index. Sorting uses `(x, y, z, append)` lexicographically for the same reason.
+// - **Core-only, zero dependencies.** Same guard as coords.rs and delta.rs: verified on
+//   wasm32-unknown-unknown in CI.
+//
+// Not settled here, and deliberately absent: what the 12-bit payload *means* (OQ-45 — the leaf
+// hashes it opaquely, so the shape does not wait on that question), the event-tag registry (A-05,
+// OQ-08 — kind 4 is a slot in the grammar, not a schema), the on-disk and wire encodings (OQ-23,
+// OQ-30), and whether epoch roots are ever *chained* (see `NODE_EPOCH_ROOT`: this root commits to
+// one epoch's contents and to no predecessor).
+//
+// This file is mirrored by docs/03-state-ledger.md § The tree shape — the
+// `tree_contract_matches_spec_document` test in contracts/tests fails if the two ever diverge.
+
+use crate::delta::{INTRA_REGION_BITS, LOCAL_AXIS_BITS, PAYLOAD_BITS, REGION_SLOT_BITS};
+use crate::errors::ROOT_BYTES;
+
+/// Prefix of every preimage, so a digest from this grammar can never be re-read as a digest of
+/// raw data by anything else that happens to use BLAKE3. Changing it is a shape break: every world
+/// root changes, so it moves only with an ADR and a migration note.
+pub const DOMAIN: &[u8; 8] = b"mlworld1";
+
+// ---------------------------------------------------------------------------
+// Node kinds — the second byte of every preimage. One per node type, no reuse.
+// ---------------------------------------------------------------------------
+
+/// An edited voxel: `level = 0`, payload = the record's 12 bits in `LEAF_PAYLOAD_BYTES`. Position
+/// comes from the path, not from the payload, so a leaf says nothing about where it is.
+pub const NODE_VOXEL_LEAF: u8 = 0;
+/// An octree internal node at `level` 1..=12: eight child digests in octant order.
+pub const NODE_OCTANT_BRANCH: u8 = 1;
+/// The octree's absent leaf at `level = 0`. Absent subtrees above it are **not** special-cased:
+/// `empty(l) = branch(l, [empty(l-1); 8])`, one rule, derived identically by every implementation.
+pub const NODE_EMPTY_OCTREE: u8 = 2;
+/// An empty ordered list. Separate from kind 2 on purpose: an epoch with no edits and a region with
+/// no edits must not share a digest while meaning two different things.
+pub const NODE_EMPTY_LIST: u8 = 3;
+/// An event tag (docs/05's macro-causal fact): `tag_id` then opaque bytes. The registry is A-05's.
+pub const NODE_EVENT_TAG: u8 = 4;
+/// An entity's state digest (docs/06). Reserved so a stateful entity cannot be mistaken for a
+/// field write; its content waits on OQ-08.
+pub const NODE_ENTITY_STATE: u8 = 5;
+/// A region's contribution to an epoch: its 16-bit slot, then its 32-byte region root.
+pub const NODE_REGION_LEAF: u8 = 6;
+/// One row of the epoch's region-slot table: its 16-bit slot, then the three `i64` region
+/// coordinates. Without it, two peers that assigned slots differently could agree on a root.
+pub const NODE_SLOT_LEAF: u8 = 7;
+/// A binary node over an ordered list: left digest then right digest.
+pub const NODE_LIST_BRANCH: u8 = 8;
+/// The epoch root itself: the whole commitment one peer sends another (docs/10 § Verification).
+pub const NODE_EPOCH_ROOT: u8 = 9;
+/// Base terrain, committed **intensionally**: seed, then base rule id, then rule version. A region
+/// holds 2³⁶ voxels, so the base field is named by the rule that generates it rather than hashed
+/// voxel by voxel — see docs/03 § The tree shape.
+pub const NODE_GENESIS: u8 = 10;
+
+// ---------------------------------------------------------------------------
+// Shape constants
+// ---------------------------------------------------------------------------
+
+/// Children of an octree node. Three address bits per level, x lowest.
+pub const OCTREE_ARITY: usize = 1 << 3;
+/// Octree depth over one region. Equal to `LOCAL_AXIS_BITS` because one level consumes one bit of
+/// each axis, and the 36-bit intra-region address is exactly 12 levels × 3 bits.
+pub const OCTREE_DEPTH: u32 = LOCAL_AXIS_BITS;
+/// Children of a list branch. Two, so a disagreement bisects (gate P1.6) instead of rescanning.
+pub const LIST_ARITY: usize = 2;
+/// Bytes of preimage for one leaf of the octree: the record's 12 payload bits, masked, held in a
+/// `u16`. Opaque — OQ-45 decides what they mean, not how many bits they occupy.
+pub const LEAF_PAYLOAD_BYTES: usize = 2;
+/// The `level` byte an octree leaf carries, and the value every kind without a level must pass.
+pub const LEVEL_LEAF: u8 = 0;
+
+/// Octree depth derived from the region edge length instead of restated: 4096 = 2¹² levels.
+const _: () = assert!(OCTREE_DEPTH * 3 == INTRA_REGION_BITS);
+/// Eight children because three axes, one bit each.
+const _: () = assert!(OCTREE_ARITY == 1 << 3 && LIST_ARITY == 2);
+/// A 12-bit payload still fits the leaf's two bytes.
+const _: () = assert!(LEAF_PAYLOAD_BYTES * 8 >= PAYLOAD_BITS as usize);
+/// A slot still fits its leaf's two bytes.
+const _: () = assert!(REGION_SLOT_BITS <= 16);
+/// ADR-028's digest width, restated as a constraint on this grammar rather than a comment.
+const _: () = assert!(ROOT_BYTES == 32);
+
+// ---------------------------------------------------------------------------
+// Canonical integer encoding: fixed width, little-endian, everywhere.
+// ---------------------------------------------------------------------------
+
+/// A `u64` in a preimage is 8 bytes, least significant first. Pinned once so no implementation
+/// can "read better as big-endian" and quietly split the network in two.
+#[inline]
+pub const fn i64_bytes(v: i64) -> [u8; 8] {
+    v.to_le_bytes()
+}
+
+/// See `i64_bytes`.
+#[inline]
+pub const fn u64_bytes(v: u64) -> [u8; 8] {
+    v.to_le_bytes()
+}
+
+/// See `i64_bytes`.
+#[inline]
+pub const fn u32_bytes(v: u32) -> [u8; 4] {
+    v.to_le_bytes()
+}
+
+/// See `i64_bytes`. A record's payload and an epoch's slot both go through this.
+#[inline]
+pub const fn u16_bytes(v: u16) -> [u8; 2] {
+    v.to_le_bytes()
+}
+
+// ---------------------------------------------------------------------------
+// Child order
+// ---------------------------------------------------------------------------
+
+/// Which octant of a level-`L` node the voxel at `(x, y, z)` falls in, `L` in `1..=OCTREE_DEPTH`.
+///
+/// `level` is a branch's **height above the voxel leaves**, the same count every Merkle
+/// implementation uses: level 1 is the branch whose eight children are voxels, and level
+/// `OCTREE_DEPTH` is the region root. A branch at level `L` consumes bit `L - 1` of each axis.
+/// The octant index is `x_bit | y_bit << 1 | z_bit << 2`, i.e. **x is the low bit**, so children
+/// are hashed in the order `(0,0,0) (1,0,0) (0,1,0) (1,1,0) (0,0,1) (1,0,1) (0,1,1) (1,1,1)` with
+/// each coordinate's bit for that level.
+///
+/// This derives a path from `LocalOffset`'s own bits at every call. It is not a Morton code: no
+/// 36-bit flat voxel index is ever formed, which is the thing docs/02 § Octree keys and Morton codes
+/// forbids.
+#[inline]
+pub const fn octant_at(x: u16, y: u16, z: u16, level: u32) -> usize {
+    // Levels outside 1..=12 have no octant; callers get 0 rather than a shift that would wrap.
+    if level == 0 || level > OCTREE_DEPTH {
+        return 0;
+    }
+    let shift = level - 1;
+    let xb = ((x >> shift) & 1) as usize;
+    let yb = ((y >> shift) & 1) as usize;
+    let zb = ((z >> shift) & 1) as usize;
+    xb | (yb << 1) | (zb << 2)
+}
+
+/// The preimage of one node, before hashing: `DOMAIN`, the kind byte, the level byte, the payload.
+/// Exposed so a WASM or Rust binding builds the *same* bytes rather than trusting this crate's
+/// hasher. Returns the length it wrote; `buffer` must be `DOMAIN.len() + 2 + payload.len()`.
+///
+/// A short buffer is a programmer error, not a runtime state, so this reports `None` instead of
+/// panicking — a hash that silently truncated would be worse than no hash.
+#[inline]
+pub fn preimage<'buffer>(
+    kind: u8,
+    level: u8,
+    payload: &[u8],
+    buffer: &'buffer mut [u8],
+) -> Option<&'buffer [u8]> {
+    let need = DOMAIN.len() + 2 + payload.len();
+    if buffer.len() < need {
+        return None;
+    }
+    let mut i = 0;
+    while i < DOMAIN.len() {
+        buffer[i] = DOMAIN[i];
+        i += 1;
+    }
+    buffer[i] = kind;
+    buffer[i + 1] = level;
+    i += 2;
+    let mut j = 0;
+    while j < payload.len() {
+        buffer[i + j] = payload[j];
+        j += 1;
+    }
+    Some(&buffer[..need])
+}
+```
 
 ## Rejected alternatives
 

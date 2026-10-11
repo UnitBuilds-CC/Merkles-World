@@ -23,13 +23,16 @@ lives in the doc named here.
 | **Delta record** | The one `u64` a slab appends: `\|16 region slot\|36 intra-region (3×12 bits)\|12 payload\|` — [ADR-029](decisions.md)'s layout, drafted as `contracts/delta.rs` (**A-03**). It is the whole memory of an edit, and the only thing a replay needs to find the voxel it changed. | [03](03-state-ledger.md) |
 | **Determinism boundary** | The rule that simulation state is computed in Rust/WASM and never by a shader. ADR-017. | [03](03-state-ledger.md) |
 | **Domain deformation** | Animation by warping the space an SDF is evaluated in, instead of moving vertices. | [07](07-physics-audio-animation.md) |
+| **Empty ladder** | The 13 digests one untouched octree subtree hashes to, derived by one rule: `empty(0)` is kind 2 at level 0, and `empty(l)` is an 8-child branch over `empty(l−1)`. A constant of the grammar, computed once, so "empty" cannot mean different things at different levels. | [03](03-state-ledger.md) |
 | **Epoch** | One committed world state, identified by a root hash. The ledger is a sequence of epochs. | [03](03-state-ledger.md) |
+| **Epoch root** | The 32-byte BLAKE3 digest of one epoch's whole commitment: `genesis ‖ slot table ‖ regions ‖ events`, in that order, over the A-10 shape. What a peer sends a peer, and the only thing a desync check can compare. | [03](03-state-ledger.md) |
 | **Event tag** | A named, versioned macro-causal fact in the ledger (e.g. `FlowBlocker{region, magnitude}`). The canonical form of macro causality. | [05](05-simulation-causality.md) |
 | **Field (macro)** | A per-region scalar/vector (water table, fertility, population density) evolved by a rule with a declared jump method. | [05](05-simulation-causality.md) |
 | **FlexBuffers** | FlatBuffers' schema-free variant, for genuinely dynamic payloads. | [09](09-asset-pipeline.md) |
 | **Fuel metering** | WASM instruction budget per call; without it a mod's infinite loop freezes the client. | [08](08-wasm-modding.md) |
 | **HDCS** | 64-bit Hierarchical Double-Origin Coordinate System — integer global space, float camera-relative space. ADR-016. | [02](02-coordinate-system.md) |
 | **Hot reload** | Edit a text asset or shader, see it in the running game without a restart. | [09](09-asset-pipeline.md) |
+| **Intensional commitment** | Hashing *the rule that generates* a thing instead of its output. How A-10 handles base terrain: `seed ‖ base_rule_id ‖ rule_version` goes into the root, not the region's 2³⁶ unedited voxels. The cost is that a rule change invalidates every root — which is exactly the visibility the design wants. | [03](03-state-ledger.md) |
 | **Jump method** | How a macro rule advances by Δt: `closed_form`, `matrix_exp`, `integral`, or `iterative {cap}`. Every rule must declare one. | [05](05-simulation-causality.md) |
 | **Lazy evaluation** | Nothing is computed until something needs it. The engine's answer to unloaded chunks. | [01](01-architecture.md) |
 | **Ledger** | The append-only record of epochs, transactions and event tags. Holds roots and deltas — never block arrays. | [03](03-state-ledger.md) |
@@ -38,6 +41,7 @@ lives in the doc named here.
 | **Mempool** | Transactions committed but not yet compacted into an epoch. | [03](03-state-ledger.md) |
 | **Morton code** | Z-order curve key for region traversal and octree indexing. Computed on `RegionKey`, never on raw voxel coordinates. | [02](02-coordinate-system.md) |
 | **Node grammar** | The declarative shape/material vocabulary (`RoundedBox`, `SmoothUnion`, `Repeat`, `Voronoi`…) interpreted by the master shader. ADR-012. | [04](04-rendering.md) |
+| **Octant order** | The sequence eight octree children are hashed in: `x_bit \| y_bit<<1 \| z_bit<<2`, x lowest, at each of the 12 levels. Derived per level from `LocalOffset`'s axis bits — never from a Morton code, which docs/02 forbids at voxel scale. | [03](03-state-ledger.md) |
 | **Octree root** | A region's Merkle root derived from its children. Local, so edits don't re-hash the world. | [03](03-state-ledger.md) |
 | **Prompt-to-mod** | In-game LLM authoring that emits RON + WGSL + WASM, then runs the same validation path as a hand-written mod. | [08](08-wasm-modding.md) |
 | **Region** | 4096³ voxels, addressed by `RegionKey` (3×`i64`). The unit of the Merkle tree and of slab keying. | [02](02-coordinate-system.md) |
@@ -48,6 +52,7 @@ lives in the doc named here.
 | **SDF** | Signed distance function: negative inside, zero at surface, positive outside. The only geometry primitive. | [04](04-rendering.md) |
 | **Slab** | Per-region append-only record buffer (since [ADR-029](decisions.md)), pre-allocated and contiguous. Writes are `O(1)` appends; resets are bump-pointer → 0. Its geometry and capacity are unsettled (**SPEC-06**, measured by spike S2), its addressing is not. | [03](03-state-ledger.md) |
 | **Sphere tracing** | Raymarching where each step equals the SDF value — a guaranteed-empty distance. | [04](04-rendering.md) |
+| **Tree shape** | The arity, child order, empty-node rules and integer byte order that turn a digest into a root. ADR-028 chose the hash and deliberately did *not* choose this; [ADR-030](decisions.md) and **A-10** (`contracts/tree.rs`) do. Two peers agreeing on BLAKE3 but disagreeing on the shape compute different roots and neither errors. | [03](03-state-ledger.md) |
 | **Watch-list** | A region's registered interest in another region's field, for continuous drain/refill relationships. | [10](10-multiplayer.md) |
 | **WIT** | WASM Interface Types — the typed contract between the host engine and mods. | [08](08-wasm-modding.md) |
 

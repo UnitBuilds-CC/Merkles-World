@@ -22,3 +22,8 @@ pub mod delta;
 /// A-08 — the `ActionTx` envelope (docs/10, ADR-021).
 #[path = "../tx.rs"]
 pub mod tx;
+
+/// A-10 — the Merkle tree shape: node kinds, arity, child order, empty rules, canonical byte order
+/// (docs/03 § The tree shape, ADR-030). The grammar is shared; the hasher is `crates/ledger`.
+#[path = "../tree.rs"]
+pub mod tree;

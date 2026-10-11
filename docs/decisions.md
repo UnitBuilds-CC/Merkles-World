@@ -37,6 +37,7 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 | [027](#adr-027--epoch-scoped-transaction-pool-for-multiplayer) | Epoch-scoped transaction pool for multiplayer | proposed |
 | [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | **locked 2026-10-11** — signed off: locks [SPEC-04](13-risks-open-questions.md)'s hashing half and makes BLAKE3 the first external dependency the workspace takes |
 | [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **locked 2026-10-11** — signed off; resolves SPEC-09 |
+| [030](#adr-030--merkle-tree-shape-arity-child-order-and-the-empty-rules) | Merkle tree shape: arity, child order, empty rules, byte order | proposed — ADR-028's delegated half; artifact A-10 (`contracts/tree.rs`) is written against it and needs sign-off |
 
 ---
 
@@ -823,3 +824,90 @@ ADR-015 is kept, not amended — the record is still one `u64`.
 **Re-open if** the region edge stops being 4096 voxels (ADR-016): 3×12 = 36 only holds for a
 4096³ region, so any change to `REGION_SHIFT` invalidates this field arithmetic. Also re-open if an
 epoch legitimately needs more than 65,536 regions and partitioning proves worse than widening.
+
+---
+
+## ADR-030 — Merkle tree shape: arity, child order, empty rules, byte order
+
+**Status: proposed 2026-10-11.** ADR-028 locked the digest and said in terms that it did *not* lock
+the structure the digest is taken over; [docs/03 § The tree shape](03-state-ledger.md) and **artifact
+A-10** (`contracts/tree.rs`) are that missing half. `crates/ledger` is being written against these
+rules rather than waiting, because every other Phase 1 gate (P1.3, P1.5, P1.6) is downstream of an
+addressable root — but sign-off is still owed, and **changing a rule after the vectors are published
+is a shape break**: every epoch root in every world changes, and the published vectors move with it.
+
+**Context.** Two implementations can agree on BLAKE3, on A-03's record layout and on the seed, and
+still compute different epoch roots, because a root is a *traversal* of a structure, not a value.
+Nothing in this repo said what the structure was: arity, the order children are hashed in, the rule
+for an absent subtree, and the endianness of an integer inside a preimage were all unwritten. A peer
+that gets any of them wrong does not fail — it produces a valid 32-byte digest and believes it is
+consistent, which is ADR-023's desync check reporting a difference it cannot localise. docs/02
+already guards against the same class of error one level down, by forbidding voxel-level Morton
+codes; this is that guard, moved up to the tree.
+
+**Decision.** The shape A-10 pins, as one list:
+
+- **Octree, arity 8, depth 12, over one region.** Three address bits per level — one per axis — and
+  12 levels is `36 / 3`, so the depth is *derived* from ADR-029's intra-region field rather than
+  chosen. A `const assert` fails the build if `REGION_SHIFT` ever stops being 12.
+- **Child order: `x_bit | y_bit<<1 | z_bit<<2`** — x is the low bit — at every level. Any fixed order
+  would do; a *differently* fixed order would not, which is why the eight cases are pinned as test
+  literals in `contracts/tests/tree_shape.rs` instead of left to prose.
+- **`level` counts height above the voxel leaves** (leaf 0, region root 12), the standard Merkle
+  count. A branch at level `L` consumes bit `L − 1` of each axis.
+- **One derived empty rule.** `empty(0) = H(kind 2, level 0, ∅)` and
+  `empty(L) = H(kind 1, level L, [empty(L−1); 8])` — 13 digests computed once at startup, not a
+  per-level special case an implementation can disagree about. An empty *region* and an empty *epoch*
+  get **separate kinds** (2 and 3), because "nothing here" means two different things at two
+  different levels and must not share a digest.
+- **Ordered collections are binary lists** (arity 2), with an odd trailing item paired with itself.
+  Binary so ADR-023's repair bisects into one differing leaf rather than rescanning a fan.
+- **Fixed-width little-endian integers in every preimage**, via one set of encoders
+  (`i64_bytes`/`u64_bytes`/`u32_bytes`/`u16_bytes`), so no binding can "read better as big-endian".
+- **Preimage layout `DOMAIN ‖ kind ‖ level ‖ payload`**, with `DOMAIN = b"mlworld1"`, so a world
+  digest can never be re-read as a digest of unrelated bytes.
+- **Base terrain is committed intensionally**: `H(kind 10, 0, seed ‖ base_rule_id ‖ rule_version)`
+  instead of hashing a region's 2³⁶ base voxels. This is what A-03's
+  `EpochHeader::base_genesis_root` field already assumed.
+- **The epoch's region-slot table gets its own root** over `(slot, 3×i64 RegionKey)` leaves in
+  ascending slot order, and that root is inside the epoch root.
+
+**Constraints.** The 12-bit record payload is hashed **opaquely** into a leaf, so the shape does not
+wait on [OQ-45](13-risks-open-questions.md) deciding what those bits mean — only on how many of them
+there are, which ADR-029 fixed. Position comes from the path and never from the leaf payload, so no
+flat voxel index exists anywhere in the digest path (docs/02). The base rule set is not specified
+yet ([OQ-27](13-risks-open-questions.md)), so `base_rule_id = 0` means exactly that; when it is
+fixed, that field's value changes and every root changes with it — a break that cannot happen
+silently, which is the point.
+
+**Rejected.**
+- **Chained epoch roots (`prev_root` inside the root)**: `EpochHeader` has no predecessor field, so
+  adding one is a contract change to A-03 dressed up as a tree decision. Root lineage is a storage
+  question ([OQ-07](13-risks-open-questions.md), [OQ-23](13-risks-open-questions.md)); if it is
+  adopted it becomes A-10 v2 with its own ADR and migration note.
+- **Hashing the base field voxel by voxel** (explicitly or via a lazily-built full tree): 2³⁶ leaves
+  per region, which is the storage/RAM model the whole design exists to escape.
+- **One flat Morton/Z-order index as the octree key**: docs/02 forbids it, and it would make a
+  disagreeing peer's *address* wrong rather than merely its digest wrong — strictly harder to
+  bisect.
+- **Carry-forward for an odd list item** (promote it unchanged instead of pairing it with itself):
+  it lets a truncated list and a longer one agree at the root.
+- **A four-way (16-level) tree or a 64-way (4-level) tree**: both can express the same 36 bits, and
+  neither is wrong, but each is a different shape from ADR-029's field arithmetic, so the depth
+  would stop being derived and start being a tunable — the kind of freedom that produces forks.
+- **A per-level `EMPTY_i` constant table**: needs 13 hand-published values to stay in sync, against
+  one rule that derives them.
+
+**Consequences.** **A-10** joins the artifact queue
+([docs/11](11-roadmap.md)) and the glossary ([docs/14](14-glossary.md)) as the contract every
+hasher, WASM binding and peer must agree on; `crates/ledger` becomes the first crate with behaviour,
+and its tests become the published vectors ADR-028 promised. Gate **P1.5**'s cross-target root
+comparison is only meaningful from here on — before A-10 there was no single "same root" to compare.
+Gate **P1.3** inherits a
+concrete cost model (an epoch's `N` edits recompute at most `12N` branch hashes), which stays a
+hypothesis until a spike measures it.
+
+**Re-open if** the record's intra-region field changes width (ADR-029's trigger), if a list is ever
+required to prove two different-lengthed collections equal, or if root chaining is adopted as a
+storage requirement — in which case the epoch root's payload gains a predecessor and every published
+vector is regenerated.

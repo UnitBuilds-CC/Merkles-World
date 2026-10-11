@@ -27,6 +27,7 @@ SPEC/OQ resolution  →  spikes S1–S10  →  contracts/ frozen  →  P0 harnes
 | A-07 | SDF node grammar schema (`.fbs` + interpreter signature) | ADR-012 |
 | A-08 | `ActionTx` wire layout | **drafted 2026-10-11** as `contracts/tx.rs` (DRAFT) — doc 10's envelope, split as ADR-015 splits its wire-delta row: `Target` is the address, `TxPayload` the value, and a slab mutation's address+value *is* an A-03 record. Freeze waits on **OQ-46** (what the ids are, how wide, and which scheme signs) and on **OQ-30**/**OQ-23** for the serialized byte format |
 | A-09 | error taxonomy + determinism violation codes | doc 12 agent loop |
+| A-10 | Merkle tree shape — node kinds, arity, child order, empty rules, canonical byte order, epoch-root composition | **drafted 2026-10-11** as `contracts/tree.rs` (DRAFT) on [ADR-030](decisions.md), the half [ADR-028](decisions.md) explicitly left open. Mirrored into [docs/03 § The tree shape](03-state-ledger.md) and pinned by `tree_contract_matches_spec_document`; gates P1.3/P1.5/P1.6 are only meaningful once it exists. Freeze waits on **ADR-030 sign-off** — a changed rule is a shape break, so every published root vector moves with it |
 
 Each is a small, reviewable file. Writing them is a **couple of days** of work and they are the
 only things that can be written while the open questions are still open — because the act of

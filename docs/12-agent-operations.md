@@ -18,9 +18,12 @@ before emitting code (GS 889).
 
 ## Roles
 
-**Two id families, never interchangeable:** **A1–A10** are the agents below. **A-01…A-09** are the
+**Two id families, never interchangeable:** **A1–A10** are the agents below. **A-01…A-10** are the
 blocking *artifacts* in [docs/11](11-roadmap.md). `A1` writes `contracts/`; `A-01` is the file it
-writes. When a commit or a doc cites a bare `A-0n`, it means an artifact.
+writes. When a commit or a doc cites a bare `A-0n`, it means an artifact. From **A-10** the two
+families collide for the first time — agent `A10` and artifact `A-10` differ only by the hyphen — so
+the rule is absolute: **a hyphen means the artifact, no hyphen means the agent**, in prose, in commit
+messages and in test names. An agent id is never written with a hyphen.
 
 | Agent | Role | May write | May not |
 |-------|------|-----------|---------|
@@ -189,6 +192,12 @@ migration note + version bump + ADR, never an edit to make one agent's test pass
   one. Each is mirrored into its spec doc (docs/03 and docs/10) and a test compares the mirror to the
   file line by line, so an agent editing the contract without the doc — or the doc without the
   contract — fails `cargo test` rather than drifting silently.
+- **A-10 `contracts/tree.rs`** — **drafted 2026-10-11, DRAFT** against [ADR-030](decisions.md): the
+  Merkle tree *shape* (node kinds, octree arity and depth, child order, the two empty rules,
+  little-endian byte order, epoch-root composition). Mirrored into docs/03 § The tree shape and pinned
+  by `tree_contract_matches_spec_document`, same guard as the two above. A-10 is the grammar **A2
+  Ledger** hashes against; the hasher itself is behaviour, so it lives in `crates/ledger` and not here.
+  A2 may not redefine any of it — a shape change is an ADR-030 re-open plus regenerated root vectors.
 - The `contracts` crate is `#![no_std]`, which is a *structural* guard for
   [AGENTS.md](../AGENTS.md) §3/§4: no contract type can reach a clock, a filesystem, a process or
   `alloc`. CI proves the guard still bites by building the crate for `wasm32-unknown-unknown`.
