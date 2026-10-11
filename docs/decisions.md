@@ -831,9 +831,10 @@ epoch legitimately needs more than 65,536 regions and partitioning proves worse 
 
 **Status: proposed 2026-10-11.** ADR-028 locked the digest and said in terms that it did *not* lock
 the structure the digest is taken over; [docs/03 § The tree shape](03-state-ledger.md) and **artifact
-A-10** (`contracts/tree.rs`) are that missing half. `crates/ledger` is being written against these
-rules rather than waiting, because every other Phase 1 gate (P1.3, P1.5, P1.6) is downstream of an
-addressable root — but sign-off is still owed, and **changing a rule after the vectors are published
+A-10** (`contracts/tree.rs`) are that missing half. The shape is written down *before* the hasher
+exists, because every Phase 1 gate downstream (P1.3, P1.5, P1.6) is meaningless without an
+addressable root — but `crates/ledger`, the crate that will implement these rules, is **not in the
+tree**, and sign-off is still owed, so **changing a rule after the vectors are published
 is a shape break**: every epoch root in every world changes, and the published vectors move with it.
 
 **Context.** Two implementations can agree on BLAKE3, on A-03's record layout and on the seed, and
@@ -900,8 +901,9 @@ silently, which is the point.
 
 **Consequences.** **A-10** joins the artifact queue
 ([docs/11](11-roadmap.md)) and the glossary ([docs/14](14-glossary.md)) as the contract every
-hasher, WASM binding and peer must agree on; `crates/ledger` becomes the first crate with behaviour,
-and its tests become the published vectors ADR-028 promised. Gate **P1.5**'s cross-target root
+hasher, WASM binding and peer must agree on; `crates/ledger` — **not yet in the tree** — is the crate
+whose tests will become the published vectors ADR-028 promised, and until it exists this ADR pins
+rules and no digest. Gate **P1.5**'s cross-target root
 comparison is only meaningful from here on — before A-10 there was no single "same root" to compare.
 Gate **P1.3** inherits a
 concrete cost model (an epoch's `N` edits recompute at most `12N` branch hashes), which stays a

@@ -71,9 +71,10 @@ that two agents could implement against it without talking.
 
 ### Phase 0 status — 2026-10-11
 
-Measured locally on x86-64 Windows and three times on CI (`.github/workflows/ci.yml`) — run `38124937828`
-before the ADR-029 sign-off, run `38150859744` after A-01's freeze and the licence, and run
-`38159161144` at the current `main`, with A-03 and A-08 in the tree — each on x86-64 Linux, x86-64
+Measured locally on x86-64 Windows and four times on CI (`.github/workflows/ci.yml`) — run `38124937828`
+before the ADR-029 sign-off, run `38150859744` after A-01's freeze and the licence, run
+`38159161144` with A-03 and A-08 in the tree, and run `38179998839` at the current `main`, with A-10
+in it — each on x86-64 Linux, x86-64
 Windows and ARM64 macOS, all at
 `rustc 1.92.0 (ded5c06cf 2025-12-08)`.
 Each row is the command's real result, not a plan; per-gate evidence lives in doc 02 § Validation gates.
@@ -82,8 +83,8 @@ Each row is the command's real result, not a plan; per-gate evidence lives in do
 |-------|---------|--------|
 | Formatting | `cargo fmt --all -- --check` | clean (no diff) |
 | Lints | `cargo clippy --all-targets -- -D warnings` | `Finished` — zero warnings; workspace lints deny `clippy::all`, `unsafe_code = "forbid"`, and the hot-path lints `alloc_instead_of_core` / `std_instead_of_core` (their hyphenated spelling is deprecated cargo manifest syntax: it warns today and is documented to stop working in a future edition, which would silently drop the deny — verified the underscore form still fires by injecting a `std::mem::swap` probe and watching clippy exit non-zero) |
-| Tests | `cargo test -q` | `4 passed` (contracts: code uniqueness, band placement, stable vectors, determinism routing) + `10 passed` (`contracts/tests/delta_record.rs`: gate P1.1's round trip and record→voxel resolve over the i64 boundaries, ADR-029's field order pinned as one literal word, the slot table's first-touch order and its 65,536 ceiling, and the docs/02 ↔ docs/03 ↔ A-03 layout agreement) + `7 passed` (`contracts/tests/action_tx.rs`: wire tags as literals, ADR-022's channel per kind, envelope class agreement, the A-03 seam, `SequenceId`'s total order, the docs/10 mirror) + `11 passed` (coords: C1/C2/C3/C4 gates, SPEC-01 masking, sector + SlabKey identity, `contract_matches_spec_document`) — **32 passed**. That SPEC-01's *masked, never clamped* rule is genuinely guarded was checked by injecting a clamp into `DeltaRecord::new`, watching `out_of_range_fields_roll_rather_than_clamp` fail with `x: 4095` against `x: 0`, and reverting the injection |
-| CI, all three architectures | `gh run view 38159161144` (also green: `38150859744`, `38124937828`) | 6 jobs green: gates × (x86-64 Linux, x86-64 Windows, ARM64 macOS), `wasm32-unknown-unknown` build, `cargo-deny`, docs integrity. Each of the three gate jobs reports the identical `test result: ok.` lines — `4 passed`, `7 passed`, `10 passed`, `11 passed` (**32** total) — and prints the six C2 vectors **bit-identical** (`V0 0xa4659597a9d8aeca` … `V5 0x8e6da94e370cbc70`) with C4 `max \|f32 − exact\| = 0e0` at radii 512 / 2048 / 4096 on every one of them |
+| Tests | `cargo test -q` | `4 passed` (contracts: code uniqueness, band placement, stable vectors, determinism routing) + `10 passed` (`contracts/tests/delta_record.rs`: gate P1.1's round trip and record→voxel resolve over the i64 boundaries, ADR-029's field order pinned as one literal word, the slot table's first-touch order and its 65,536 ceiling, and the docs/02 ↔ docs/03 ↔ A-03 layout agreement) + `7 passed` (`contracts/tests/action_tx.rs`: wire tags as literals, ADR-022's channel per kind, envelope class agreement, the A-03 seam, `SequenceId`'s total order, the docs/10 mirror) + `8 passed` (`contracts/tests/tree_shape.rs`: node kinds as literals, the eight octant child-order cases, the derived empty ladder, the list root's odd item, the epoch root's field order, the docs/03 mirror) + `11 passed` (coords: C1/C2/C3/C4 gates, SPEC-01 masking, sector + SlabKey identity, `contract_matches_spec_document`) — **40 passed**. That SPEC-01's *masked, never clamped* rule is genuinely guarded was checked by injecting a clamp into `DeltaRecord::new`, watching `out_of_range_fields_roll_rather_than_clamp` fail with `x: 4095` against `x: 0`, and reverting the injection |
+| CI, all three architectures | `gh run view 38179998839` (also green: `38159161144`, `38150859744`, `38124937828`) | 6 jobs green: gates × (x86-64 Linux, x86-64 Windows, ARM64 macOS), `wasm32-unknown-unknown` build, `cargo-deny`, docs integrity. Each of the three gate jobs reports the identical `test result: ok.` lines — `4 passed`, `7 passed`, `10 passed`, `8 passed`, `11 passed` (**40** total) — and prints the six C2 vectors **bit-identical** (`V0 0xa4659597a9d8aeca` … `V5 0x8e6da94e370cbc70`) with C4 `max \|f32 − exact\| = 0e0` at radii 512 / 2048 / 4096 on every one of them |
 | `no_std` / WASM | `cargo build --target wasm32-unknown-unknown -p contracts -p coords` | `Finished` — the `#![no_std]` guard on `contracts/` still bites |
 | C2 vectors | `cargo run --release --example gate_vectors` | prints the six `u64` digests that `c2_test_vectors_are_frozen` pins as literals in `crates/coords/tests/gates.rs` (doc 02 § C2 names the test, not the values) |
 | C4 demo | `cargo run --release --example camera_f32_demo` | max error `0` at radii 512 / 2048 / 4096; the cast-then-subtract counterfactual returns `0.0` for one voxel at 10⁹ |
@@ -100,7 +101,10 @@ payload field is opaque and A-08's identity widths are labelled drafts on purpos
 `contracts/errors.rs` — still **DRAFT**: it waits on A-02/A-05/A-07 payload shapes and on A-08
 freezing (A-08 now *exists*, so what it owes A-09 is a decision, not a file), and now
 that A-01 is frozen, adopting its newtypes for coordinate payloads is a scheduled migration rather
-than a blocked one.
+than a blocked one. A-10 `contracts/tree.rs` — **drafted 2026-10-11, DRAFT** on
+[ADR-030](decisions.md): the tree shape ADR-028 deliberately left open. It is the grammar only.
+`contracts/` holds no behaviour, so **nothing in this workspace computes a BLAKE3 digest yet** —
+the vectors ADR-028 promised are owed by `crates/ledger`, the hasher, which is not in the tree.
 
 **Not yet met (the rest of Phase 0's exit criteria):**
 
@@ -109,10 +113,16 @@ than a blocked one.
 - The **dev profile** (edit a RON file, see the change) needs `assetc`, which is Phase 1.
 - **WASM execution** of the C2 vectors: CI compiles for `wasm32-unknown-unknown` but runs nothing
   there, so C2 is gated on x86-64/ARM64 execution + WASM compilation, not on three executions.
-- **A-02/A-04/A-05/A-06/A-07 are unwritten**, and A-03 and A-08 exist only as **DRAFT**, so the exit
-  clause "every contract is frozen enough" is still not met — for a different reason than before:
-  two artifacts now need *decisions* (OQ-45, OQ-46) rather than files, while the other five still
+- **A-02/A-04/A-05/A-06/A-07 are unwritten**, and A-03, A-08, A-09 and A-10 exist only as **DRAFT**,
+  so the exit clause "every contract is frozen enough" is still not met — for a different reason than
+  before: four artifacts now need *decisions* (OQ-45, OQ-46, ADR-030's sign-off, and the payload
+  shapes A-09 inherits from A-02/A-05/A-07) rather than files, while the five unwritten ones still
   wait on their own open questions (OQ-34, OQ-01, OQ-08, OQ-02, ADR-012).
+- **There is no hasher.** Every rule A-10 pins is exercised as a *byte layout* test, not as a
+  digest: no leaf, branch, slot-table or epoch root has ever been computed here, so gates P1.3,
+  P1.5 and P1.6 have nothing to measure yet. The first behaviour-bearing crate — `crates/ledger`,
+  BLAKE3 as its first external dependency (ADR-028) — is the next unit of work, and publishing its
+  vectors is what turns ADR-030 from proposed into signable.
 
 ## Phase 1 — Engine runtime (domain-agnostic)
 

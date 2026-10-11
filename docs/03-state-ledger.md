@@ -505,19 +505,23 @@ Corollaries:
 **Locked 2026-10-11 — [ADR-028](decisions.md) signed off: BLAKE3-256, 32-byte digests.**
 Domain-separated prefixes for leaf /
 branch / event-tag / entity-state nodes so a delta can't collide with a macro event, and
-published test vectors so Rust, WASM and any future language binding agree bit-for-bit. The
-source conversation wrote the root as `Hash(...)` without choosing an algorithm — the choice is
-ours, and the Merkle pass plus every network comparison inherit it, so it is logged here
-explicitly rather than silently picked in code.
+published test vectors so Rust, WASM and any future language binding agree bit-for-bit. The domain
+separation exists — it is [ADR-030](decisions.md)'s `DOMAIN ‖ kind ‖ level ‖ payload` preimage — but
+**no vector is published yet**: nothing in this repo computes a digest, so the vectors are owed by
+the hasher that will. The source conversation wrote the root as `Hash(...)` without choosing an
+algorithm — the choice is ours, and the Merkle pass plus every network comparison inherit it, so it
+is logged here explicitly rather than silently picked in code.
 
 **What the sign-off did *not* settle, and what was settled after it:** the tree **shape** — arity,
 the order children are hashed in, the rule for an absent/empty node, the byte order of every integer
 in a preimage. Those were written nowhere, and an epoch root is not canonical until they are: a peer
 that orders children differently computes a different root while believing it is consistent — the
 same failure doc 02 guards against when it forbids voxel-level Morton codes, one level up the tree.
-`crates/ledger`'s first job was to pin them, and it now has: **artifact A-10**
+The shape is now written down: **artifact A-10**
 (`contracts/tree.rs`, [ADR-030](decisions.md)) is that contract, and § The tree shape below is its
-mirrored prose plus its published vectors.
+mirrored prose. The prose is all A-10 can supply on its own — `contracts/` holds no behaviour, and
+the hasher that turns these rules into digests (`crates/ledger`, [docs/12](12-agent-operations.md)'s
+A2 crate) is not in the tree yet, so § The tree shape publishes rules rather than roots.
 
 **Rejected for this role:** SHA-256 (correct class, ~20x slower for no benefit), xxHash/SeaHash
 (fast but **not** collision-resistant — a world root must be), raw CRC (not a hash),
