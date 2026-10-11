@@ -26,6 +26,9 @@
 /// The epoch commit path: records out of the slabs, roots a peer compares.
 pub mod commit;
 
+/// Gate P1.6's bisection walk: locate the divergent voxel behind a differing root.
+pub mod repair;
+
 use contracts::coords::RegionKey;
 use contracts::delta::{DeltaRecord, EpochHeader, PAYLOAD_BITS};
 use contracts::errors::ROOT_BYTES;
@@ -234,7 +237,7 @@ pub fn region_root_counted(leaves: &mut [Leaf], ladder: &EmptyLadder, digests: &
     build_branch(OCTREE_DEPTH, leaves, ladder, digests)
 }
 
-fn build_branch(
+pub(crate) fn build_branch(
     level: u32,
     leaves: &mut [Leaf],
     ladder: &EmptyLadder,
@@ -244,24 +247,56 @@ fn build_branch(
         return ladder.empty(level);
     }
     if level == 0 {
-        // Last write wins, in the walk rather than in a pre-pass: the run holds every record that
-        // touched this voxel, and the one with the greatest `append` is the state the epoch commits.
-        // Spike S2 measured the alternative (a separate O(N²) resolution scan) at 46 ms per full
-        // 64 KB slab — more than the entire hashing pass cost.
-        let mut winner = 0;
-        let mut index = 1;
-        while index < leaves.len() {
-            if leaves[index].append > leaves[winner].append {
-                winner = index;
-            }
-            index += 1;
-        }
         *counted += 1;
-        return voxel_leaf(leaves[winner].payload);
+        return voxel_leaf(leaf_winner(leaves).payload);
     }
+    let runs = octant_runs(level, leaves);
+    let mut children = [[0u8; ROOT_BYTES]; OCTREE_ARITY];
+    let mut k = 0;
+    while k < OCTREE_ARITY {
+        children[k] = if runs[k] == runs[k + 1] {
+            ladder.empty(level - 1)
+        } else {
+            build_branch(
+                level - 1,
+                &mut leaves[runs[k]..runs[k + 1]],
+                ladder,
+                counted,
+            )
+        };
+        k += 1;
+    }
+    *counted += 1;
+    octant_branch(level, &children)
+}
+
+/// The leaf a run of records commits to: the greatest `append`, which is docs/03's last-write-wins
+///
+/// Two records for one voxel sharing an `append` are the caller's ambiguity, not this function's:
+/// docs/03 already says the root is not arrival-order-independent for two writes to one position, and
+/// an unranked pair is that case with no rule to break it — so the winner falls to run order, and a
+/// replay in another order will differ. `leaves_from_records` ranks by construction; a hand-built set
+/// that wants the ranked behaviour must rank it too. `ranked_duplicates_are_order_independent_and_
+/// unranked_ones_are_not` measures both halves rather than asserting them.
+/// applied at the position instead of in a pre-pass (spike S2 measured the pre-pass at 46 ms per full
+/// slab, more than the hashing itself).
+#[inline]
+pub(crate) fn leaf_winner(leaves: &[Leaf]) -> &Leaf {
+    let mut winner = 0;
+    let mut index = 1;
+    while index < leaves.len() {
+        if leaves[index].append > leaves[winner].append {
+            winner = index;
+        }
+        index += 1;
+    }
+    &leaves[winner]
+}
+
+/// Partition `leaves` by octant at `level` and return the nine run boundaries. A run of length zero
+/// is an absent octant, which costs no hashing at all — the ladder covers it for free.
+pub(crate) fn octant_runs(level: u32, leaves: &mut [Leaf]) -> [usize; OCTREE_ARITY + 1] {
     partition_by_octant(level, leaves);
-    // One scan of the partitioned range gives the eight run boundaries; a run of length zero is the
-    // ladder, which is why an absent octant costs no hashing at all.
     let mut starts = [0usize; OCTREE_ARITY + 1];
     let mut octant = 0usize;
     let mut cursor = 0;
@@ -275,24 +310,7 @@ fn build_branch(
         octant += 1;
     }
     starts[OCTREE_ARITY] = leaves.len();
-
-    let mut children = [[0u8; ROOT_BYTES]; OCTREE_ARITY];
-    let mut k = 0;
-    while k < OCTREE_ARITY {
-        children[k] = if starts[k] == starts[k + 1] {
-            ladder.empty(level - 1)
-        } else {
-            build_branch(
-                level - 1,
-                &mut leaves[starts[k]..starts[k + 1]],
-                ladder,
-                counted,
-            )
-        };
-        k += 1;
-    }
-    *counted += 1;
-    octant_branch(level, &children)
+    starts
 }
 
 // ---------------------------------------------------------------------------
