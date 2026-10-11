@@ -36,6 +36,7 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 | [026](#adr-026--reuse-an-existing-gpu-runtime-do-not-hand-write-low-level-plumbing) | Reuse an existing GPU runtime; do not hand-write low-level plumbing | **proposed** |
 | [027](#adr-027--epoch-scoped-transaction-pool-for-multiplayer) | Epoch-scoped transaction pool for multiplayer | proposed |
 | [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | proposed |
+| [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **proposed — needs sign-off** |
 
 ---
 
@@ -743,3 +744,65 @@ documented test vectors so all languages agree.
 **Rejected.** SHA-256 (needlessly slow here, no benefit — nothing in the design needs SHA
 compliance). xxHash/SeaHash (**not** collision-resistant; a world-state root must be). Poseidon
 -type SNARK hashes (only if we later want zero-knowledge client proofs — revisit then).
+
+---
+
+## ADR-029 — Delta records address voxels by region slot + intra-region triple
+
+**Status: proposed — needs sign-off.** It exists because [SPEC-09](13-risks-open-questions.md)
+blocks the freeze of **A-01** (`contracts/coords.rs`) and the layout of **A-03** / **A-08**, and
+both are currently DRAFT in the tree. Nothing here is implemented until the record split below is
+accepted.
+
+**Context.** ADR-015 fixes the runtime delta record at one `u64`. SPEC-03's proposal spent those 64
+bits as `|16 region slot|16 intra-slab|32 value|`, and SPEC-06's proposal made the slab a
+256²×64 plane tile — 2²² voxels. **16 bits cannot index 2²² positions**, and they are not a region
+index either, so the two proposals are individually plausible and jointly unusable (SPEC-09). The
+obvious repairs each cost something the design cares about: widening the record breaks ADR-015's
+premise, and routing the 16 bits through a side list puts an unbounded structure on the append path.
+
+**Decision (proposed).** Drop the slab from the address entirely and let the record name the
+position inside the region:
+
+```
+| 16 region slot | 36 intra-region (x:12, y:12, z:12) | 12 payload |   = 64 bits
+```
+
+- The **36** is not a new width: it is SPEC-01's three 12-bit `LocalOffset` components
+  concatenated, and 3×12 = 36 = `log2(4096³)` — a region's volume exactly. The existing
+  masked-not-clamped rule composes with it unchanged.
+- The **16-bit region slot** indexes the per-epoch region table that SPEC-03 already puts in the
+  epoch header. Region keys themselves stay 3×`i64` and are never packed.
+- The **12-bit payload** is the same budget ADR-015's sketch spent on a material ID. How those 12
+  bits divide between material, flags and quantity is **doc 03's** decision, not this one; the
+  record only fixes the size of the pocket.
+- Slabs then stop being dense edit arrays and become **append-only record buffers**. SPEC-06's
+  geometry question (plane vs column vs volume) survives, but it is a streaming and allocation
+  question rather than an addressing one — which is precisely the entanglement SPEC-09 was
+  reporting.
+
+**Constraints.** One epoch's record stream addresses at most 65,536 distinct regions; past that the
+stream partitions per region rather than widening the field (an epoch that wide is a
+multiplayer/server-scale question, doc 10). Positions outside the 4096-per-axis region are not
+addressable by design — cross-region edits are just two records.
+
+**Rejected.**
+- Widen to `16 + 36 + 32 = 84`, rounded to 96 or 128 bits: the per-edit ledger grows 1.5–2×, and
+  "near-zero storage for unmodified chunks" and the compaction bandwidth claims are per-record
+  cost claims that this directly worsens. It also abandons ADR-015 rather than amending it.
+- Keep 8 bytes and make the 16 bits an index into a per-region **sparse edit list** whose entries
+  carry the full position: the list grows with edits without bound, so interpreting a record
+  requires a side table that changes size on the append path — a variable-length indirection
+  exactly where doc 03 promises `O(1)`.
+- Shrink the slab to ≤ 2¹⁶ voxels so 16 bits address it: it makes an addressing constraint decide
+  memory geometry, so SPEC-06's slab size stops being tunable, and it multiplies per-slab metadata
+  for regions that are mostly empty.
+
+**Consequences.** A-01 can freeze once this is accepted (its `LocalOffset` stays as drafted; the
+`SlabKey` stays a `(region, axis, plane)` identity but is no longer embedded in a record). A-03 and
+A-08 get a byte layout, so doc 03's record section and doc 10's wire format change together.
+ADR-015 is kept, not amended — the record is still one `u64`.
+
+**Re-open if** the region edge stops being 4096 voxels (ADR-016): 3×12 = 36 only holds for a
+4096³ region, so any change to `REGION_SHIFT` invalidates this field arithmetic. Also re-open if an
+epoch legitimately needs more than 65,536 regions and partitioning proves worse than widening.

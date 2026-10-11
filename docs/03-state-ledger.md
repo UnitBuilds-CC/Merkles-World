@@ -48,15 +48,19 @@ SPEC-08, OQ-01, OQ-23.
 - A delta targets **one slab per region**: a 256² × 64 plane tile = 2²² voxels, the edit envelope
   around the player, *not* a 4096² column and *not* a region-sized volume ([SPEC-06](13-risks-open-questions.md)).
 - Addressing is `GlobalVoxelPos → (RegionKey, [u16; 3])`; `LocalOffset` is 3×`u16` (SPEC-01).
-- The packed delta is 8 bytes: `| region-slot 16 | intra-slab 16 | value 32 |` ([SPEC-03](13-risks-open-questions.md)).
+- The packed delta is 8 bytes: 16 bits region-slot, 16 bits intra-slab, 32 bits value
+  ([SPEC-03](13-risks-open-questions.md)).
   16 bits indexes a set of **≤65536 distinct regions per epoch**, which is a hard, checked
   limit — exceeding it before compaction triggers an early micro-commit rather than corruption.
 - **The middle field does not fit (SPEC-09).** 16 bits gives 65,536 addresses against a slab of
   2²² voxels, so it cannot be a voxel index inside the slab; read as a *record index* instead, it
   caps a slab at 65,536 × 8 B = 512 KiB, which is a third number next to the 4 MiB slab and the
   64 KB / 1 MB allocation budgets below. The three figures are one unresolved decision, not three
-  tunables — it is settled in [doc 13](13-risks-open-questions.md) under SPEC-09 before this file
-  is implemented.
+  tunables. [ADR-029](decisions.md) proposes the resolution: take the slab out of the address and
+  split the record as 16 region-slot / **36 intra-region (three 12-bit local offsets)** / 12 payload
+  — exactly 64 bits, which dissolves the middle-field conflict and leaves slab geometry an
+  allocation question. **Until ADR-029 is signed off this file stays unimplemented**, and the 16/16/32
+  line above is the superseded draft, not the plan.
 
 ## Slab allocation
 

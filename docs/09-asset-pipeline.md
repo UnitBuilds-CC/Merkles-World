@@ -116,7 +116,8 @@ budget violation rather than discovered as a frame drop.
 
 ## Open questions
 
-[OQ-30](13-risks-open-questions.md) schema versioning/migration ·
-[OQ-14](13-risks-open-questions.md) stable IDs, namespacing and collisions between mods ·
+[OQ-30](13-risks-open-questions.md) schema versioning/migration, and with it the **stable asset IDs**
+of § Schema & versioning item 3 — namespacing and collisions between mods are not a separate
+question yet ·
 [OQ-27](13-risks-open-questions.md) whether procedural noise is authored as a node tree or a
 precomputed texture, and who owns that call.
