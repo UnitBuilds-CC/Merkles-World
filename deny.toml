@@ -56,12 +56,12 @@ allow = [
 ]
 
 [licenses.private]
-# OQ-43 (docs/13-risks-open-questions.md) is why this is true and not a workaround: the project
-# licence is still an open product decision, so the workspace members declare no `license` field
-# and are `publish = false` in the root Cargo.toml. cargo-deny therefore checks every *dependency*
-# and skips the two unpublished members. Set this back to false, and delete the `publish = false`
-# line, in the same commit that closes OQ-43.
-ignore = true
+# Flipped to false in the commit that closes the licensing half of OQ-43 (2026-10-11: MIT OR
+# Apache-2.0, declared in [workspace.package].license and inherited by both members). While the
+# project had no licence the members declared none either, so cargo-deny had to be told to skip
+# them; now it checks the workspace's own licences too, which is the point of the setting.
+# `publish = false` stays for the other half of OQ-43/OQ-37 — unresolved product names.
+ignore = false
 
 [sources]
 unknown-registry = "deny"

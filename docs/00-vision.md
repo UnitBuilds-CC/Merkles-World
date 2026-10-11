@@ -99,5 +99,7 @@ The source conversation is an *architecture* dialogue. It contains no gameplay d
 art direction, no UI, no lighting model, no save-file format on disk, no **minimum-spec**
 performance budget (it aspires to "60+ FPS" — GS 406, GS 1189 — but names no GPU, no resolution and
 no per-pass frame allocation; that is OQ-39 and doc 04's budget table), and no legal/licensing
-position. Those are logged as **[gap]** items in
+position — a gap the source genuinely left; the project closed the licence half of it on 2026-10-11
+with **MIT OR Apache-2.0** (`LICENSE-MIT`, `LICENSE-APACHE`, OQ-43), while product naming is still
+open. Those are logged as **[gap]** items in
 [13-risks-open-questions.md](13-risks-open-questions.md) rather than invented here.

@@ -6,8 +6,11 @@ members = ["contracts", "crates/coords"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
-# OQ-43: the license is still an open product decision, so nothing here may be
-# pushed to a registry until it is settled.
+license = "MIT OR Apache-2.0"
+# The licence is decided (OQ-43, 2026-10-11: MIT OR Apache-2.0, see LICENSE-MIT / LICENSE-APACHE).
+# `publish` stays false for the other half of OQ-43/OQ-37: the engine and game have no final names,
+# and `contracts` / `coords` are placeholders rather than brands, so nothing goes to a registry
+# until the names and the two-product repo split are chosen.
 publish = false
 
 [workspace.lints.rust]

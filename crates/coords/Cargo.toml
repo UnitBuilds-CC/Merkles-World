@@ -3,6 +3,7 @@ name = "coords"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 publish.workspace = true
 description = "Gate harness for artifact A-01 (docs/02): C1-C4 run here"
 
