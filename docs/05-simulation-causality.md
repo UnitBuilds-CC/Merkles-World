@@ -69,6 +69,11 @@ causes therefore travel as **named event tags committed into the epoch root**:
 Tx_dam = { Region: Sector 4, Type: FlowBlocker, Magnitude: 100 }
 ```
 
+*(The source writes the sector as a scalar label; the contract field is a 3×`i64`
+`SectorKey` — doc 02. Below, "Sector 4" means `SectorKey(4, 0, 0)`. The exact tag schema — field
+names, types, versioning — is [OQ-08](13-risks-open-questions.md), and artifact A-05 is where it
+gets pinned.)*
+
 When region B evaluates at view time, it reads the active event tags and adjusts its output (the
 water table downstream of Sector 4 falls to zero, vegetation browns, fauna migrates). Without the
 tag, B's math would happily keep a river that should have died three days ago.
@@ -83,10 +88,11 @@ right.
   abstract growth with a TNT crater the player dug produces state-desync bugs and disk I/O
   bottlenecks).
 - Let the background sim overwrite player edits (destroys builds; the delta mask outranks the
-  automaton — see the ownership precedence in doc 03 § ownership).
+  automaton — that precedence is the `S_old_genesis ⊕ M_local` overlay in
+  [doc 03 § Compaction](03-state-ledger.md), not a separate rule).
 - Full global recomputation each epoch (defeats the purpose).
 
-## The three-stage resolution model *(proposal, gate G1)*
+## The three-stage resolution model *(proposal — validated by spike S7, gate SM1)*
 
 How "the simulation knows" about an action without simulating miles of terrain per action.
 Proposed as the answer to OQ-01; **it must be validated before doc 05 is implementable.**
@@ -113,7 +119,8 @@ computed from resource-stock counters per region, not from re-simulating every s
 **Open (OQ-01):** how does region B know its neighbor's water table without loading it? The
 one-ring propagation at commit is our answer, and its failure mode is the multi-epoch chain
 (dam built → riverbed dries next epoch → wells fail the epoch after). If the ring is too small,
-effects arrive late; too large, and commit cost explodes. **Gate G1 is exactly this question.**
+effects arrive late; too large, and commit cost explodes. **Spike S7 and gate SM1 are exactly this
+question.**
 
 ## Rule library (what content can express)
 
@@ -168,7 +175,7 @@ upgrades are invisible (silent world corruption).
 
 | Gate | Test | Status |
 |------|------|--------|
-| SM1 | Dam built in region A; region B (far, never loaded) evaluates to a dry lake bed at the next epoch, identically for two clients | **gate G1 — the project's key unknown** |
+| SM1 | Dam built in region A; region B (far, never loaded) evaluates to a dry lake bed at the next epoch, identically for two clients | **spike S7 — the project's key unknown** |
 | SM2 | Fast-forward 100,000 ticks of macro state in `< 50 ms` | invented target |
 | SM3 | Two runs of the same seed + transaction sequence produce identical epoch roots | ADR-017 |
 | SM4 | A rule upgraded mid-world does not teleport existing fields | § Determinism across versions |

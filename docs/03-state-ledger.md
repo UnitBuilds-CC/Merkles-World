@@ -1,6 +1,7 @@
 # 03 — State, ledger and memory
 
-**Status:** design locked; implementation blocked on SPEC-01, SPEC-03, SPEC-08, OQ-01, OQ-23.
+**Status:** specified; implementation blocked on SPEC-01, SPEC-03, SPEC-06, **SPEC-09**,
+SPEC-08, OQ-01, OQ-23.
 **Depends on:** [doc 02](02-coordinate-system.md). **Consumed by:** docs 04, 05, 06, 10.
 
 ```
@@ -24,7 +25,7 @@
 | **epoch** | A committed world state, identified by a root hash. A version of the world. |
 | **root / epoch root** | BLAKE3-256 digest over one epoch's region roots + event log. |
 | **mempool** | Committed-but-uncompacted transactions, ordered by Lamport clock. |
-| **event log** | Append-only named macro events (`{RegionKey, Type, Magnitude, TickId}`). The **canonical form** of macro causality ([OQ-01](13-risks-open-questions.md)). |
+| **event log** | Append-only named macro events, written at sector granularity: `{SectorKey, Kind, Magnitude, TickId}` (schema pending [OQ-08](13-risks-open-questions.md) / A-05). The **canonical form** of macro causality ([OQ-01](13-risks-open-questions.md)). |
 | **`M_active`** | Slabs for regions in the interaction radius. Directly writable, bound to the GPU. |
 | **`M_cold`** | Write-ahead delta log for everything outside that radius. Never bound to the GPU. |
 | **compaction** | Bake outstanding deltas into a new epoch root, then reset the bump pointer. |
@@ -44,16 +45,26 @@
 
 ## Identity (from doc 02)
 
-- A delta targets **one slab per region**, 256²·X × 64 Y × one axis plane — the edit envelope
-  around the player, *not* a 4096² column.
+- A delta targets **one slab per region**: a 256² × 64 plane tile = 2²² voxels, the edit envelope
+  around the player, *not* a 4096² column and *not* a region-sized volume ([SPEC-06](13-risks-open-questions.md)).
 - Addressing is `GlobalVoxelPos → (RegionKey, [u16; 3])`; `LocalOffset` is 3×`u16` (SPEC-01).
-- The packed delta is 8 bytes: `| region-slot 16 | local offset 16 | value 32 |` (SPEC-03).
+- The packed delta is 8 bytes: `| region-slot 16 | intra-slab 16 | value 32 |` ([SPEC-03](13-risks-open-questions.md)).
   16 bits indexes a set of **≤65536 distinct regions per epoch**, which is a hard, checked
   limit — exceeding it before compaction triggers an early micro-commit rather than corruption.
+- **The middle field does not fit (SPEC-09).** 16 bits gives 65,536 addresses against a slab of
+  2²² voxels, so it cannot be a voxel index inside the slab; read as a *record index* instead, it
+  caps a slab at 65,536 × 8 B = 512 KiB, which is a third number next to the 4 MiB slab and the
+  64 KB / 1 MB allocation budgets below. The three figures are one unresolved decision, not three
+  tunables — it is settled in [doc 13](13-risks-open-questions.md) under SPEC-09 before this file
+  is implemented.
 
 ## Slab allocation
 
-Pre-allocate contiguous fixed-size slabs (64 KB / 1 MB) keyed by region index.
+Pre-allocate contiguous fixed-size slabs keyed by region index. The two sizes historically
+written here (**64 KB / 1 MB**) are unreconciled budgets, not a decision: 1 MB of 8-byte records
+is 131,072 entries, which the 16-bit record index above cannot address. Spike S2 measures the
+real per-epoch edit volume, and SPEC-09 fixes the addressing width; whichever survives sets this
+number.
 
 ```rust
 let slot = slab.base.add(offset * 8);          // pointer arithmetic, no allocator
@@ -91,9 +102,12 @@ Sleep is a *meaningful* pause, which is why it was chosen as the commit boundary
 catch-up (apply the pool for Δt), batch compression (thousands of micro-edits → one root), and
 far consequences (dried lake bed, dead vegetation, migrated fauna) already encoded in the new
 root when the player arrives. It is an optimization of the same primitive as an
-**auto-commit epoch timer** (default 20 minutes, or 10,000 ticks, or an N-region change count) —
-needed because some players won't sleep, and because multiplayer has no single sleeper
-([SPEC-08](13-risks-open-questions.md)). Compaction is a policy callback, never a call site
+**auto-commit epoch timer** (proposal, unfixed: a wall-clock fallback *and* an N-region change
+count) — needed because some players won't sleep, and because multiplayer has no single sleeper
+([SPEC-08](13-risks-open-questions.md)). The source's cadence was "every 1,000 ticks or when a
+player sleeps" (GS 1898); neither 1,000 ticks nor any wall-clock equivalent is adopted here,
+because Δt has no declared unit yet ([OQ-42](13-risks-open-questions.md)) — fixing this timer
+*without* fixing OQ-42 would bake in an ambiguity. Compaction is a policy callback, never a call site
 inside the sleep action (ADR-004).
 
 **Cost (accepted):** a player who logs off without sleeping can see a stale world until the next
@@ -161,9 +175,9 @@ Merkle–Damgård constructions in general (length-extension liability).
 
 | Gate | Test | Source |
 |------|------|--------|
-| P1.1 | Every delta encodes/decodes to the same `(RegionKey, [u16; 3], value)` across the i64 range, including negatives | doc 02 |
-| P1.2 | 10⁶ writes/sec sustained, `p99 < 1 µs` | **our target** — the transcript only claims a slab write is "a pointer offset store instruction… this takes nanoseconds" |
-| P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "**sub-millisecond batch pass**" is quoted from the transcript — a claim, not a measurement |
+| P1.1 | Every delta encodes/decodes to the same `(RegionKey, [u16; 3], value)` across the i64 range, including negatives | doc 02 — **tuple shape provisional until SPEC-09** |
+| P1.2 | 10⁶ writes/sec sustained, `p99 < 1 µs` | **our target** — the transcript only claims a slab write is "a pointer offset store instruction… This takes nanoseconds" (GS 1594) and "<1 ns (Direct RAM write)" |
+| P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "Sub-millisecond batch pass" (GS 1606) — a claim, not a measurement |
 | P1.4 | LRU eviction + region re-entry restores all edits with no visible pop-in | ADR-009 |
 | P1.5 | Byte-identical roots for the same seed/transaction sequence on N2600 / RTX 3060 / Linux-Mesa / M1-browser | ADR-017 |
 | P1.6 | Two clients with one divergent voxel detect it via 32-byte root exchange and repair by bisection | ADR-023 |

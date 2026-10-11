@@ -1,5 +1,9 @@
 # 13 — Risks & open questions
 
+**Status:** live — the most frequently changed doc in the repo. An entry changes state only in a
+commit that names its id.
+**Depends on:** every other doc (they feed their contradictions and unknowns into these registers).
+
 **This is the project's control document.** Every other doc links here. Read it before writing
 code that touches a subsystem; a `SPEC-` or `OQ-` in **open** state on your subsystem means that
 subsystem is not implementable yet.
@@ -23,12 +27,13 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 |----|----------|---------------------|--------|
 | **SPEC-01** | `LocalOffset` is "12-bit uint (0..4095)" in prose but `u16` in the Rust code | keep `u16` field type, 12-bit valid range; masked, never clamped | proposal (doc 02) |
 | **SPEC-02** | The sketch lets the GPU compute block state from the Merkle root, but WGSL f32 transcendentals differ per adapter → two GPUs disagree → ADR-023 reports desync everywhere | **ADR-017**: simulation state is computed in deterministic Rust/WASM; the GPU projects, never decides | **locked** |
-| **SPEC-03** | A bitpacked `u64` delta holding X/Y/Z (12 bits each) + material ID (12) cannot also hold an `i64` global position | region-slot indirection: `\|16 region slot\|16 intra-slab\|32 value\|`, slot table in the epoch header; region key itself is 3×`i64` and never packs | proposal (doc 02/03) |
-| **SPEC-04** | "cryptographic hash (like SHA-256)" vs "spatial hash / Morton" vs "Perlin/Simplex noise" for spatial continuity | **two hashing roles**: BLAKE3 for identity/roots; integer hash + spline interpolation for terrain (doc 05) | proposal (ADR-028) |
+| **SPEC-03** | A bitpacked `u64` delta holding X/Y/Z (12 bits each) + material ID (12) cannot also hold an `i64` global position | region-slot indirection: `\|16 region slot\|16 intra-slab\|32 value\|`, slot table in the epoch header; region key itself is 3×`i64` and never packs | proposal (doc 02/03) — field widths unresolved, see **SPEC-09** below |
+| **SPEC-04** | "cryptographic hash (like SHA-256)" (GS 323) vs "spatial hash / Morton" vs "Perlin/Simplex noise" for spatial continuity (GS 327) | **two hashing roles**: BLAKE3 for identity/roots; an integer spatial hash / noise lattice for terrain continuity. **The terrain half is not specified by any doc yet** — no document says how base `f(pos, t)` stays coherent across region boundaries; that is [OQ-27](13-risks-open-questions.md) | proposal (ADR-028), terrain half **open** |
 | **SPEC-05** | `S_{t+1} = f(S_t)` (iterative CA) vs "fast-forwarding takes milliseconds / `O(log Δt)`" (needs jumpable math) | **per-field clocks**: every rule declares `iterative {cap}` or `closed_form` or `integral`; iterative rules advance by `min(Δt, cap)` and are **never claimed exact** beyond the cap | proposal (doc 05) |
-| **SPEC-06** | Slab identity: volume? column? plane? 4096³ slab = 2²⁴ voxels | canonical `(RegionKey, axis, plane_index)` — 4096²×64 **plane** slab, 3 orientations | proposal (doc 02/03) |
-| **SPEC-07** | Circuit graph cache invalidation: whole component vs dirty subgraph | undefined in source; must be measured with S1-class spikes on real builds | open (doc 06) |
+| **SPEC-06** | Slab identity: volume? column? plane? A whole region is 4096³ = 2³⁶ voxels (64 GiB at 1 B/voxel); one 4096² cross-section is still 2²⁴ (16 MiB) | canonical `(RegionKey, axis, plane_index)` — a **256²×64 plane tile = 2²² voxels (4 MiB)**, 3 orientations | proposal (doc 02/03) — geometry must be settled jointly with **SPEC-09** |
+| **SPEC-07** | Circuit graph cache invalidation: whole component vs dirty subgraph | undefined in source; measured by **spike S10** (doc 11) on a real build | open (doc 06) |
 | **SPEC-08** | "The player sleeps" as the commit boundary is a single-player concept; multiplayer has no single sleeper | one global epoch on quorum-or-timer (ADR-027); compaction stays a policy callback (ADR-004) | proposal (doc 10) |
+| **SPEC-09** | The SPEC-03 record cannot address the SPEC-06 slab: `intra-slab offset 16 bits` indexes 2¹⁶ = 65,536 positions, while the slab holds 2²² voxels and a region holds 2³⁶ — so the 16 bits is neither a voxel index nor a slab index as written | three ways out, **none chosen**: (a) widen the record to 16 + 36 + 32 = 84 bits, rounded to 96 or 128; (b) shrink the slab to ≤ 2¹⁶ voxels (a 512×128×1 tile or a 64³ chunk) and add more slabs per plane; (c) keep 8 bytes and make the 16 bits an index into a per-region **sparse edit list** whose entries carry the full position | **open** (doc 02) — blocks freezing A-01 `coords.rs` and A-03's record layout |
 
 ---
 
@@ -38,7 +43,7 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 
 | ID | Question | Why it matters | Next action |
 |----|----------|----------------|-------------|
-| **OQ-01** | Can distant causality actually propagate — dam in region A dries region B — within one epoch, without loading region B? | the project's central unknown; the ledger's value proposition depends on it | **Spike S7** (gate G1, SM1) |
+| **OQ-01** | Can distant causality actually propagate — dam in region A dries region B — within one epoch, without loading region B? | the project's central unknown; the ledger's value proposition depends on it | **Spike S7**, gate SM1 |
 | **OQ-02** | How do stateful/sequential circuits work (latches, counters, T-flip-flops, feedback loops) in an acyclic `f(inputs, t)` solver? | doc 06 is unimplementable without this; automation is a Minecraft pillar | design pass → ADR (doc 06) |
 | **OQ-03** | What exactly does the server store and validate, if it holds no voxel arrays? | defines hosting cost, the whole "zero heavy lifting" claim, and the cheat model | write the server-role section in doc 10 |
 | **OQ-08** | Event tag vocabulary and semantics: is `FlowBlocker{region, magnitude:100}` a one-shot, a latch, or an accumulating scalar? Is the field write a `set` (collision-prone) or a delta? | every macro rule and every mod depends on this registry | draft the tag registry (A-05) |
@@ -54,8 +59,8 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 |----|----------|----------------|-------------|
 | **OQ-10** | Lighting model: shadows, GI/AO, sky, day-night cycle. The source conversation never covered it | nothing can be authored until shading is defined — it would have to be redone | art-direction decision (doc 04) |
 | **OQ-12** | Transparency, water, volumetrics under raymarching | SDFs and refraction interact badly with a budget; water is *the* voxel-game look | spike alongside S1 |
-| **OQ-26** | Is `wgpu` (or `naga`) the substrate, or do we need a thinner custom WebGPU layer? | ADR-026 (reuse vs build) hangs on it; the source was self-contradictory about reuse | **Spike S1** includes this measurement |
-| **OQ-27** | Procedural noise: runtime evaluation or precomputed texture? | source contradicts itself; costs GPU memory vs shader cost | resolve in doc 04 during P0 |
+| **OQ-26** | Is `wgpu` (or `naga`) the substrate, or do we need a thinner custom WebGPU layer? | ADR-026 (reuse vs build) hangs on it | **Spike S1/S9** measure this. The source wants both: reuse an existing runtime — Luanti, wgpu/Bevy, Raylib (GS 912) — and a custom raymarch pipeline (GS 753). ADR-026 reads them as "reuse the device layer, write the marcher" |
+| **OQ-27** | Procedural noise: runtime evaluation or precomputed texture? | costs GPU memory vs shader cost, and it is where **terrain spatial continuity** has to be answered (SPEC-04's open half) | resolve in doc 04 during P0. **Both options are ours** — the source only ever assumes runtime evaluation (GS 420 "1 CPU operation", GS 810 in-shader `ValueNoise3D`, GS 1353 `ProceduralNoise` material); it never raises baking |
 | **OQ-28** | Does laziness mean an unchanged in-view circuit stops being re-solved, freezing a clock's displayed state? | would break the "clocks just work" promise | decide with doc 06 |
 | **OQ-39** | Minimum-spec performance budget: what GPU, what FPS, at what voxel/entity density? | no target = no definition of "done" for any renderer work | set before P0 |
 | **OQ-40** | Audio engine / DSP library, and who owns voice management | audio occlusion is specified but nothing runs it | pick during P1 |
@@ -66,9 +71,9 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 |----|----------|----------------|-------------|
 | **OQ-17** | Ordering and interop when several mods mutate the same field in one epoch (beyond voxel LWW) | determinism promise, mod ecosystem health | doc 10 consistency model |
 | **OQ-22** | Circuit recompile triggers and cost when a player edits mid-network | hot path | doc 06 |
-| **OQ-23** | What physically persists to disk: event log only, or materialized region fields too? | save size, load time, the "infinite world, near-zero storage" story | doc 03 § storage |
+| **OQ-23** | What physically persists to disk: event log only, or materialized region fields too? | save size, load time, the "infinite world, near-zero storage" story | doc 03 § Tiering and eviction has one disk row; a save/load doc does not exist yet |
 | **OQ-24** | Compaction cadence beyond sleep: on logout? when the pool crosses a threshold? | the stale-world-on-return cost (accepted, but how often?) | doc 03 |
-| **OQ-30** | FlatBuffer schema versioning, migration on load, and deterministic serialization | old worlds must load in new engines | doc 09 (A-?) |
+| **OQ-30** | FlatBuffer schema versioning, migration on load, and deterministic serialization | old worlds must load in new engines | doc 09 `.fbs` schemas — no blocking-artifact id yet (A-07 is the only `.fbs` artifact in doc 11) |
 | **OQ-37** | Naming and identity: engine name, game name, license, repo layout for two products | Phase 2 is "Mod #1" — the repo boundary must match | product decision |
 | **OQ-38** | Target platforms and distribution (browser, Windows/Linux/macOS, mobile, console?) | browser means WASM+WGSL is a hard requirement, not a nice-to-have; console contradicts the WASM-mod story entirely | product decision |
 
@@ -91,7 +96,7 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 | **OQ-04** | What do you actually *do* in the game? The design is an engine; no gameplay loop exists | an engine is not a game | vertical slice brief (doc 11) |
 | **OQ-05** | UI/HUD, input mapping, accessibility | nothing specified anywhere | wireframe pass |
 | **OQ-06** | Content scope for the vertical slice (one biome, one mob, one tool, one craft, one weather effect) — and does it look good, given "I'm not much of an artist" is an *aesthetic* constraint, not just a pipeline one | the SDF look is a real risk: procedural smooth-blended shapes may read as "blobby demo scene" rather than charming | build it, then judge |
-| **OQ-07** | Save/on-disk layout, world directory structure, corruption handling, multi-world | players keep worlds; this is where engines die in production | doc 03 § storage |
+| **OQ-07** | Save/on-disk layout, world directory structure, corruption handling, multi-world | players keep worlds; this is where engines die in production | no on-disk spec exists (doc 03 covers memory, not disk) — write one before Phase 1 exits |
 | **OQ-16** | Physics cost for many entities (gradient queries per mob), LOD physics, navmesh for macro mobs | the CPU-bound part of the design | spike with S1 |
 | **OQ-19** | How do players *learn* circuits that don't behave like redstone (zero latency, no visible propagation)? | the fun and the tutorials depend on it; also the honest answer to "will redstone fans accept this?" | design pass |
 | **OQ-20** | Per-module execution/memory limits and fuel metering | a WASM infinite loop otherwise freezes the client | doc 08 |

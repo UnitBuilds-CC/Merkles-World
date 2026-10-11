@@ -37,13 +37,20 @@ path.
 
 ## 4. Determinism discipline
 
-- World state, ledger hashes, circuit results, physics resolution: **integer math only**
-  (i64/u64/i32). See ADR-017 and doc 02.
-- No transcendental function (`sin`, `cos`, `exp`, `pow`, `atan`) — native or `libm` — may
-  feed a Merkle root, epoch hash, or network payload. Precomputed tables or fixed-point
-  routines only.
-- Every cross-platform value is covered by the **Bitwise Determinism Suite** (doc 11, gate P1.5).
-  A feature that produces a value other machines must see is not done until it passes.
+- **Anything another machine must reproduce bitwise** — ledger hashes, epoch roots, material IDs,
+  circuit results, macro field values, event tags — is **integer math only** (i64/u64/i32). See
+  ADR-017 and doc 02.
+- Presentation values are floats and are *never* hashed: camera-relative `f32` positions, doc 07's
+  SDF gradient collision, animation warps, audio occlusion. Transient `f32` kinematics may cross
+  the wire precisely because nothing hashes them (doc 02 float discipline, doc 10). The question is
+  never "is this float?" — it is "does a root depend on it?".
+- No transcendental function (`sin`, `cos`, `exp`, `pow`, `atan`) — native or `libm` — may feed a
+  Merkle root, epoch hash, or any payload a peer must hash to agree with you. Precomputed tables or
+  fixed-point routines only. Visual uses of `sin` (doc 07's gait warp, doc 04's noise) are fine.
+- Every cross-platform value is covered by the **Bitwise Determinism Suite**
+  ([doc 11 § The Bitwise Determinism Suite](docs/11-roadmap.md), gate P1.5). A feature that produces
+  a value other machines must see is not done until its row passes. Gate R4 (frame hashes) is
+  informational and must not be promoted to a state gate.
 - Shaders are renderers. If a shader computes something the simulation must agree with, it is
   a bug (SPEC-02).
 
@@ -67,7 +74,9 @@ limitation to be eased later.
 ## 7. Verification before claims
 
 Don't report a milestone as met without running its Definition of Done and pasting real
-output: `cargo test`, headless WebGPU frame hashes, `wit-bindgen` checks, benchmark numbers.
+output: `cargo test`, cross-target **epoch/state root** hashes (gate P1.5 — doc 11's Bitwise
+Determinism Suite), `wit-bindgen` checks, benchmark numbers. A headless WebGPU frame hash is worth
+pasting as a diagnostic, never as proof of correctness (gate R4 is informational, ADR-017).
 "If it compiles" is not evidence. Performance claims in the docs are **hypotheses** until a
 spike measures them; say which is which.
 

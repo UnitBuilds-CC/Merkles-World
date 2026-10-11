@@ -1,7 +1,8 @@
 # 10 — Multiplayer
 
 **Status:** protocol specified; deliberately **deferred** to Phase 1.5 per [ADR-004](decisions.md).
-Nothing here gets implemented until Phase 1 P1.5 passes.
+Nothing here gets implemented until every Phase 1 gate (P1.1–P1.6) is green
+([doc 11](11-roadmap.md)).
 **Depends on:** docs 02, 03, 05, 06, 08. **Implements:** ADR-021, 022, 023.
 
 ## The shift
@@ -16,8 +17,8 @@ ActionTx = ⟨ SequenceID, ActorID, Kind, Target, Payload, TickEpoch, Signature 
 
 | Payload type | Contents | Use |
 |--------------|----------|-----|
-| **Slab delta mutate** | `RegionKey`, intra-slab offset, bitpacked `u64` value | block breaks, placements, terraforming |
-| **Entity kinematics** | `EntityID`, position/velocity/quaternion | player and mob movement — transient, never hashed |
+| **Slab delta mutate** | region-slot index (resolved against the epoch header's slot table), intra-slab offset, packed value | block breaks, placements, terraforming |
+| **Entity kinematics** | `EntityID`, camera-relative `f32` position/velocity/quaternion | player and mob movement — transient, never hashed |
 | **WASM signal trigger** | `ModuleID`, `FunctionIndex`, bytes | switches, inventories, spells, circuit inputs |
 
 ```
@@ -29,9 +30,12 @@ CLIENT A                                    CLIENT B
 ```
 
 No 3D block data crosses the wire, and the server never holds a voxel array — it holds roots,
-the transaction pool and the event log
-([SPEC-03](13-risks-open-questions.md): a wire payload is 16 bytes, which is only possible if
-coordinates are region-slot relative per doc 02).
+the transaction pool and the event log. The saving is in the **payload**, not the envelope: a slab
+mutation carries the 8-byte packed delta of doc 03 (width provisional, see
+[SPEC-09](13-risks-open-questions.md)), while the `ActionTx` around it — `SequenceID`, `ActorID`,
+`Kind`, `Target`, `TickEpoch`, `Signature` — is tens of bytes and is dominated by the signature,
+which is the one field that cannot shrink without giving up the anti-spoofing story (OQ-11/OQ-14).
+Compare "block array per chunk" and the difference is orders of magnitude, not bytes.
 
 **Rejected:** streaming chunk bytes (bandwidth, and discards determinism); delta-compressed
 world snapshots (still state, still large); authoritative-per-voxel server (the bottleneck this
@@ -47,8 +51,8 @@ WebRTC datachannels (browser and mobile hosts) or QUIC (native), with two channe
 
 **Targets are ours, not the source's** ([OQ-18](13-risks-open-questions.md)): the design
 conversation gave no budget. Propose 200 ms end-to-end for mutations and a 64-player server, and
-treat both as tunables to be measured in P1.5 — the "infinite multiplayer worlds" pitch is
-otherwise unfalsifiable.
+treat both as tunables to be measured in the multiplayer phase (Phase 1.5) — the "infinite
+multiplayer worlds" pitch is otherwise unfalsifiable.
 
 ## Consistency model
 
@@ -68,10 +72,14 @@ Three cooperating rules:
    players painting one block genuinely is a race, and last-write-wins is the honest answer.
 
 **Rollback** is cheap by construction: a rejected slab edit is one store of the old `u64` back
-into its slot. Nothing derived geometry from the edit, so there is no rebuild or re-parse.
-`M_active` is pinned to **one** client per region (its "owner") and remote deltas for that region
-travel over `query-api`, not into the local slab — so a local roll-forward always equals the
-canonical state, which is what keeps rollback from cascading into circuits and macro fields.
+into its slot. No geometry is derived from the edit, so there is no rebuild or re-parse.
+`M_active` is pinned to **one** client per region (its "owner"); deltas a peer sends for a region
+this client does not own are appended to `M_cold` (doc 03's write-ahead tier) and merged into the
+epoch at commit rather than written into the owner's hot slab — so a local roll-forward always
+equals the canonical state, which is what keeps rollback from cascading into circuits and macro
+fields. Single-writer-per-region ownership is an **assumption, not a measurement**: it has to
+survive real round-trip times, which is exactly what [OQ-18](13-risks-open-questions.md) exists to
+test in the multiplayer phase.
 
 **Open ([OQ-35](13-risks-open-questions.md)):** when two clients write the same *circuit* input or
 the same entity field in one epoch — the merge rules above cover aggregate fields but not

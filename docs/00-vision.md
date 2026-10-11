@@ -1,5 +1,9 @@
 # 00 — Vision & pillars
 
+**Status:** vision — stable. This doc records intent, pillars and non-goals; nothing in it is
+directly implementable, and everything else cites it.
+**Depends on:** nothing (root document). **Consumed by:** every doc.
+
 ## What the project is
 
 A voxel sandbox in the Minecraft lineage, built on an engine where the world is not a
@@ -87,11 +91,13 @@ while you weren't looking, and it can *prove* it aged the same way for everyone 
 | 1559–1609 Slab writes | Doc 03 |
 | 1611–1688 BVH culling, agent CI/CD, VRAM budgeting, vector clocks | Docs 04, 12, 10 |
 | 1690–1849 Coordinate system (HDCS) | Doc 02 |
-| 1851–1931 Multiplayer intent streams | Doc 10 |
+| 1851–1930 Multiplayer intent streams | Doc 10 |
 
 ## Known blind spots
 
 The source conversation is an *architecture* dialogue. It contains no gameplay design, no
-art direction, no UI, no lighting model, no save-file format on disk, no performance budget,
-and no legal/licensing position. Those are logged as **[gap]** items in
+art direction, no UI, no lighting model, no save-file format on disk, no **minimum-spec**
+performance budget (it aspires to "60+ FPS" — GS 406, GS 1189 — but names no GPU, no resolution and
+no per-pass frame allocation; that is OQ-39 and doc 04's budget table), and no legal/licensing
+position. Those are logged as **[gap]** items in
 [13-risks-open-questions.md](13-risks-open-questions.md) rather than invented here.

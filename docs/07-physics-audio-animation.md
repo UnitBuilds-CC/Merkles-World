@@ -22,6 +22,14 @@ Resolution is the classic SDF push-out: `p += N * (-d)` until `d ≥ 0`, with ve
 onto the tangent plane. Gravity is `-Y` by contract ([doc 02](02-coordinate-system.md)), so
 "grounded" is `N·(+Y) > cos(slope_limit)`.
 
+**Determinism boundary.** All of the above runs in `f32` camera space and **nothing here is
+hashed** — position, normal, contact depth and grounded-ness are presentation-grade, so AGENTS.md
+§4 permits them (the rule is about roots, not about floats). The consequence is real though: two
+peers watching the same mob can resolve its collision slightly differently, and no epoch root will
+ever notice. Anything a mod commits through the ledger (a spawn, a field write, a circuit output)
+must therefore be integer and peer-independent; anything derived from a gradient is treated as
+transient and re-verified against the owner's `M_active` copy.
+
 **Standing on a procedural hill** is therefore free of meshes: query the terrain SDF at the
 player's `P_local`, get distance and normal, place them on the implicit surface. Because SDFs are
 continuous, slopes and corners resolve without contact-geometry edge cases that plague AABB

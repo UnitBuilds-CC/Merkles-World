@@ -1,5 +1,10 @@
 # 01 — Architecture overview
 
+**Status:** architecture specified; contracts **not** frozen. A layer whose subsystem doc cites an
+open `SPEC`/`OQ` is a description, not a build target.
+**Depends on:** [doc 00](00-vision.md), [docs/13](13-risks-open-questions.md), the ADR log.
+**Consumed by:** docs 02–14.
+
 The complete blueprint, one screen. Each layer has its own doc; this file is the contract
 between them.
 
@@ -86,12 +91,19 @@ The runtime never parses.
 | View-time state | `BlockState = f(Position, CurrentTick) ⊕ PlayerDelta` | O(1) evaluation; history irrelevant to unedited land |
 | Rendered state | `Final = S_base ⊕ M_local` | Base state overridden by sparse edits |
 | Epoch commit | `S_new_genesis = S_old_genesis ⊕ M_local`, then `M_local = ∅` | Sleep = compaction |
-| Render pass | `VoxelOutput = ComputeShader(XYZ, MerkleRoot_N) ⊕ LocalDelta` | Server broadcasts a 32-byte root, clients do the work |
+| Render pass | `pixels = Render(SlabState(FrustumSlabs), C_global)` — state arrives by buffer, the shader only projects it | Server broadcasts a 32-byte root, clients do the work |
 | Clock circuit | `state(t) = ⌊(t + φ) · ω⌋ mod 2` | A running clock costs zero ticks |
 | Factory output | `items = ∫[t_start → t_sleep] ProductionRate(t) dt` | Machines produce while nobody watches |
 | Epoch proof | `EpochHash = MerkleHash(BaseGenesisRoot ⊕ CommittedSlabs)` | One hash proves whole-world agreement |
 | Surface normal | `N = ∇SDF(p)` via central differences | Collision response without meshes |
 | Camera transform | `P_local = P_global − C_global` | Precision survives an infinite world |
+
+**Note on the render-pass row.** The source wrote it as
+`VoxelOutput = ComputeShader(XYZ, MerkleRoot_N) ⊕ LocalDelta` — the GPU deriving voxel state from a
+Merkle root. That form is **rejected** ([SPEC-02](13-risks-open-questions.md),
+[ADR-017](decisions.md)): `f(pos, epoch)` runs in deterministic Rust/WASM, because WGSL float math
+differs per adapter and two GPUs would produce two roots. The row above is the sanctioned reading;
+the original is preserved here so the correction is visible rather than silent.
 
 ## Invariants
 

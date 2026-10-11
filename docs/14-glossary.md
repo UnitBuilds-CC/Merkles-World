@@ -1,5 +1,9 @@
 # 14 — Glossary
 
+**Status:** index — this doc follows the others, never the reverse. If a definition here disagrees
+with the doc it cites, that doc is authoritative and this row is the bug.
+**Depends on:** docs 00–13.
+
 Terms and symbols used across the docs. Where a term is load-bearing, the canonical definition
 lives in the doc named here.
 
@@ -37,10 +41,10 @@ lives in the doc named here.
 | **Prompt-to-mod** | In-game LLM authoring that emits RON + WGSL + WASM, then runs the same validation path as a hand-written mod. | [08](08-wasm-modding.md) |
 | **Region** | 4096³ voxels, addressed by `RegionKey` (3×`i64`). The unit of the Merkle tree and of slab keying. | [02](02-coordinate-system.md) |
 | **RON** | Rusty Object Notation — the canonical in-repo authoring format (comments, trailing commas, maps 1:1 to structs). | [09](09-asset-pipeline.md) |
-| **Rollback** | Reverting an optimistic local edit by storing its previous `u64` back into its slab slot. | [03](03-state-ledger.md) |
+| **Rollback** | Reverting an optimistic local edit by storing its previous `u64` back into its slab slot. | [10](10-multiplayer.md) |
 | **Sector** | 16³ regions; the granularity of named event tags. | [02](02-coordinate-system.md) |
 | **SDF** | Signed distance function: negative inside, zero at surface, positive outside. The only geometry primitive. | [04](04-rendering.md) |
-| **Slab** | Pre-allocated contiguous fixed-size memory keyed by region. Writes are `O(1)` stores; resets are bump-pointer → 0. | [03](03-state-ledger.md) |
+| **Slab** | Pre-allocated contiguous fixed-size memory keyed by region. Writes are `O(1)` stores; resets are bump-pointer → 0. Its exact length and addressing are unsettled (**SPEC-09**). | [03](03-state-ledger.md) |
 | **Sphere tracing** | Raymarching where each step equals the SDF value — a guaranteed-empty distance. | [04](04-rendering.md) |
 | **Watch-list** | A region's registered interest in another region's field, for continuous drain/refill relationships. | [10](10-multiplayer.md) |
 | **WIT** | WASM Interface Types — the typed contract between the host engine and mods. | [08](08-wasm-modding.md) |
@@ -78,4 +82,3 @@ lives in the doc named here.
 | SPEC | internal contradiction in the design register — [13](13-risks-open-questions.md) |
 | SVO | sparse voxel octree (the original delta-mask storage idea, superseded by slabs) |
 | TPS | ticks per second (the server-lag metric Minecraft-style engines are judged by) |
-| VAD | virtual address descriptor (GPU memory model detail, doc 03/04) |

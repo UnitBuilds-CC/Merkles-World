@@ -243,7 +243,7 @@ whether 10 or 10,000,000 blocks changed.
 
 | Stage | Memory action | Latency |
 |-------|---------------|---------|
-| Frame 0 delta | bitpacked write to active slab slot | <1 ns |
+| Frame 0 delta | bitpacked write to active slab slot | one store, expected sub-ns; **measured** as `p99 < 1 µs` sustained at 10⁶ writes/sec (gate P1.2 / spike S2) |
 | Render/physics | slab pointer read directly | 0 ms (no decode) |
 | Epoch compaction | sequential Merkle hash pass over contiguous arrays | sub-ms batch |
 | Reset | bump pointer → 0, slab recycled | `O(1)` |
@@ -253,6 +253,10 @@ whether 10 or 10,000,000 blocks changed.
 
 **Re-open if** fragmentation across region boundaries bites (slabs are per-region, so this is
 mostly bounded).
+
+**Contingent on** [SPEC-09](13-risks-open-questions.md): the 64 KB / 1 MB sizes and the "packed
+`u64`" store are both written against a record layout that doc 02 shows cannot address the slab it
+describes. Spike S2 measures the sizes; SPEC-09 fixes the addressing.
 
 ---
 
@@ -307,7 +311,7 @@ stateful sequential logic (T-flip-flops, counters, registers, feedback loops). L
 with explicit state stored in the ledger are the proposed answer and must be specced before
 doc 06 is implementable.
 
-**Rejected.** Keeping block-CI A redstone (breaks lazy evaluation); "no electricity feature".
+**Rejected.** Keeping block-by-block CA redstone (breaks lazy evaluation); "no electricity feature".
 
 ---
 
@@ -347,11 +351,14 @@ pre-baked SDF→mesh for static props, kept out of the authoring contract).
 **Context.** Hand-writing a shader per entity doesn't scale to Minecraft-level content diversity,
 even for agents.
 
-**Decision.** Define a standard node grammar for shapes and textures
-(`Combine(Sphere(r), Cylinder(h), Noise(freq))`, with operators like `SmoothUnion`,
-`RoundedBox`, `VoronoiScales`). One master WGSL shader interprets these trees; agents emit small
-declarative files instead of raw shader source. "Generate 50 distinct procedural trees" becomes
-50 config files, testable in parallel.
+**Decision.** Define a standard node grammar for shapes and textures — the source's example is
+`Combine(Sphere(r), Cylinder(h), Noise(frequency))` (GS 955), extended here with operators like
+`SmoothUnion`, `RoundedBox`, `VoronoiScales` (GS 1002). One master WGSL shader interprets these
+trees; agents emit small declarative files instead of raw shader source. The source's ask —
+*"Generate 50 distinct procedural tree functions with varying leaf-noise algorithms"* (GS 884) —
+becomes 50 config files, testable in parallel. (The source wrote this as a
+*JSON* schema; ADR-014 makes **RON** the canonical authoring format, with JSON as an accepted
+alias input.)
 
 **Rejected.** One hand-written GLSL file per entity (content scaling bottleneck); a visual
 node-graph editor (an art tool in disguise — see ADR-011).
@@ -387,8 +394,11 @@ sees the WIT contract, never source.
 platform-locked); Java-style bytecode injection (we have no bytecode to inject); C++ header
 mods (breaks portability).
 
-**Cost.** WASM's linear-memory model pushes us to 32-bit addressing (`memory64` is still new),
-which is exactly why coordinates are 2×i64, not 3×i64 ([SPEC-03](13-risks-open-questions.md)).
+**Cost.** WASM's linear-memory model keeps v1 addressing at 32 bits (`memory64` is still new), so
+the WIT boundary hands mods **slab-relative integer handles**, never pointers and never absolute
+world coordinates — a mod asks the host about an offset inside a region it was given. That is a
+consequence of SPEC-03/SPEC-09's packing question, not a reason to shrink `RegionKey`, which stays
+3×`i64` ([doc 02](02-coordinate-system.md) rejects 2×`i64` key packing).
 
 **Re-open if** a needed host capability can't cross the WIT boundary cheaply — solve it with a
 narrow host function, don't abandon the sandbox.
@@ -436,14 +446,16 @@ authoring (unreadable, un-diffable); one blessed text format only (needless modd
 | Asset/SDF definitions, scene graphs, network payloads | **FlatBuffers** (with FlexBuffers for dynamic cases) | zero-copy access at byte offsets, direct `memcpy` into storage buffers, `.fbs` generates Rust/WASM/Python/C++ bindings |
 | Entity/material/biome configs | static data exported from WASM (`#[repr(C)]` arrays) | `O(1)` pointer read from linear memory; the compiler enforces types, so no runtime schema errors |
 | Ledger delta records | bitpacked `u64` | hashes computed on raw integers in SIMD registers, no string conversion, minimal storage |
-| Wire deltas | `{SlabID, u16 offset, u64 value, VectorClock}` | no global coordinate travels on the wire |
+| Wire deltas | `{region-slot index, intra-slab offset, packed value}` — ordered by `(HLC, PeerID)` | no global coordinate travels on the wire; field widths pending [SPEC-09](13-risks-open-questions.md) |
 
 **Rejected.** Cap'n Proto (better mutability than we need; FlatBuffers' tooling and GPU-upload
-story win). BSON (needs a parse step). Custom bit layouts everywhere (unmaintainable).
+story win). BSON (needs a parse step). Custom bit layouts *everywhere* — one audited packed
+record is accepted, a different hand-rolled layout per subsystem is not.
 Runtime JSON (ADR-014).
 
-**Contingent on** [SPEC-01](13-risks-open-questions.md) — the exact bit layout and where the
-region identifier lives.
+**Contingent on** [SPEC-03](13-risks-open-questions.md) and [SPEC-09](13-risks-open-questions.md) —
+the exact bit layout and where the region identifier lives. (SPEC-01 settles only the
+`LocalOffset` storage width.)
 
 ---
 
@@ -468,9 +480,10 @@ coordinates fail at distance (the Far Lands: jitter, tearing, and *broken Merkle
   physics gradients relative to `-Y`.
 
 **Status caveat.** The source's own numbers conflict (12-bit vs `u16` offsets; 48-bit packed
-delta vs `i64` coordinates; Y-axis range). Those are SPEC-01/03 — resolve them, *then* freeze
-`contracts/coords.rs` as the first artifact of Phase 1 (the user asked for exactly that, and it
-is the one part of the design with nothing downstream of it that can be built first).
+delta vs `i64` coordinates; slab geometry; Y-axis range). Those are SPEC-01/03/06/**09** — resolve
+them, *then* freeze `contracts/coords.rs` as the first artifact of Phase 1 (the user asked for
+exactly that, and it is the one part of the design with nothing downstream of it that can be built
+first). SPEC-09 in particular means the *record* and the *slab* cannot be frozen independently.
 
 **Rejected.** Single 64-bit float world coordinates (precision drift); f32 everywhere (breaks
 hashing past ~10,000 units); 3×`i64` per delta (192 bits and a WASM ABI liability).
@@ -491,7 +504,7 @@ everywhere. The ledger's verification promise dies at the shader boundary.
 
 1. All **canonical** state — voxel material IDs, macro fields, event tags, circuit outputs,
    physics resolution, hashes — is computed by deterministic Rust (host) and/or WASM (mods),
-   using integers (or fixed-point, or the explicit float ops that `wiggle` allows) only.
+   using integers (or fixed-point, or deterministic WASM float ops whose result nothing hashes) only.
 2. The GPU is a **projector, not an authority**. It may read state produced by (1); it may
    *never* be the sole source of a value that the simulation or another peer depends on.
 3. Shader math may be approximate/adapter-dependent only for visuals that can't desync:
@@ -506,8 +519,9 @@ everywhere. The ledger's verification promise dies at the shader boundary.
 unreproducible saves). Rejected as *canonical* path only — the raymarcher still does the visual
 evaluation.
 
-**Verification.** The Bitwise Determinism Suite (spike S3 / gate P1.5) is the acceptance test
-for this ADR: same input on N2/N3060/Linux-Mesa/M1-Browser must produce identical bytes.
+**Verification.** The Bitwise Determinism Suite (spike S3 / gate P1.5) is the acceptance test for
+this ADR: the same input on **N2600 / RTX 3060 / Linux-Mesa / M1-browser** (the four targets named
+in doc 03 and doc 11) must produce identical bytes.
 
 ---
 
@@ -571,13 +585,16 @@ Every client already runs identical deterministic WASM logic and identical SDF c
 **Decision.** Broadcast intent:
 
 ```
-ActionTx = ⟨SequenceID, EntityID, TickEpoch, ActionPayload, Signature⟩
+ActionTx = ⟨SequenceID, ActorID, Kind, Target, Payload, TickEpoch, Signature⟩
 ```
 
-Payload types: **slab delta mutate** (`RegionKey`, `u16 offset`, `u64 packed`) for breaks/places;
-**entity kinematics** (position, velocity, quaternion) for movement; **WASM signal trigger**
-(`ModuleID`, `FunctionIndex`, bytes) for switches, spells, inventories. Remote peers apply the
-same mutation at the same spatial coordinate in their own slab.
+`SequenceID` is the `(HLC, PeerID)` pair of ADR-027 / doc 10 — causal order inside an epoch is
+Lamport, not wall-clock. Payload types: **slab delta mutate** (per-epoch region-slot index, intra-slab
+offset, packed value — width pending [SPEC-09](13-risks-open-questions.md)) for breaks/places;
+**entity kinematics** (camera-relative position, velocity, quaternion) for movement; **WASM signal
+trigger** (`ModuleID`, `FunctionIndex`, bytes) for switches, spells, inventories. Remote peers resolve
+the slot through the epoch header's slot table and apply the same mutation at the same spatial
+coordinate in their own slab — a raw `RegionKey` is never serialized on the wire (doc 02).
 
 **Rejected.** Authoritative server streaming chunk bytes (bandwidth, and it discards the whole
 point of deterministic state); sending raw deltas without a `TickEpoch` (impossible to validate
@@ -594,7 +611,8 @@ arrive, in sequence).
 
 **Topology is pluggable over the same `ActionTx` stream:** authoritative dedicated server
 (processes, validates against WASM rules, holds the canonical Merkle root) or P2P mesh with
-CRDT/vector-clock consensus for co-op friend groups.
+per-epoch Lamport/HLC ordering and field-level CRDT merge rules for co-op friend groups.
+Per-voxel vector clocks are rejected as unaffordable (doc 03, doc 10).
 
 ---
 
@@ -607,8 +625,9 @@ verifying every voxel?
 `EpochHash = MerkleHash(BaseGenesisRoot ⊕ CommittedSlabs)` and peers exchange the 32-byte roots.
 Matching roots ⇒ worlds bitwise identical across voxels, WASM memory and circuit states.
 Mismatch ⇒ binary-search the Merkle branches to pinpoint the affected 4096³ region and resend
-only that region's slab bytes. Conflict ordering within a region uses vector clocks (per-voxel
-vector clocks are explicitly out of the question — too expensive).
+only that region's slab bytes. Conflict ordering within a region uses the same per-region
+Lamport/HLC order as doc 10 (vector clocks, at any granularity, are explicitly out of the
+question — too expensive).
 
 **Contingent on** ADR-017 (without a deterministic canonical path this mechanism fires
 constantly) and [SPEC-08](13-risks-open-questions.md) (what counts as "the" epoch in
@@ -672,6 +691,11 @@ which is roughly 3 weeks, not 3 months.
 
 **Rejected.** Hand-writing Vulkan; adopting a mesh-based voxel engine wholesale.
 
+**Estimate honesty.** The source's only figures are "2–3 months" for a from-scratch raymarcher and
+a claimed 6–8 week saving from reuse (GS 910, GS 968). "**Roughly 3 weeks**" above is **our**
+estimate, with the same evidentiary standing as every other number in the timeline table
+(doc 11 § Timeline honesty) — spike S1/S9 is what turns it into data.
+
 **Needs.** Spike S1/S9 confirm. If a third-party SDF/raymarcher runtime exists that meets the
 budget, prefer it.
 
@@ -681,15 +705,18 @@ budget, prefer it.
 
 **Status: proposed.**
 
-**Context.** "The simulation ledger doesn't force surrounding miles to recalculate; it just
-registers a mutation event." The unresolved question is what an *epoch* means once several
-players sleep at different moments ([SPEC-08](13-risks-open-questions.md)).
+**Context.** *"The simulation ledger doesn't immediately force surrounding miles of terrain to
+recalculate on the CPU. It simply registers a new state mutation event"* (GS 577). The unresolved
+question is what an *epoch* means once several players sleep at different moments
+([SPEC-08](13-risks-open-questions.md)).
 
 **Decision (proposed).** One global epoch advances when a configurable quorum of online players
 is asleep (default 100% for co-op, 50% for servers, or a wall-clock fallback for hardcore
-servers). Actions between epochs accumulate in a **transaction pool** (mempool) ordered by
-vector clock. Epoch commitment applies the pool against the macro rules for Δt, bakes deltas,
-and emits one new root.
+servers). Actions between epochs accumulate in a **transaction pool** (mempool) ordered by a
+**Lamport / hybrid logical clock**: `SequenceID = (HLC, PeerID)`, so causal order inside an epoch
+is agreed without wall-clock sync and without per-voxel vector clocks (rejected as unaffordable).
+Epoch commitment applies the pool against the macro rules for Δt, bakes deltas, and emits one new
+root.
 
 **Rejected.** Per-player epochs (worlds diverge — the guarantee dies); immediate global
 commit per action (the cost this architecture exists to avoid).
@@ -700,9 +727,10 @@ commit per action (the cost this architecture exists to avoid).
 
 **Status: proposed.**
 
-**Context.** The source says "cryptographic hash (SHA-256 style)" without choosing one. The
-hash is on the hot path of both compaction and verification, and the design's whole "sub-ms
-batch hash pass" claim depends on that choice.
+**Context.** The source asks for *"cryptographic hashes (like SHA-256)"* (GS 323) and labels the
+ledger step simply `Cryptographic Hash` (GS 274) — it never chooses an algorithm. The hash is on the
+hot path of both compaction and verification, and the design's "Sub-millisecond batch pass" claim
+(GS 1606) depends on that choice.
 
 **Decision (proposed).** **BLAKE3-256** (32-byte digests): orders of magnitude faster than
 SHA-256, SIMD and intrinsically parallel (perfect for hashing contiguous slab arrays and Merkle

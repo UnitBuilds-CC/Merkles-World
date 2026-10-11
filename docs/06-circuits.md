@@ -67,7 +67,7 @@ simulated; its output was computed. See the stage-2 accrual in
 | Circuit entirely in view | solved eagerly, every change |
 | Circuit off-screen, only inputs change | solved lazily at next observation |
 | Circuit off-screen with macro outputs | accrues into the epoch pool; integral at commit |
-| Circuit in view but **unchanged** | **still solved every frame** — see [OQ-28](13-risks-open-questions.md): the "only re-solve on change" rule would freeze a clock's displayed state |
+| Circuit in view but **unchanged** | **still solved every frame.** Skipping it when inputs didn't change is *our* plausible-looking optimization, not a source rule (the source never specifies invalidation — [SPEC-07](13-risks-open-questions.md)): `f(I, t)` is time-parameterized, so a clock's output changes with no input change at all. Not adopted until [OQ-28](13-risks-open-questions.md) settles it |
 
 ## Node taxonomy
 

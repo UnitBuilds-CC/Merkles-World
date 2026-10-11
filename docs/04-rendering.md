@@ -100,19 +100,32 @@ Legs use `abs(p.x)` for bilateral symmetry — mirroring in the domain is the ch
 | Distance LOD | fewer SDF terms for distant entities; epsilon grows with distance |
 | Tile-based marches | group pixels that hit the same region |
 
-**Budget to be met, not assumed** (target 1080p/60, mid-range dGPU): geometry passes ≤ 8 ms,
-shading ≤ 4 ms, culling ≤ 1 ms, upload ≤ 1 ms, ~3.6 ms headroom.
+**Budget to be met, not assumed** (target 1080p/60 on a mid-range dGPU → a 16.7 ms frame):
+geometry ≤ 8 ms + shading ≤ 4 ms + culling ≤ 1 ms + upload ≤ 1 ms = 14 ms committed, **2.7 ms
+headroom**. The source never allocated a frame; every one of these five numbers is ours and all
+five are provisional until spike S1 measures a real frame-time curve.
 
 What the design conversation actually claims: raymarching means every pixel steps through space
 evaluating functions, and *"if you have 500 procedural entities (pigs, trees, rocks) across a
 landscape, evaluating every entity's distance function for every ray step will instantly drop
-your framerate to single digits"* — while *"simple SDFs render fast"* and *"combining hundreds of
-complex SDFs in a single GPU pass can tank frame rates"*.
+your framerate to single digits"* (GS 1618) — while *"simple SDFs (cubes, spheres, pigs) render
+fast"* and *"combining hundreds of complex SDFs in a single GPU pass can tank frame rates"*
+(GS 893).
 
-**Our derivation, not the source's:** at 1080p, if entities cover ~30 px each and the march takes
-~10 steps, 500 visible entities is on the order of 10⁸–10⁹ SDF evaluations per frame. That is the
-arithmetic behind the "single digits" claim and behind the BVH being a requirement, not an
-optimization — and it is exactly what spike S1 must measure instead of estimate.
+**Our derivation, not the source's.** 1080p is 1920×1080 = **2.07×10⁶ pixels**; take ~10 march
+steps per pixel and 500 visible entities:
+
+| Case | Arithmetic | Evaluations / frame |
+|------|------------|---------------------|
+| Naive — every pixel tests every entity at every step | 2.07×10⁶ × 500 × 10 | **1.0×10¹⁰** (6.2×10¹¹ / s at 60 fps) |
+| Perfect culling — entities cover ~30 px each, so only those pixels pay | 500 × 30 × 10 | **1.5×10⁵** |
+| Realistic BVH — a bounded candidate set (~8 entities) per stepped pixel | 2.07×10⁶ × 8 × 10 | **~1.7×10⁸** |
+
+Naive versus the perfect-culling floor is **~7×10⁴** — that gap is what the "single digits" claim
+is really about, and why the BVH (ADR-024) is a requirement rather than an optimization. The
+realistic BVH row is only ~60× below naive, and that 60× is the reduction the 14 ms budget
+actually depends on. Every row is a multiplication of guesses — spike S1 replaces all three with a
+measured curve.
 
 > Every number in this section is a target or a derivation. The transcript's "60 FPS" is
 > aspirational; spike S1 replaces all of this with a measured frame-time curve.

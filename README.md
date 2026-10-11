@@ -48,10 +48,10 @@ Public wiki mirror of these docs: <https://github.com/UnitBuilds-CC/Merkles-Worl
 |------|-------|
 | Architecture specified | **done** — design level only, all 15 docs + ADR log written |
 | Implementation | **none** — the repo contains documentation and contracts-to-be, no code |
-| Spec conflicts to resolve before coding (SPEC-01…08) | **7 open**, 1 locked (SPEC-02 → ADR-017) — see [docs/13](docs/13-risks-open-questions.md) |
+| Spec conflicts to resolve before coding (SPEC-01…09) | **9 registered** — 1 locked (SPEC-02 → ADR-017), 6 proposals, 2 open (**SPEC-09** blocks the coords + record contracts, SPEC-07 blocks circuit caching) — see [docs/13](docs/13-risks-open-questions.md) |
 | Open questions (OQ-01…43) | **43 tracked**; OQ-01 (macro causality) and OQ-02 (stateful circuits) gate the most code |
 | Blocking artifacts (A-01…A-09) | **not started** — [docs/11](docs/11-roadmap.md) |
-| Research spikes (S1–S9) | **not started**; S7 (macro causality) is the highest-risk |
+| Research spikes (S1–S10) | **not started**; S7 (macro causality) is the highest-risk |
 | Phase 0 / Phase 1 engine | **not started** |
 | Phase 2 game content | **blocked** by Phase 1 |
 | Repo | published: [UnitBuilds-CC/Merkles-World](https://github.com/UnitBuilds-CC/Merkles-World) (public) |

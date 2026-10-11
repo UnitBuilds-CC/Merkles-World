@@ -4,32 +4,42 @@
 
 ## Why this document exists
 
-> *"LLMs don't fail at writing code; they fail at coordinating."*
+> *"Having 10 uncoordinated agents write code leads to constant merge conflicts, API mismatches,
+> and broken interfaces."* — GS 924
 
-The design conversation's own reality check: with 10 uncoordinated agents you get merge
-conflicts, API mismatches, broken interfaces and non-terminating debug loops, and as the codebase
-grows agents write code that breaks patterns set by other agents (it even named this
-**"architectural drift"** as one of three timeline-dictating bottlenecks). The fix is not better
-prompts; it is a harness.
+That is the design conversation's own reality check, and this document exists to answer it. Its
+enumerated failure modes are merge conflicts, API mismatches and broken interfaces (GS 924),
+agents getting **"stuck in non-compiling loops"** (GS 1628), **"GPU debugging loops"** listed as
+the first of three timeline-dictating bottlenecks (GS 905), and — as the codebase grows to tens of
+thousands of lines — agents "start writing code that breaks design patterns set by other agents",
+which the source calls **Context Window Drift & Architectural Drift** (GS 888). The fix the source
+names is not better prompts; it is a harness plus a specification document every agent reads
+before emitting code (GS 889).
 
 ## Roles
+
+**Two id families, never interchangeable:** **A1–A10** are the agents below. **A-01…A-09** are the
+blocking *artifacts* in [docs/11](11-roadmap.md). `A1` writes `contracts/`; `A-01` is the file it
+writes. When a commit or a doc cites a bare `A-0n`, it means an artifact.
 
 | Agent | Role | May write | May not |
 |-------|------|-----------|---------|
 | **A1 Architect** | owns `contracts/` and the dependency DAG; reviews every contract change | contracts, docs | implementation code |
-| **A2 Ledger** | Merkle tree, compaction, event log | `src/ledger` | — |
-| **A3 Memory** | slabs, allocators, tiering, LRU | `src/memory` | — |
-| **A4 Renderer** | WGSL master interpreter, BVH, frame budget | `src/render` | CPU-side state |
-| **A5 Physics** | SDF gradients, collision, audio tracing | `src/physics` | — |
-| **A6 Circuits** | graph compiler, topology solver, jump functions | `src/circuits` | — |
-| **A7 Simulation** | macro fields, rule library, Δt catch-up | `src/sim` | — |
-| **A8 WASM host** | WIT bindings, sandbox, fuel metering, hot reload | `src/host` | — |
+| **A2 Ledger** | Merkle tree, compaction, event log | `crates/ledger` | — |
+| **A3 Memory** | slabs, allocators, tiering, LRU | `crates/memory` | — |
+| **A4 Renderer** | WGSL master interpreter, BVH, frame budget | `crates/render` | CPU-side state |
+| **A5 Physics** | SDF gradients, collision, audio tracing | `crates/physics` | — |
+| **A6 Circuits** | graph compiler, topology solver, jump functions | `crates/circuits` | — |
+| **A7 Simulation** | macro fields, rule library, Δt catch-up | `crates/sim` | — |
+| **A8 WASM host** | WIT bindings, sandbox, fuel metering, hot reload | `crates/host` | — |
 | **A9 Content** | node trees, RON schemas, mobs, biomes (Phase 2) | `content/` | engine code |
 | **A10 CI/CD** | runs the gate suite, rejects breaking merges, routes errors back | `tools/ci` | feature code |
 
 Two humans sit above this: the **System Architect** (owns `docs/decisions.md`, approves contract
 changes, breaks ties) and the **Producer** (owns scope and the gate list). The user is the System
-Architect.
+Architect. Where the table says A1 "may write docs", that means *draft*: an ADR is proposed by A1
+and **recorded only by the System Architect**, and no `contracts/` change merges without that
+approval.
 
 ## The loop
 
@@ -42,11 +52,12 @@ Architect.
         │  A2–A9: implement in their own module         │  ← cannot edit contracts/
         └──────────────────────┬──────────────────────┘
                                │ PR
-        ┌──────────────────────▼──────────────────────┐
-        │  A10 CI/CD: cargo test · clippy -D warnings   │
-        │   fmt --check · headless WGSL frame hash ·    │
-        │   WASM ABI + determinism check · Merkle vectors│
-        └──────┬────────────────────────────┬─────────┘
+        ┌──────────────────────▼──────────────────────────┐
+        │  A10 CI/CD: cargo test · clippy -D warnings     │
+        │   fmt --check · headless WGSL compile+render    │
+        │   frame hash informational (R4) — never a gate  │
+        │   WASM ABI + determinism check · Merkle vectors │
+        └──────┬────────────────────────────┬─────────────┘
                │ green                      │ red
         merged │                            ▼
                │            error output fed back to the
@@ -60,9 +71,12 @@ Architect.
 ## Gate list = the CI contract
 
 The suite is exactly the validation gates written in docs 02–10 (C\*, P1.\*, R\*, SM\*, E\*, PH\*,
-AU\*, AN\*, DE\*, W\*, AS\*, M\*). Gates are **code**: a gate that has no test is marked
-`unverified` in doc 11 and cannot be claimed as passed. This is the mechanism that keeps the
-design's many quantitative claims from silently becoming assumptions.
+AU\*, AN\*, DE\*, W\*, AS\*, M\*). Gates are **code**: a gate is *passed* only when `tools/ci/`
+contains a test for it and that test's real output has been pasted into the PR
+([AGENTS.md](../AGENTS.md) §7). Until then no doc, commit message, or status board may describe it
+as green — doc 11 lists the gates and their definitions, and the README status board is the only
+place that records state. This is the mechanism that keeps the design's many quantitative claims
+from silently becoming assumptions.
 
 ## Merge rules
 
@@ -95,7 +109,7 @@ patch is the fastest way to burn a week.
 ```
 contracts/        ← types, .fbs, .wit, wgsl signatures, error enums  (read-only for A2–A9)
 crates/
-  coords/         (A1/A2)   doc 02 — the first artifact built
+  coords/         (A2)      doc 02 — contract file owned by A1
   ledger/         (A2)      doc 03
   memory/         (A3)      doc 03
   render/         (A4)      doc 04   (WGSL lives here)
@@ -110,8 +124,11 @@ tools/ci/         ← gate harness (A10)
 docs/             ← this documentation
 ```
 
-**`contracts/coords.rs` is artifact A-01 and is written first** — the design conversation said the
-coordinate system "should probably be the first part of the engine", and doc 11 keeps it that way.
+**`contracts/coords.rs` is artifact A-01 and the first contract to be *frozen*** — the design
+conversation said the coordinate system "should probably be the first part of the engine" (GS 1690).
+Freezing it is gated, not first-in-line: doc 02 records that **SPEC-01/03/06/09 must be resolved
+first**, and doc 11's order is resolve → spike → freeze → build. Drafting A-01 early is fine and
+encouraged; *locking* it is what waits for those IDs.
 
 ## Tooling choices to make (**[OQ-41](13-risks-open-questions.md)**)
 
