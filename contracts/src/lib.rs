@@ -11,3 +11,6 @@
 
 #[path = "../coords.rs"]
 pub mod coords;
+
+#[path = "../errors.rs"]
+pub mod errors;
