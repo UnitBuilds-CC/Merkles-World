@@ -70,16 +70,18 @@ that two agents could implement against it without talking.
 
 ### Phase 0 status — 2026-10-11
 
-Run locally on x86-64 Windows at `rustc 1.92.0 (ded5c06cf 2025-12-08)`. Each row is the command's
-real result, not a plan; per-gate evidence lives in doc 02 § Validation gates.
+Measured twice: locally on x86-64 Windows, and on CI (`.github/workflows/ci.yml`, run `38124937828`)
+on x86-64 Linux, x86-64 Windows and ARM64 macOS — both at `rustc 1.92.0 (ded5c06cf 2025-12-08)`.
+Each row is the command's real result, not a plan; per-gate evidence lives in doc 02 § Validation gates.
 
 | Check | Command | Result |
 |-------|---------|--------|
 | Formatting | `cargo fmt --all -- --check` | clean (no diff) |
-| Lints | `cargo clippy --all-targets -- -D warnings` | `Finished` — zero warnings; workspace lints deny `clippy::all`, `unsafe_code = "forbid"` |
+| Lints | `cargo clippy --all-targets -- -D warnings` | `Finished` — zero warnings; workspace lints deny `clippy::all`, `unsafe_code = "forbid"`, and the hot-path lints `alloc_instead_of_core` / `std_instead_of_core` (their hyphenated spelling is deprecated cargo manifest syntax: it warns today and is documented to stop working in a future edition, which would silently drop the deny — verified the underscore form still fires by injecting a `std::mem::swap` probe and watching clippy exit non-zero) |
 | Tests | `cargo test -q` | `4 passed` (contracts: code uniqueness, band placement, stable vectors, determinism routing) + `11 passed` (coords: C1/C2/C3/C4 gates, SPEC-01 masking, sector + SlabKey identity, `contract_matches_spec_document`) |
+| CI, all three architectures | `gh run view 38124937828` | 6 jobs green: gates × (x86-64 Linux, x86-64 Windows, ARM64 macOS), `wasm32-unknown-unknown` build, `cargo-deny`, docs integrity. Each of the three gate jobs reports the same `test result: ok. 4 passed` and `test result: ok. 11 passed`, and prints the six C2 vectors **bit-identical** (`V0 0xa4659597a9d8aeca` … `V5 0x8e6da94e370cbc70`) with C4 `max \|f32 − exact\| = 0e0` at radii 512 / 2048 / 4096 on every one of them |
 | `no_std` / WASM | `cargo build --target wasm32-unknown-unknown -p contracts -p coords` | `Finished` — the `#![no_std]` guard on `contracts/` still bites |
-| C2 vectors | `cargo run --release --example gate_vectors` | prints the six frozen `u64` hashes recorded in doc 02 |
+| C2 vectors | `cargo run --release --example gate_vectors` | prints the six `u64` digests that `c2_test_vectors_are_frozen` pins as literals in `crates/coords/tests/gates.rs` (doc 02 § C2 names the test, not the values) |
 | C4 demo | `cargo run --release --example camera_f32_demo` | max error `0` at radii 512 / 2048 / 4096; the cast-then-subtract counterfactual returns `0.0` for one voxel at 10⁹ |
 | Dependency policy | `cargo deny check all -s` | `advisories ok: 0 errors` / `bans ok: 0 errors` / `licenses ok: 0 errors, 11 notes` (an empty graph never encounters an allow-listed license; `unused-allowed-license` flips those to warnings with the first real dependency) / `sources ok: 0 errors`. The graph is empty, so this is prophylactic; the licence itself is still [OQ-43](13-risks-open-questions.md) |
 | Doc integrity | `node tools/check_docs.mjs` | `18 files, 221 local links, 44 OQ + 9 SPEC + 29 ADR + 9 artifacts + 10 spikes defined` → `OK: no findings` |
