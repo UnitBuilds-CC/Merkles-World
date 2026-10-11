@@ -193,11 +193,14 @@ for (const [f, t] of text) {
 // The project's commit identity (UnitBuilds <ian@unitbuilds.com>, AGENTS.md §8) is deliberate and
 // is not a personal path, so it is not in this list. Neither is any operator username literal:
 // this file is published, so it catches *home paths* generically instead of naming an account.
+// The one exempt account is `runner`, the GitHub-hosted user: docs quote Actions log lines, and
+// `/Users/runner/work/…` is a rented VM's path, not anybody's machine. Every other username in
+// those positions is still a finding.
 const FORBIDDEN = [
   [/\b[A-Za-z]:\\Users\\/g, "a Windows user-home path"],
   [/\/c\/Users\//g, "a Git-Bash user-home path"],
-  [/\/Users\/[A-Za-z0-9._-]+\//g, "a macOS user-home path"],
-  [/\/home\/[A-Za-z0-9._-]+\/(?!\/)/g, "a Linux user-home path"],
+  [/\/Users\/(?!runner\/)[A-Za-z0-9._-]+\//g, "a macOS user-home path"],
+  [/\/home\/(?!runner\/)[A-Za-z0-9._-]+\/(?!\/)/g, "a Linux user-home path"],
   [/<<(<<+)|>>(>>+)/g, "a merge-conflict marker"],
   [/\b(TODO|TBD|FIXME|lorem ipsum)\b/g, "an unfinished marker"],
 ];
