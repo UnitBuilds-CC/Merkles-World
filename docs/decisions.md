@@ -37,7 +37,7 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 | [027](#adr-027--epoch-scoped-transaction-pool-for-multiplayer) | Epoch-scoped transaction pool for multiplayer | proposed |
 | [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | **locked 2026-10-11** — signed off: locks [SPEC-04](13-risks-open-questions.md)'s hashing half and makes BLAKE3 the first external dependency the workspace takes |
 | [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **locked 2026-10-11** — signed off; resolves SPEC-09 |
-| [030](#adr-030--merkle-tree-shape-arity-child-order-and-the-empty-rules) | Merkle tree shape: arity, child order, empty rules, byte order | proposed — ADR-028's delegated half; artifact A-10 (`contracts/tree.rs`) is written against it and needs sign-off |
+| [030](#adr-030--merkle-tree-shape-arity-child-order-and-the-empty-rules) | Merkle tree shape: arity, child order, empty rules, byte order | **locked 2026-10-12** — signed off after `crates/ledger` computed and published the root vectors; freezes artifact A-10 and makes a rule change a shape break |
 
 ---
 
@@ -829,13 +829,36 @@ epoch legitimately needs more than 65,536 regions and partitioning proves worse 
 
 ## ADR-030 — Merkle tree shape: arity, child order, empty rules, byte order
 
-**Status: proposed 2026-10-11.** ADR-028 locked the digest and said in terms that it did *not* lock
-the structure the digest is taken over; [docs/03 § The tree shape](03-state-ledger.md) and **artifact
-A-10** (`contracts/tree.rs`) are that missing half. The shape is written down *before* the hasher
-exists, because every Phase 1 gate downstream (P1.3, P1.5, P1.6) is meaningless without an
-addressable root — but `crates/ledger`, the crate that will implement these rules, is **not in the
-tree**, and sign-off is still owed, so **changing a rule after the vectors are published
-is a shape break**: every epoch root in every world changes, and the published vectors move with it.
+**Status: proposed 2026-10-11, locked 2026-10-12.** ADR-028 locked the digest and said in terms that it
+did *not* lock the structure the digest is taken over; [docs/03 § The tree shape](03-state-ledger.md)
+and **artifact A-10** (`contracts/tree.rs`) are that missing half. The shape was written down *before*
+the hasher existed, because every Phase 1 gate downstream (P1.3, P1.5, P1.6) is meaningless without an
+addressable root; `crates/ledger` has since landed as the workspace's first crate with behaviour, and
+it is what made this sign-off a decision rather than a hope — it computed the fifteen digests in
+[docs/03 § The published vectors](03-state-ledger.md), and CI printed them byte-identically on
+x86-64 Linux, x86-64 Windows and ARM64 macOS (run `38181630859`).
+
+**What writing the hasher settled before sign-off.** Two halves this ADR left as prose that a second
+implementation could have read two ways:
+
+- *"LE fields of `EpochHeader`"* named no field. It is now `epoch_index` then `record_count`, and the
+  reason matters: `base_genesis_root` **is** the epoch root's `genesis_root` and `event_log_root`
+  **is** its `event_list_root`, so they enter once from the header instead of twice as copies, and
+  `region_slots` is the slot table's source rather than a fifth commitment.
+- *"`(x, y, z, append)` lexicographic, which is the same order the octree walks"* was simply false —
+  the walk is Z-order. It does not move any root, because the root is position-keyed, and
+  `region_root_is_position_keyed_not_arrival_keyed` measures that instead of assuming it. The claim is
+  corrected in docs/03 and in A-10's own header comment; `crates/ledger::walk_less` sorts by octant
+  index per level for the builder's own contiguity, not for the digest.
+
+**What the sign-off does *not* settle.** [OQ-45](13-risks-open-questions.md) still decides what the 12
+payload bits mean — the shape hashes them opaquely, which is precisely why the shape could freeze
+first. [OQ-27](13-risks-open-questions.md) still decides the base rule set, and `base_rule_id = 0` is
+the recorded fact that it has not been chosen: fixing it changes `GENESIS` and every world root under
+it. [OQ-44](13-risks-open-questions.md) is now *live* rather than prospective: the digest entry point
+is `node_parts(kind, level, &[&[u8]])`, bytes in and digest out, with no type between a caller and a
+preimage to refuse an `f32`'s bit pattern. And **from this line onward a changed rule is a shape
+break**: every epoch root in every world moves, and the published vectors move with it.
 
 **Context.** Two implementations can agree on BLAKE3, on A-03's record layout and on the seed, and
 still compute different epoch roots, because a root is a *traversal* of a structure, not a value.
@@ -901,9 +924,10 @@ silently, which is the point.
 
 **Consequences.** **A-10** joins the artifact queue
 ([docs/11](11-roadmap.md)) and the glossary ([docs/14](14-glossary.md)) as the contract every
-hasher, WASM binding and peer must agree on; `crates/ledger` — **not yet in the tree** — is the crate
-whose tests will become the published vectors ADR-028 promised, and until it exists this ADR pins
-rules and no digest. Gate **P1.5**'s cross-target root
+hasher, WASM binding and peer must agree on; `crates/ledger` is that hasher, and its
+`root_vectors` example plus `published_vectors_are_frozen` are the published vectors ADR-028 promised
+— three machines already agree on `EPOCH_0`, and gate P1.5's remaining half is the fourth target and a
+WASM runner ([OQ-41](13-risks-open-questions.md)). Gate **P1.5**'s cross-target root
 comparison is only meaningful from here on — before A-10 there was no single "same root" to compare.
 Gate **P1.3** inherits a
 concrete cost model (an epoch's `N` edits recompute at most `12N` branch hashes), which stays a

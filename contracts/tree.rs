@@ -1,4 +1,4 @@
-// contracts/tree.rs — artifact A-10, DRAFT 2026-10-11: the Merkle tree **shape**.
+// contracts/tree.rs — artifact A-10, FROZEN 2026-10-12 (ADR-030 signed off): the Merkle tree **shape**.
 //
 // ADR-028 (docs/decisions.md, locked 2026-10-11) chose the digest — BLAKE3-256, 32 bytes — and said
 // plainly that it did *not* choose the shape. Arity, child order, the rule for an absent subtree and

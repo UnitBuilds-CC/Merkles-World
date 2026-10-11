@@ -529,7 +529,10 @@ Merkle–Damgård constructions in general (length-extension liability).
 
 ## The tree shape
 
-**Drafted 2026-10-11 as artifact A-10 (`contracts/tree.rs`) — recorded in [ADR-030](decisions.md).**
+**Drafted 2026-10-11 as artifact A-10 (`contracts/tree.rs`) — recorded in [ADR-030](decisions.md),
+signed off and frozen 2026-10-12** once `crates/ledger` computed the vectors below and the two
+under-specified halves (which `EpochHeader` fields, and what order the octree walks) were settled by
+writing the code rather than by re-reading the prose.
 § Digest chose the hash; this chooses the structure fed to it. Six rules, and all six are load-bearing:
 get one wrong and two honest machines produce different roots from the same world, in the same code,
 with nothing raising an error.
@@ -731,7 +734,7 @@ Mirrored verbatim from `contracts/tree.rs`; the `tree_contract_matches_spec_docu
 `contracts/tests/tree_shape.rs` fails the build if the two diverge.
 
 ```rust
-// contracts/tree.rs — artifact A-10, DRAFT 2026-10-11: the Merkle tree **shape**.
+// contracts/tree.rs — artifact A-10, FROZEN 2026-10-12 (ADR-030 signed off): the Merkle tree **shape**.
 //
 // ADR-028 (docs/decisions.md, locked 2026-10-11) chose the digest — BLAKE3-256, 32 bytes — and said
 // plainly that it did *not* choose the shape. Arity, child order, the rule for an absent subtree and

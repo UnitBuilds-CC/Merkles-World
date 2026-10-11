@@ -192,7 +192,8 @@ migration note + version bump + ADR, never an edit to make one agent's test pass
   one. Each is mirrored into its spec doc (docs/03 and docs/10) and a test compares the mirror to the
   file line by line, so an agent editing the contract without the doc — or the doc without the
   contract — fails `cargo test` rather than drifting silently.
-- **A-10 `contracts/tree.rs`** — **drafted 2026-10-11, DRAFT** against [ADR-030](decisions.md): the
+- **A-10 `contracts/tree.rs`** — **drafted 2026-10-11, frozen 2026-10-12** when
+  [ADR-030](decisions.md) was signed off: the
   Merkle tree *shape* (node kinds, octree arity and depth, child order, the two empty rules,
   little-endian byte order, epoch-root composition). Mirrored into docs/03 § The tree shape and pinned
   by `tree_contract_matches_spec_document`, same guard as the two above. A-10 is the grammar **A2

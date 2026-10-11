@@ -27,7 +27,7 @@ SPEC/OQ resolution  →  spikes S1–S10  →  contracts/ frozen  →  P0 harnes
 | A-07 | SDF node grammar schema (`.fbs` + interpreter signature) | ADR-012 |
 | A-08 | `ActionTx` wire layout | **drafted 2026-10-11** as `contracts/tx.rs` (DRAFT) — doc 10's envelope, split as ADR-015 splits its wire-delta row: `Target` is the address, `TxPayload` the value, and a slab mutation's address+value *is* an A-03 record. Freeze waits on **OQ-46** (what the ids are, how wide, and which scheme signs) and on **OQ-30**/**OQ-23** for the serialized byte format |
 | A-09 | error taxonomy + determinism violation codes | doc 12 agent loop |
-| A-10 | Merkle tree shape — node kinds, arity, child order, empty rules, canonical byte order, epoch-root composition | **drafted 2026-10-11** as `contracts/tree.rs` (DRAFT) on [ADR-030](decisions.md), the half [ADR-028](decisions.md) explicitly left open, and **executed 2026-10-12** by `crates/ledger`, the hasher — which is where the shape stopped being prose: the derived empty ladder, the octant order, the list's odd-item pairing and the epoch-root field order are all pinned as digest literals now ([docs/03 § The published vectors](03-state-ledger.md)). Mirrored into docs/03 and held by `tree_contract_matches_spec_document`. Freeze waits on **ADR-030 sign-off** — a changed rule is a shape break, so every published root vector moves with it |
+| A-10 | Merkle tree shape — node kinds, arity, child order, empty rules, canonical byte order, epoch-root composition | **drafted 2026-10-11** as `contracts/tree.rs` on [ADR-030](decisions.md), the half [ADR-028](decisions.md) explicitly left open, **executed 2026-10-12** by `crates/ledger`, and **frozen 2026-10-12** when ADR-030 was signed off on published vectors. Writing the hasher settled two halves the ADR had left as prose — which `EpochHeader` fields the epoch root hashes, and the false claim that lexicographic order is the octree's walk order (docs/03 § The tree shape). A rule change from here is a shape break: every root and every published vector moves with it |
 
 Each is a small, reviewable file. Writing them is a **couple of days** of work and they are the
 only things that can be written while the open questions are still open — because the act of
@@ -103,8 +103,9 @@ payload field is opaque and A-08's identity widths are labelled drafts on purpos
 `contracts/errors.rs` — still **DRAFT**: it waits on A-02/A-05/A-07 payload shapes and on A-08
 freezing (A-08 now *exists*, so what it owes A-09 is a decision, not a file), and now
 that A-01 is frozen, adopting its newtypes for coordinate payloads is a scheduled migration rather
-than a blocked one. A-10 `contracts/tree.rs` — **drafted 2026-10-11, DRAFT** on
-[ADR-030](decisions.md): the tree shape ADR-028 deliberately left open. It stays the grammar only,
+than a blocked one. A-10 `contracts/tree.rs` — **drafted 2026-10-11, FROZEN 2026-10-12** when
+[ADR-030](decisions.md) was signed off on published vectors: the tree shape ADR-028 deliberately left
+open. It stays the grammar only,
 and that division is now load-bearing rather than theoretical: `crates/ledger` is the workspace's
 **first crate with behaviour**, holding the hasher while `contracts/` still holds none. BLAKE3
 (ADR-028) is its one external dependency and the workspace's first, taken with
@@ -119,11 +120,13 @@ and that division is now load-bearing rather than theoretical: `crates/ledger` i
 - The **dev profile** (edit a RON file, see the change) needs `assetc`, which is Phase 1.
 - **WASM execution** of the C2 vectors: CI compiles for `wasm32-unknown-unknown` but runs nothing
   there, so C2 is gated on x86-64/ARM64 execution + WASM compilation, not on three executions.
-- **A-02/A-04/A-05/A-06/A-07 are unwritten**, and A-03, A-08, A-09 and A-10 exist only as **DRAFT**,
-  so the exit clause "every contract is frozen enough" is still not met — for a different reason than
-  before: four artifacts now need *decisions* (OQ-45, OQ-46, ADR-030's sign-off, and the payload
-  shapes A-09 inherits from A-02/A-05/A-07) rather than files, while the five unwritten ones still
-  wait on their own open questions (OQ-34, OQ-01, OQ-08, OQ-02, ADR-012).
+- **A-02/A-04/A-05/A-06/A-07 are unwritten**, and A-03, A-08 and A-09 exist only as **DRAFT**, so the
+  exit clause "every contract is frozen enough" is still not met — for a different reason than before:
+  three artifacts now need *decisions* (OQ-45, OQ-46, and the payload shapes A-09 inherits from
+  A-02/A-05/A-07) rather than files, while the five unwritten ones still wait on their own open
+  questions (OQ-34, OQ-01, OQ-08, OQ-02, ADR-012). A-01 and **A-10 are frozen**; A-10 is the first
+  artifact frozen against computed digests rather than against prose, which is the pattern the
+  remaining six should follow.
 - **There is a hasher now, and only a hasher.** `crates/ledger` computes leaves, branches, the empty
   ladder, the slot table, the region roots and the epoch root, and it is `no_std` on purpose so the
   browser target compiles it. What it does **not** do is the commit path: nothing writes a delta into
