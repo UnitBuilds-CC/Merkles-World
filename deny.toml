@@ -1,0 +1,70 @@
+# cargo-deny — the dependency half of the CI gate (docs/11 Phase 0, ADR-025's merge rules).
+#
+# The workspace has **zero third-party dependencies** today: `contracts` and `crates/coords` are
+# `no_std` and std-free by design. So nothing here is fixing a known problem — this file is the
+# check that catches the *first* crate anyone adds, which is the moment `AGENTS.md` §3 (hot-path
+# bans) and §4 (determinism) start being at risk from a transitive dependency.
+
+[graph]
+# The three architectures gate C2 names (docs/02). A dependency that does not build for one of
+# them is a Phase 0 failure, not a Phase 1 discovery.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "wasm32-unknown-unknown" },
+]
+all-features = true
+
+[advisories]
+# Nothing to ignore: an empty list is the honest state, and a future entry must carry a reason.
+ignore = []
+
+[bans]
+# Duplicate versions are a determinism hazard specifically when the duplicated crate hashes
+# something (BLAKE3, SPEC-04). Warn now; promote to "deny" the first time a hashing crate appears
+# twice rather than after the desync it would have caught.
+multiple-versions = "warn"
+highlight = "all"
+
+# `AGENTS.md` §3 bans string parsing, allocation churn and reflection **on the frame path**, and
+# explicitly permits them in tools (`assetc`, the packer, validators). cargo-deny resolves the whole
+# graph and cannot tell those two apart, so a `deny` list here would block the tools on principle
+# and be deleted the first time one is needed. The hot-path rule stays enforced where it is
+# observable: `crates/*` lints (`unsafe_code = "forbid"`, `std-instead-of-core`) plus review.
+deny = []
+
+[licenses]
+# `allow` is exhaustive in this schema: a license outside it, or one that cannot be detected at
+# all, is a diagnostic rather than a configurable lint level (the `default`/`unlicensed` keys were
+# removed upstream). A per-category policy (copyleft, OSI/FSF) is a product decision that travels
+# with OQ-43, not a dependency-hygiene one.
+confidence-threshold = 0.93
+# While the graph is empty, every entry below is "not encountered" by definition — one warning per
+# allowance per run, all of them meaningless. Set this back to "warn" in the commit that adds the
+# first dependency, so the allowance list gets pruned against crates we actually ship.
+unused-allowed-license = "allow"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-DFS-2016",
+]
+
+[licenses.private]
+# OQ-43 (docs/13-risks-open-questions.md) is why this is true and not a workaround: the project
+# licence is still an open product decision, so the workspace members declare no `license` field
+# and are `publish = false` in the root Cargo.toml. cargo-deny therefore checks every *dependency*
+# and skips the two unpublished members. Set this back to false, and delete the `publish = false`
+# line, in the same commit that closes OQ-43.
+ignore = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

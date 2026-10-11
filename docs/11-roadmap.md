@@ -68,6 +68,36 @@ cost model.
 **Exit:** the P0 pipeline in doc 12 works on a real change, and every contract is frozen enough
 that two agents could implement against it without talking.
 
+### Phase 0 status — 2026-10-11
+
+Run locally on x86-64 Windows at `rustc 1.92.0 (ded5c06cf 2025-12-08)`. Each row is the command's
+real result, not a plan; per-gate evidence lives in doc 02 § Validation gates.
+
+| Check | Command | Result |
+|-------|---------|--------|
+| Formatting | `cargo fmt --all -- --check` | clean (no diff) |
+| Lints | `cargo clippy --all-targets -- -D warnings` | `Finished` — zero warnings; workspace lints deny `clippy::all`, `unsafe_code = "forbid"` |
+| Tests | `cargo test -q` | `4 passed` (contracts: code uniqueness, band placement, stable vectors, determinism routing) + `11 passed` (coords: C1/C2/C3/C4 gates, SPEC-01 masking, sector + SlabKey identity, `contract_matches_spec_document`) |
+| `no_std` / WASM | `cargo build --target wasm32-unknown-unknown -p contracts -p coords` | `Finished` — the `#![no_std]` guard on `contracts/` still bites |
+| C2 vectors | `cargo run --release --example gate_vectors` | prints the six frozen `u64` hashes recorded in doc 02 |
+| C4 demo | `cargo run --release --example camera_f32_demo` | max error `0` at radii 512 / 2048 / 4096; the cast-then-subtract counterfactual returns `0.0` for one voxel at 10⁹ |
+| Dependency policy | `cargo deny check all -s` | `advisories ok: 0 errors` / `bans ok: 0 errors` / `licenses ok: 0 errors, 11 notes` (an empty graph never encounters an allow-listed license; `unused-allowed-license` flips those to warnings with the first real dependency) / `sources ok: 0 errors`. The graph is empty, so this is prophylactic; the licence itself is still [OQ-43](13-risks-open-questions.md) |
+| Doc integrity | `node tools/check_docs.mjs` | `18 files, 221 local links, 44 OQ + 9 SPEC + 29 ADR + 9 artifacts + 10 spikes defined` → `OK: no findings` |
+
+**In the tree:** A-01 `contracts/coords.rs` and A-09 `contracts/errors.rs`, both under explicit
+**DRAFT** headers. A-01 is *not* frozen: freezing it waits on
+[SPEC-09](13-risks-open-questions.md), whose recommendation is now written up as
+[ADR-029](decisions.md) and is still `proposed` — unsigned.
+
+**Not yet met (the rest of Phase 0's exit criteria):**
+
+- The **S6 headless shader check** has no CI job, because no WGSL exists to compile
+  ([OQ-41](13-risks-open-questions.md) is the runner half of that).
+- The **dev profile** (edit a RON file, see the change) needs `assetc`, which is Phase 1.
+- **WASM execution** of the C2 vectors: CI compiles for `wasm32-unknown-unknown` but runs nothing
+  there, so C2 is gated on x86-64/ARM64 execution + WASM compilation, not on three executions.
+- **A-02…A-08** are unwritten, so the exit clause "every contract is frozen enough" is not met.
+
 ## Phase 1 — Engine runtime (domain-agnostic)
 
 **Goal:** the Voxel-Ledger Engine: state, memory, rendering, physics, circuits, WASM host — with

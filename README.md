@@ -47,12 +47,12 @@ Public wiki mirror of these docs: <https://github.com/UnitBuilds-CC/Merkles-Worl
 | Gate | State |
 |------|-------|
 | Architecture specified | **done** — design level only, all 15 docs + ADR log written |
-| Implementation | **none** — the repo contains documentation and contracts-to-be, no code |
+| Implementation | **first code landed** — cargo workspace, `contracts/` (A-01 coords, A-09 error taxonomy) and `crates/coords` with gates C1–C4 as real tests; no runtime yet, that is Phase 1 |
 | Spec conflicts to resolve before coding (SPEC-01…09) | **9 registered** — 1 locked (SPEC-02 → ADR-017), 6 proposals, 2 open (**SPEC-09** blocks the coords + record contracts, SPEC-07 blocks circuit caching) — see [docs/13](docs/13-risks-open-questions.md) |
-| Open questions (OQ-01…43) | **43 tracked**; OQ-01 (macro causality) and OQ-02 (stateful circuits) gate the most code |
-| Blocking artifacts (A-01…A-09) | **not started** — [docs/11](docs/11-roadmap.md) |
+| Open questions (OQ-01…44) | **44 tracked**; OQ-01 (macro causality) and OQ-02 (stateful circuits) gate the most code |
+| Blocking artifacts (A-01…A-09) | **2 drafted in code** — A-01 `contracts/coords.rs` and A-09 `contracts/errors.rs`; A-01 is drafted, **not frozen** (SPEC-09 must close first). A-02…A-08 not started — [docs/11](docs/11-roadmap.md) |
 | Research spikes (S1–S10) | **not started**; S7 (macro causality) is the highest-risk |
-| Phase 0 / Phase 1 engine | **not started** |
+| Phase 0 / Phase 1 engine | Phase 0 **in progress** — CI harness (fmt, clippy `-D warnings`, tests, wasm build, cargo-deny, docs checker) and coordinate gates C1–C4 green; the dev profile (edit a RON file, see the change) and the S6 headless shader check are still open. Phase 1 not started |
 | Phase 2 game content | **blocked** by Phase 1 |
 | Repo | published: [UnitBuilds-CC/Merkles-World](https://github.com/UnitBuilds-CC/Merkles-World) (public) |
 

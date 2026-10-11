@@ -71,12 +71,29 @@ approval.
 ## Gate list = the CI contract
 
 The suite is exactly the validation gates written in docs 02–10 (C\*, P1.\*, R\*, SM\*, E\*, PH\*,
-AU\*, AN\*, DE\*, W\*, AS\*, M\*). Gates are **code**: a gate is *passed* only when `tools/ci/`
-contains a test for it and that test's real output has been pasted into the PR
+AU\*, AN\*, DE\*, W\*, AS\*, M\*). Gates are **code**: a gate is *passed* only when a test for it
+exists, runs in CI, and that test's real output has been pasted into the PR
 ([AGENTS.md](../AGENTS.md) §7). Until then no doc, commit message, or status board may describe it
 as green — doc 11 lists the gates and their definitions, and the README status board is the only
 place that records state. This is the mechanism that keeps the design's many quantitative claims
 from silently becoming assumptions.
+
+Where that code actually lives, as of Phase 0. A gate whose test exercises one crate's API lives
+with that crate; `tools/ci/` is reserved for what no single crate can own:
+
+| Harness | File | How it runs |
+|---------|------|-------------|
+| single-crate gate tests | the owning crate's `tests/` — `crates/coords/tests/gates.rs` holds C1, C2, C3, C4 | `cargo test --workspace`, on every architecture in the CI matrix |
+| reproducibility vectors | `cargo run --release --example gate_vectors` | CI prints them; they must equal the frozen vectors recorded in doc 02 |
+| measured demos that *are* a gate | `cargo run --release --example camera_f32_demo` (gate C4's run) | CI, release profile |
+| doc integrity | `tools/check_docs.mjs` | CI `docs` job — ids resolve, links and anchors exist, tables and fences balance, no personal paths |
+| dependency policy | `deny.toml` | CI `deny` job, pinned `cargo-deny` binary |
+| cross-cutting harnesses | `tools/ci/` | **does not exist yet** — the home for spike-scale, multi-crate and sandbox probes (the S-series, frame hashes) |
+
+`.github/workflows/ci.yml` is the runner for all of the above. The **S6 headless shader step** that
+doc 11's Phase 0 list names is deliberately **absent**: there is no WGSL in the tree to compile, and
+adding a job that skips silently would be a green light on nothing
+([OQ-41](13-risks-open-questions.md) is the runner decision that unblocks it).
 
 ## Merge rules
 
@@ -94,6 +111,31 @@ GPU shader debugging is called out in the source as the place agents thrash ("GP
 freeze graphics drivers without giving clean stack traces"). So: **max 3 automated fix attempts**,
 then the branch is parked with the error transcript attached and a human looks. Repeating a failed
 patch is the fastest way to burn a week.
+
+**Determinism violations do not get the three attempts.** [A-09](11-roadmap.md)'s taxonomy
+(`contracts/errors.rs`) puts every determinism violation in **band 1**, and
+`EngineError::is_determinism_class()` is the machine-readable check CI reads off the integer code.
+A band-1 failure means an architectural guarantee broke, and [AGENTS.md](../AGENTS.md) §9 escalates
+that on the **first** occurrence — three retries would only produce three commits that each pretend
+a root might agree again. The retry budget applies to subsystem bugs, not to this class.
+
+Routing needs no lookup table, because A-09's bands were chosen to match the crate list in § Repo
+layout one-for-one:
+
+| Band | Subsystem | Routed to |
+|------|-----------|-----------|
+| 1 | determinism | parked immediately, escalated to the System Architect (§9, no retry) |
+| 2 | coords | A2 implements `crates/coords`, A1 owns its contract file |
+| 3 | ledger | A2 |
+| 4 | memory | A3 |
+| 5 | render | A4 |
+| 6 | sim | A7 |
+| 7 | circuits | A6 |
+| 8 | physics | A5 |
+| 9 | host | A8 |
+| 10 | asset | `assetc` (tool, not on the frame path) |
+| 11 | net | A2 + A8 jointly (Phase 1.5) |
+| 12–127 | unassigned | reserved — adding a band is a contract change (merge rule 2) |
 
 ## Session workflow (how we actually run this)
 
@@ -129,6 +171,20 @@ conversation said the coordinate system "should probably be the first part of th
 Freezing it is gated, not first-in-line: doc 02 records that **SPEC-01/03/06/09 must be resolved
 first**, and doc 11's order is resolve → spike → freeze → build. Drafting A-01 early is fine and
 encouraged; *locking* it is what waits for those IDs.
+
+**What is in the tree now (Phase 0):**
+
+- **A-01 `contracts/coords.rs`** — drafted, with gates C1–C4 as real tests in
+  `crates/coords/tests/gates.rs`. **DRAFT**, because SPEC-09 is still open.
+- **A-09 `contracts/errors.rs`** — drafted: banded integer `u16` codes, one stable literal per
+  class, and a determinism band that routes separately (above). **DRAFT**, and its coordinate
+  payloads stay plain integers until A-01 freezes — that adoption is one migration, never a code
+  change.
+- The `contracts` crate is `#![no_std]`, which is a *structural* guard for
+  [AGENTS.md](../AGENTS.md) §3/§4: no contract type can reach a clock, a filesystem, a process or
+  `alloc`. CI proves the guard still bites by building the crate for `wasm32-unknown-unknown`.
+- **A-02…A-08 are not written.** The loop above cannot run for those subsystems until they are, and
+  doc 11's blocking-artifact table is the queue.
 
 ## Tooling choices to make (**[OQ-41](13-risks-open-questions.md)**)
 

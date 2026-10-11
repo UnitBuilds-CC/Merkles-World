@@ -1,0 +1,116 @@
+# CI — the Phase 0 gate harness (docs/11 § Phase 0, docs/12 § merge rules, ADR-025).
+#
+# What this file proves, in the order the jobs run:
+#   gates    — fmt, clippy -D warnings, and the C1–C4 + A-09 tests on the architectures that
+#              must agree (x86-64 Linux, x86-64 Windows, ARM64 macOS), plus the C2 vectors and the
+#              C4 demo printed to the log so a divergence is visible, not just red.
+#   wasm     — contracts and coords compile for `wasm32-unknown-unknown`: the third architecture
+#              gate C2 names, and the only proof here that `#![no_std]` still bites.
+#   deny     — dependency hygiene against `deny.toml`.
+#   docs     — links, anchors, tables and the spec↔contract mirror in docs/ (the docs are the spec;
+#              a broken reference in a public repo is a product defect).
+#
+# Deliberately absent:
+#   * Gate **R4** (frame hashes across `wgpu` backends) is informational and must never be a gate
+#     (ADR-017, docs/11 § Bitwise Determinism Suite). No job here may promote it.
+#   * The S6 headless shader check that docs/11 lists for Phase 0. Spike S6 has not run, there is
+#     no WGSL in the tree yet, and a job that gates on a harness which does not exist teaches
+#     everyone to ignore red CI. It joins this file when S6 lands.
+#   * `cargo build --workspace` of engine crates: `contracts` and `crates/coords` are the only
+#     members, and `gates` already builds them.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # Pinned because `deny.toml` was validated against exactly this build: cargo-deny's config
+  # schema has lost keys between releases (`unlicensed`, `default`), so the tool and the config
+  # are upgraded together, in one commit, with the check run locally first.
+  CARGO_DENY_VERSION: 0.20.2
+
+jobs:
+  gates:
+    name: gates on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86-64 Linux
+            os: ubuntu-latest
+          - label: x86-64 Windows
+            os: windows-latest
+          # Apple Silicon: the ARM64 of gate C2's list, which no self-hosted x86 runner gives us.
+          - label: ARM64 macOS
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel and installs clippy/rustfmt/wasm32 on first use.
+      - name: Toolchain
+        run: rustup show
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Lints (clippy -D warnings, all targets)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Gates C1–C4, A-09 taxonomy, spec↔contract mirror
+        run: cargo test --workspace
+
+      - name: Gate C2 vectors for this architecture
+        run: cargo run --release --example gate_vectors
+
+      - name: Gate C4 camera-relative demo
+        run: cargo run --release --example camera_f32_demo
+
+  wasm:
+    name: wasm32-unknown-unknown build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup show
+      - name: Build contracts and coords for the browser target
+        run: cargo build --target wasm32-unknown-unknown -p contracts -p coords
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pinned cargo-deny
+        run: |
+          set -euo pipefail
+          asset="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          base="https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}"
+          curl -sSfLO "${base}/${asset}"
+          curl -sSfLO "${base}/${asset}.sha256"
+          # The .sha256 asset is a bare digest, so re-attach the filename `sha256sum -c` needs.
+          tr 'A-Z' 'a-z' < "${asset}.sha256" > checksum.line
+          sed -i "s/\$/  ${asset}/" checksum.line
+          sha256sum --check checksum.line
+          tar xzf "$asset"
+          sudo install "cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny" /usr/local/bin
+
+      - name: cargo deny check
+        run: cargo deny check all -s
+
+  docs:
+    name: docs integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Links, anchors, tables, contract mirror
+        run: node tools/check_docs.mjs
