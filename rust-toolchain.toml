@@ -1,0 +1,7 @@
+# `stable` rather than an exact version: the pinned numbers agents are tested against are
+# `rust-version = "1.92"` in the workspace manifest and the toolchain logged by CI on every run.
+# Cross-target *behaviour* is what gates C2/C3/P1.5 prove, not a compiler version.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

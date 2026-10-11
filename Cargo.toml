@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["contracts", "crates/coords"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+# OQ-43: the license is still an open product decision, so nothing here may be
+# pushed to a registry until it is settled.
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+# Hot-path discipline (AGENTS.md §3): a frame must not allocate or format.
+alloc-instead-of-core = "deny"
+std-instead-of-core = "deny"
