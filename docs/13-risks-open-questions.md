@@ -76,6 +76,7 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 | **OQ-30** | FlatBuffer schema versioning, migration on load, and deterministic serialization | old worlds must load in new engines | doc 09 `.fbs` schemas — no blocking-artifact id yet (A-07 is the only `.fbs` artifact in doc 11) |
 | **OQ-37** | Naming and identity: engine name, game name, repo layout for two products. (It also used to carry the licence — decided 2026-10-11 as MIT OR Apache-2.0, recorded under OQ-43) | Phase 2 is "Mod #1" — the repo boundary must match | product decision |
 | **OQ-38** | Target platforms and distribution (browser, Windows/Linux/macOS, mobile, console?) | browser means WASM+WGSL is a hard requirement, not a nice-to-have; console contradicts the WASM-mod story entirely | product decision |
+| **OQ-45** | How do the delta record's **12 payload bits** divide between material id, flags and quantity? [ADR-029](decisions.md) fixed the field's width and A-03 packs it as one opaque `u16`, but nothing has decided what the bits *mean* — and 12 bits is not enough for a material id plus flags plus a quantity, so someone has to give | it is the last undecided thing inside a record that every region root hashes, so the answer is baked into every world created after it | decide with the material registry (doc 04) and the ledger crate, before Phase 1's P1 gate pair |
 
 ### Multiplayer & trust
 
@@ -88,6 +89,7 @@ deferrable; each one silently breaks a pillar if code is written against the wro
 | **OQ-34** | WASM permissions and quotas: byte caps per query, `MAX_FILTER_BYTES`, per-tick result caps — and who tunes them when legitimate content hits a cap | a mod enumerating world state is a memory-exhaustion vector | doc 08 (A-02) |
 | **OQ-35** | Concurrent edits to the same *circuit input* or same entity field (aggregate merge rules cover fields, not arbitrary mod state) | every mod thinks its case is the exception | doc 10 |
 | **OQ-36** | Watch-lists: who may register interest in another region's field, and the memory cost when players build thousands of reservoirs | macro causality on the wire needs both tags and continuous drain relationships | doc 10 |
+| **OQ-46** | Wire identities and trust: what a `PeerID`, `ActorID`, `EntityID` and `ModuleID` *are*, who issues them, how wide they really are, and which scheme signs an `ActionTx`. A-08 carries each as a labelled draft integer and the signature as opaque bytes, because inventing a width or an algorithm here would be a fake commitment a real scheme breaks | docs/10 says the envelope is "dominated by the signature", so the one field that cannot shrink is the one nobody has chosen; and a peer id is what causal order tie-breaks on, so it is load-bearing for gates M2/M5 | decide with the Phase 1.5 transport spike, and fold in [OQ-11](13-risks-open-questions.md) (mod signing) and [OQ-14](13-risks-open-questions.md) (what a divergent root costs a proposer) |
 
 ### Modding & content
 

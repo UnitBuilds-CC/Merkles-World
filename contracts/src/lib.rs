@@ -14,3 +14,11 @@ pub mod coords;
 
 #[path = "../errors.rs"]
 pub mod errors;
+
+/// A-03 — the packed delta record, the epoch's region-slot table, the epoch header (docs/03).
+#[path = "../delta.rs"]
+pub mod delta;
+
+/// A-08 — the `ActionTx` envelope (docs/10, ADR-021).
+#[path = "../tx.rs"]
+pub mod tx;

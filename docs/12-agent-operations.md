@@ -181,13 +181,19 @@ migration note + version bump + ADR, never an edit to make one agent's test pass
   holds is SPEC-06's, and that is deliberately outside the frozen surface.
 - **A-09 `contracts/errors.rs`** — drafted: banded integer `u16` codes, one stable literal per
   class, and a determinism band that routes separately (above). **DRAFT**: its remaining waits are
-  A-02/A-08/A-05/A-07 payloads, not A-01. Now that A-01 has frozen, adopting its newtypes for the
+  A-02/A-05/A-07 payloads and A-08's freeze — A-08 now exists, so what it owes A-09 is a decision,
+  not a file. Now that A-01 has frozen, adopting its newtypes for the
   coordinate payloads is a **scheduled migration** — one version bump, never a code change.
+- **A-03 `contracts/delta.rs`** and **A-08 `contracts/tx.rs`** — **drafted 2026-10-11, both DRAFT**:
+  the packed delta record with its epoch region-slot table, and the `ActionTx` envelope that carries
+  one. Each is mirrored into its spec doc (docs/03 and docs/10) and a test compares the mirror to the
+  file line by line, so an agent editing the contract without the doc — or the doc without the
+  contract — fails `cargo test` rather than drifting silently.
 - The `contracts` crate is `#![no_std]`, which is a *structural* guard for
   [AGENTS.md](../AGENTS.md) §3/§4: no contract type can reach a clock, a filesystem, a process or
   `alloc`. CI proves the guard still bites by building the crate for `wasm32-unknown-unknown`.
-- **A-02…A-08 are not written.** The loop above cannot run for those subsystems until they are, and
-  doc 11's blocking-artifact table is the queue.
+- **A-02/A-04/A-05/A-06/A-07 are not written.** The loop above cannot run for those subsystems until
+  they are, and doc 11's blocking-artifact table is the queue.
 
 ## Tooling choices to make (**[OQ-41](13-risks-open-questions.md)**)
 

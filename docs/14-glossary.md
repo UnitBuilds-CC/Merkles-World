@@ -11,7 +11,7 @@ lives in the doc named here.
 
 | Term | Definition | Canonical doc |
 |------|-----------|---------------|
-| **ActionTx** | A signed action intent broadcast to peers: `⟨SequenceID, ActorID, Kind, Target, Payload, TickEpoch, Signature⟩`. The unit of multiplayer traffic. | [10](10-multiplayer.md) |
+| **ActionTx** | A signed action intent broadcast to peers: `⟨SequenceID, ActorID, Kind, Target, Payload, TickEpoch, Signature⟩`. The unit of multiplayer traffic. `Target` is the address half, `Payload` the value half, and for a slab mutation the two together are exactly one **delta record** (**A-03**). | [10](10-multiplayer.md) |
 | **assetc** | The asset compiler: parses authoring text, validates against schema, lowers to FlatBuffers/WASM data. Watch mode in dev, pack mode for release. | [09](09-asset-pipeline.md) |
 | **BVH** | Bounding volume hierarchy over active SDFs, so a ray skips an entity in `O(log N)` unless it actually hits its coarse bounds. | [04](04-rendering.md) |
 | **Camera anchor** | The integer world position that local (f32) space is measured from this frame. `P_local = P_global − C_global`. | [02](02-coordinate-system.md) |
@@ -20,6 +20,7 @@ lives in the doc named here.
 | **Circuit graph** | The compiled topology of a connected wire network: nodes, zero-latency edges, and a transfer function `f(I₁…Iₙ, t)`. | [06](06-circuits.md) |
 | **Closed form** | A rule whose state at any tick can be computed directly, without stepping through intermediate ticks. What makes fast-forward legal. | [05](05-simulation-causality.md) |
 | **Delta mask (`M_local`)** | The sparse set of player-authored differences from base state. It is the world's only memory of what the player did. | [03](03-state-ledger.md) |
+| **Delta record** | The one `u64` a slab appends: `\|16 region slot\|36 intra-region (3×12 bits)\|12 payload\|` — [ADR-029](decisions.md)'s layout, drafted as `contracts/delta.rs` (**A-03**). It is the whole memory of an edit, and the only thing a replay needs to find the voxel it changed. | [03](03-state-ledger.md) |
 | **Determinism boundary** | The rule that simulation state is computed in Rust/WASM and never by a shader. ADR-017. | [03](03-state-ledger.md) |
 | **Domain deformation** | Animation by warping the space an SDF is evaluated in, instead of moving vertices. | [07](07-physics-audio-animation.md) |
 | **Epoch** | One committed world state, identified by a root hash. The ledger is a sequence of epochs. | [03](03-state-ledger.md) |
@@ -40,6 +41,7 @@ lives in the doc named here.
 | **Octree root** | A region's Merkle root derived from its children. Local, so edits don't re-hash the world. | [03](03-state-ledger.md) |
 | **Prompt-to-mod** | In-game LLM authoring that emits RON + WGSL + WASM, then runs the same validation path as a hand-written mod. | [08](08-wasm-modding.md) |
 | **Region** | 4096³ voxels, addressed by `RegionKey` (3×`i64`). The unit of the Merkle tree and of slab keying. | [02](02-coordinate-system.md) |
+| **Region slot** | One epoch's temporary 16-bit index for a region, assigned in first-touch order, held in the epoch header and rebuilt deterministically at replay — what a delta record carries so the 3×`i64` region key itself never has to be packed. At most 65,536 distinct regions per epoch record stream. | [02](02-coordinate-system.md) |
 | **RON** | Rusty Object Notation — the canonical in-repo authoring format (comments, trailing commas, maps 1:1 to structs). | [09](09-asset-pipeline.md) |
 | **Rollback** | Reverting an optimistic local edit by storing its previous `u64` back into its slab slot. | [10](10-multiplayer.md) |
 | **Sector** | 16³ regions; the granularity of named event tags. | [02](02-coordinate-system.md) |
