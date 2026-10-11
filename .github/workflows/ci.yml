@@ -74,6 +74,16 @@ jobs:
       - name: A-10 root vectors for this architecture
         run: cargo run --release --example root_vectors -p ledger
 
+      # Spike S2 printed, not asserted: a latency number on a shared runner is evidence about the
+      # runner, so docs/03 carries the measurement and these steps only show the code runs anywhere.
+      # Gate P1.2's own status is recorded against one machine, and OQ-49 is the open question about
+      # P1.3 — neither is promoted to a CI gate here.
+      - name: Spike S2 slab throughput (informational)
+        run: cargo run --release --example slab_throughput -p memory
+
+      - name: Spike S2 Merkle pass (informational)
+        run: cargo run --release --example merkle_pass -p ledger
+
       - name: Gate C4 camera-relative demo
         run: cargo run --release --example camera_f32_demo
 
@@ -84,8 +94,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup show
-      - name: Build contracts, coords and the ledger hasher for the browser target
-        run: cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger
+      - name: Build contracts, coords, the ledger hasher and the slab for the browser target
+        run: cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger -p memory
 
   deny:
     name: cargo-deny

@@ -419,6 +419,24 @@ let slot = slab.base.add(offset * 8);          // pointer arithmetic, no allocat
 core::ptr::write_unaligned(slot as *mut u64, packed_delta);
 ```
 
+**How it is actually implemented, and where that differs from the snippet above.** `crates/memory`
+borrows a `&mut [u64]` and indexes it; it does not use `core::ptr::write_unaligned`, because the
+workspace lints forbid `unsafe` in every crate (`Cargo.toml` `[workspace.lints.rust]`, and CI runs
+`clippy -D warnings`). Both halves want the same guarantee — one store, no allocator — and the safe
+form over a pre-allocated slice gives it, so the divergence is a spelling change rather than a weaker
+design. If a future measurement shows the safe form costing that guarantee, that belongs here as
+evidence and an ADR, not as a quietly added `unsafe` block.
+
+Measured on x86-64 Windows, release profile, `cargo run --release --example slab_throughput -p memory`
+(spike S2, part one):
+
+| What | Number |
+|------|--------|
+| Sustained appends | **57.2 M writes/sec** over 10⁶ appends into the 1 MB budget, 7 bump-pointer resets inside the timed loop |
+| Per-append latency, clock overhead included | p50 100 ns, p99 200 ns, p99.9 200 ns, max 124.7 µs over 200,000 individually timestamped appends |
+| Same run against the 64 KB budget | 1.006 ms for 10⁶ appends (994 M/sec, 122 resets) — the smaller buffer stays cache-resident, which is the only difference S2 saw between the two candidate sizes |
+| Gate P1.2 (10⁶/sec sustained, `p99 < 1 µs`) | **met on this machine** — one machine, not the four gate P1.5 names, and the Windows clock's ~100 ns granularity floors the percentile resolution |
+
 - **`O(1)` write** (a store, nanoseconds), no `malloc`, no GC, no OS memory-lock contention.
 - The word stored is `DeltaRecord::as_u64()` (A-03, above), so the append and the addressing cannot
   drift apart — a slab is 8-byte-aligned records of one type, and nothing else writes into it.
@@ -574,10 +592,36 @@ The consequence for determinism is precise and worth stating twice —
   pipeline, step 2), because tie-breaking by anything else — peer identity, wall clock — is
   [OQ-46](13-risks-open-questions.md)'s question, not this contract's.
 
-Cost, as arithmetic and **not** as a measurement: an epoch with *N* edits in one region recomputes
-at most `N × 12` branches, so `N = 10⁵` is ≈1.3×10⁶ BLAKE3 calls. Gate **P1.3** ("Merkle pass over a
-full dirty slab array `< 1 ms`") is the spike that decides whether that is affordable; nothing here
-claims it is.
+Cost, as arithmetic — and now as a measurement too. The model says an epoch with *N* edits in one
+region recomputes at most `N × 12` branches, so `N = 10⁵` is ≈1.3×10⁶ BLAKE3 calls. Spike S2 ran on
+x86-64 Windows, release profile, `cargo run --release --example merkle_pass -p ledger`:
+
+| Edits in one region | Pass time | Implied hashes (`12N`) | ns per hash |
+|---|---|---|---|
+| 10³ | 907 µs | 12,000 | 75 |
+| 10⁴ | 5.813 ms | 120,000 | 48 |
+| 10⁵ | 52.236 ms | 1,200,000 | 43 |
+| 8,192 (one full 64 KB slab) | 4.928 ms | 98,304 | 50 |
+
+Three things follow, and the third is the one that matters. **The pass is linear** at ~43–75 ns per
+hash, so the `12N` model is the right shape. **The first implementation was not**: an insertion sort
+over a walk-order comparator dominated it — 10⁴ edits cost 133 ms and 10⁵ cost 18.2 s, superlinear,
+because sorting is O(N²) while hashing is O(N). Replacing the sort with an in-place octant partition
+(`partition_by_octant`, O(8·len) per level) produced the table above and changed **no digest**: the
+region roots before and after are identical (`af275f30…`, `a505e6b2…`, `e064430b…`, and `d919613c…`
+for a full slab), which is this section's position-keyed claim doing real work rather than sitting in
+prose.
+
+And **gate P1.3's `< 1 ms` is not met.** One full 64 KB slab region costs 4.9 ms, and the model's own
+arithmetic puts the floor there: 98,304 hashes at ~50 ns is ~5 ms whatever the code looks like.
+Meeting it would mean changing what the gate measures, or shrinking the outstanding `N` per epoch, or
+batching hashes across regions — none of which is a decision to make quietly, so it is
+[OQ-49](13-risks-open-questions.md). The pipeline around the pass is worse again:
+`resolve_last_write_wins` is O(n²) per region (46 ms for a full slab) and is now the dominant term,
+kept naive on purpose — a hash map on the digest path would be a new determinism exposure
+([OQ-44](13-risks-open-questions.md)) before it was an optimisation. Fold the resolution into the
+walk (stable partition, last record at the leaf wins) as the next step, which removes the scan
+instead of making it cleverer.
 
 ### Epoch roots: the lists
 
@@ -947,8 +991,8 @@ pub fn preimage<'buffer>(
 | Gate | Test | Source |
 |------|------|--------|
 | P1.1 | Every delta encodes/decodes to the same `(RegionKey, [u16; 3], value)` across the i64 range, including negatives | doc 02 + [ADR-029](decisions.md) — runs as `p1_1_delta_record_round_trip` (`contracts/tests/delta_record.rs`) against A-03; only the payload's internals are open, as [OQ-45](13-risks-open-questions.md) |
-| P1.2 | 10⁶ writes/sec sustained, `p99 < 1 µs` | **our target** — the transcript only claims a slab write is "a pointer offset store instruction… This takes nanoseconds" (GS 1594) and "<1 ns (Direct RAM write)" |
-| P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "Sub-millisecond batch pass" (GS 1606) — a claim, not a measurement |
+| P1.2 | 10⁶ writes/sec sustained, `p99 < 1 µs` | **our target** — the transcript only claims a slab write is "a pointer offset store instruction… This takes nanoseconds" (GS 1594) and "<1 ns (Direct RAM write)". **Measured 2026-10-12:** 57.2 M appends/sec with p99 200 ns on x86-64 Windows (`crates/memory/examples/slab_throughput.rs`) — met on that one machine, and its clock granularity (~100 ns) is why the percentiles read as multiples of 100 |
+| P1.3 | Merkle pass over a full dirty slab array `< 1 ms` | "Sub-millisecond batch pass" (GS 1606) — a claim, not a measurement. **Measured 2026-10-12: NOT met.** One full 64 KB slab region hashes in 4.9 ms, and the `12N` model puts the floor at ~5 ms (98,304 hashes at ~50 ns); the pipeline around it costs 93 ms while `resolve_last_write_wins` is still O(n²). What the gate measures, and whether the budget or the target moves, is [OQ-49](13-risks-open-questions.md) |
 | P1.4 | LRU eviction + region re-entry restores all edits with no visible pop-in | ADR-009 |
 | P1.5 | Byte-identical roots for the same seed/transaction sequence on N2600 / RTX 3060 / Linux-Mesa / M1-browser | ADR-017 |
 | P1.6 | Two clients with one divergent voxel detect it via 32-byte root exchange and repair by bisection | ADR-023 |

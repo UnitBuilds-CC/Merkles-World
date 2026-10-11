@@ -38,7 +38,7 @@ writing them is how the questions get answered.
 | ID | Question | Success looks like | Feeds |
 |----|----------|--------------------|-------|
 | **S1** | Can SDF raymarching hold 60 FPS on a mid-range dGPU at our content budgets? | a marching WGSL compute pass with N entities + a real frame-time curve | doc 04 budget, ADR-026 |
-| **S2** | Is slab-allocator throughput real? | 10⁶ writes/sec, `p99 < 1 µs`, and a measured sub-ms Merkle pass (P1.2/P1.3) | doc 03 |
+| **S2** | Is slab-allocator throughput real? | 10⁶ writes/sec, `p99 < 1 µs`, and a measured sub-ms Merkle pass (P1.2/P1.3) | doc 03. **First numbers 2026-10-12** (x86-64 Windows, release): P1.2 **met** — 57.2 M appends/sec, p99 200 ns. P1.3 **not met** — the pass is linear at 4.9 ms per full 64 KB slab region (the `12N` model puts the floor there) and the whole commit is 93 ms while the dedupe stays O(n²). Partly open: the four targets of P1.5 are still one machine, and 64 KB vs 1 MB is still a budget question, not a decision — see [OQ-49](13-risks-open-questions.md) |
 | **S3** | Are BLAKE3 roots bit-identical across targets? | N2600 / RTX 3060 / Linux-Mesa / M1-browser agree (P1.5) | ADR-017/028 |
 | **S4** | FlatBuffers → GPU: zero-copy upload actually work? | RON→`.bin`→storage buffer, no allocation churn (AS1/AS4) | doc 09 |
 | **S5** | wasmtime + WIT determinism across languages | Rust/TS/Python mods agree bit-for-bit (W1–W3) | doc 08 |
@@ -71,10 +71,10 @@ that two agents could implement against it without talking.
 
 ### Phase 0 status — 2026-10-12
 
-Measured locally on x86-64 Windows and five times on CI (`.github/workflows/ci.yml`) — run `38124937828`
+Measured locally on x86-64 Windows and six times on CI (`.github/workflows/ci.yml`) — run `38124937828`
 before the ADR-029 sign-off, run `38150859744` after A-01's freeze and the licence, run
 `38159161144` with A-03 and A-08 in the tree, run `38179998839` with A-10's contract in it, and run
-`38181630859` at the current `main`, with `crates/ledger` computing roots for the first time — each on
+`38181630859` with `crates/ledger` computing roots for the first time, and run `38183282116` at the current `main`, with the commit path and `crates/memory` in it — each on
 x86-64 Linux, x86-64
 Windows and ARM64 macOS, all at
 `rustc 1.92.0 (ded5c06cf 2025-12-08)`.
@@ -84,9 +84,9 @@ Each row is the command's real result, not a plan; per-gate evidence lives in do
 |-------|---------|--------|
 | Formatting | `cargo fmt --all -- --check` | clean (no diff) |
 | Lints | `cargo clippy --all-targets -- -D warnings` | `Finished` — zero warnings; workspace lints deny `clippy::all`, `unsafe_code = "forbid"`, and the hot-path lints `alloc_instead_of_core` / `std_instead_of_core` (their hyphenated spelling is deprecated cargo manifest syntax: it warns today and is documented to stop working in a future edition, which would silently drop the deny — verified the underscore form still fires by injecting a `std::mem::swap` probe and watching clippy exit non-zero) |
-| Tests | `cargo test -q` | `4 passed` (contracts: code uniqueness, band placement, stable vectors, determinism routing) + `10 passed` (`contracts/tests/delta_record.rs`: gate P1.1's round trip and record→voxel resolve over the i64 boundaries, ADR-029's field order pinned as one literal word, the slot table's first-touch order and its 65,536 ceiling, and the docs/02 ↔ docs/03 ↔ A-03 layout agreement) + `7 passed` (`contracts/tests/action_tx.rs`: wire tags as literals, ADR-022's channel per kind, envelope class agreement, the A-03 seam, `SequenceId`'s total order, the docs/10 mirror) + `8 passed` (`contracts/tests/tree_shape.rs`: node kinds as literals, the eight octant child-order cases, the derived empty ladder, the list root's odd item, the epoch root's field order, the docs/03 mirror) + `11 passed` (coords: C1/C2/C3/C4 gates, SPEC-01 masking, sector + SlabKey identity, `contract_matches_spec_document`) + `11 passed` (`crates/ledger/tests/root_vectors.rs`: the 15 published digests as literals, the derived empty ladder with all 13 levels pairwise distinct, child order hand-built against octant 1 rather than 2 or 4, position-keyed roots under arrival vs walk order, the list's unwrapped single item and its self-paired odd tail, the payload that rolls into 12 bits, the slot-reassignment hazard ADR-029 names, and `node_parts` agreeing with `contracts::tree::preimage`'s reference bytes) — **51 passed**. That SPEC-01's *masked, never clamped* rule is genuinely guarded was checked by injecting a clamp into `DeltaRecord::new`, watching `out_of_range_fields_roll_rather_than_clamp` fail with `x: 4095` against `x: 0`, and reverting the injection. The same discipline was applied to the vectors: reversing the child iteration in `octant_branch` moved `REGION_0` from `97627e32…` to `d748c899…` and failed `published_vectors_are_frozen` plus the position-keyed test — while `child_order_is_x_low_bit_at_every_level` **stayed green**, because it re-derives through the builder under test. A pinned literal catches a shape break; a property that shares the implementation cannot (docs/03 § The published vectors) |
-| CI, all three architectures | `gh run view 38181630859` (also green: `38179998839`, `38159161144`, `38150859744`, `38124937828`) | 6 jobs green: gates × (x86-64 Linux, x86-64 Windows, ARM64 macOS), `wasm32-unknown-unknown` build, `cargo-deny`, docs integrity. Each of the three gate jobs reports the identical `test result: ok.` lines — `4 / 7 / 10 / 8 / 11 / 11 passed` (**51** total) — prints the six C2 vectors **bit-identical** (`V0 0xa4659597a9d8aeca` … `V5 0x8e6da94e370cbc70`) with C4 `max \|f32 − exact\| = 0e0` at radii 512 / 2048 / 4096, and prints the fifteen A-10 root vectors bit-identically too: `REGION_0 97627e3290a2b4f34e708359af9235d6e2d6d417e1491380d37e58178f9bdcbc` and `EPOCH_0 91b97a52fc5137b50ec64550a94220daab0ffe05575bac6dbfda825a9947cc61` on all three. **That is the first epoch root in this project that three architectures agreed on** — spike S3's question, answered on three of its four targets |
-| `no_std` / WASM | `cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger` | `Finished` — the `#![no_std]` guard on `contracts/` still bites, and now the **hasher** compiles for the browser target too, which is what makes gate P1.5's M1-browser row possible rather than aspirational. Executing those roots inside a WASM runtime is still OQ-41 |
+| Tests | `cargo test -q` | `4 passed` (contracts: code uniqueness, band placement, stable vectors, determinism routing) + `10 passed` (`contracts/tests/delta_record.rs`: gate P1.1's round trip and record→voxel resolve over the i64 boundaries, ADR-029's field order pinned as one literal word, the slot table's first-touch order and its 65,536 ceiling, and the docs/02 ↔ docs/03 ↔ A-03 layout agreement) + `7 passed` (`contracts/tests/action_tx.rs`: wire tags as literals, ADR-022's channel per kind, envelope class agreement, the A-03 seam, `SequenceId`'s total order, the docs/10 mirror) + `8 passed` (`contracts/tests/tree_shape.rs`: node kinds as literals, the eight octant child-order cases, the derived empty ladder, the list root's odd item, the epoch root's field order, the docs/03 mirror) + `11 passed` (coords: C1/C2/C3/C4 gates, SPEC-01 masking, sector + SlabKey identity, `contract_matches_spec_document`) + `5 passed` (`crates/ledger/tests/commit_path.rs`: the pipeline reproducing `SLOT_TABLE`/`REGIONS`/`EVENTS_ONE`/`EPOCH_0` from records, last-write-wins and its order sensitivity, absent-row vs empty-row, short scratch refusing) + `5 passed` (`crates/memory/tests/slab.rs`: one store per append, refusal at capacity, `O(1)` reset, both candidate budgets as arithmetic, a 1 MB slab filled and recycled) + `11 passed` (`crates/ledger/tests/root_vectors.rs`: the 15 published digests as literals, the derived empty ladder with all 13 levels pairwise distinct, child order hand-built against octant 1 rather than 2 or 4, position-keyed roots under arrival vs walk order, the list's unwrapped single item and its self-paired odd tail, the payload that rolls into 12 bits, the slot-reassignment hazard ADR-029 names, and `node_parts` agreeing with `contracts::tree::preimage`'s reference bytes) — **61 passed**. That SPEC-01's *masked, never clamped* rule is genuinely guarded was checked by injecting a clamp into `DeltaRecord::new`, watching `out_of_range_fields_roll_rather_than_clamp` fail with `x: 4095` against `x: 0`, and reverting the injection. The same discipline was applied to the vectors: reversing the child iteration in `octant_branch` moved `REGION_0` from `97627e32…` to `d748c899…` and failed `published_vectors_are_frozen` plus the position-keyed test — while `child_order_is_x_low_bit_at_every_level` **stayed green**, because it re-derives through the builder under test. A pinned literal catches a shape break; a property that shares the implementation cannot (docs/03 § The published vectors) |
+| CI, all three architectures | `gh run view 38183282116` (also green: `38181630859`, `38179998839`, `38159161144`, `38150859744`, `38124937828`) | 6 jobs green: gates × (x86-64 Linux, x86-64 Windows, ARM64 macOS), `wasm32-unknown-unknown` build, `cargo-deny`, docs integrity. Each of the three gate jobs reports the identical `test result: ok.` lines — `4 / 7 / 10 / 8 / 11 / 5 / 5 / 11 passed` (**61** total) — prints the six C2 vectors **bit-identical** (`V0 0xa4659597a9d8aeca` … `V5 0x8e6da94e370cbc70`) with C4 `max \|f32 − exact\| = 0e0` at radii 512 / 2048 / 4096, and prints the fifteen A-10 root vectors bit-identically too: `REGION_0 97627e3290a2b4f34e708359af9235d6e2d6d417e1491380d37e58178f9bdcbc` and `EPOCH_0 91b97a52fc5137b50ec64550a94220daab0ffe05575bac6dbfda825a9947cc61` on all three. **That is the first epoch root in this project that three architectures agreed on** — spike S3's question, answered on three of its four targets |
+| `no_std` / WASM | `cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger -p memory` | `Finished` — the `#![no_std]` guard on `contracts/` still bites, and now the **hasher and the slab** compile for the browser target too, which is what makes gate P1.5's M1-browser row possible rather than aspirational. Executing those roots inside a WASM runtime is still OQ-41 |
 | C2 vectors | `cargo run --release --example gate_vectors` | prints the six `u64` digests that `c2_test_vectors_are_frozen` pins as literals in `crates/coords/tests/gates.rs` (doc 02 § C2 names the test, not the values) |
 | A-10 root vectors | `cargo run --release --example root_vectors -p ledger` | prints the fifteen 32-byte digests of docs/03 § The published vectors, from `EMPTY_0` through `EPOCH_1`, over the seed `0x5EED_0000_0000_0001` scenario. The printer cannot fail — `published_vectors_are_frozen` is the assertion half, and CI is the cross-architecture half |
 | C4 demo | `cargo run --release --example camera_f32_demo` | max error `0` at radii 512 / 2048 / 4096; the cast-then-subtract counterfactual returns `0.0` for one voxel at 10⁹ |
@@ -111,7 +111,8 @@ and that division is now load-bearing rather than theoretical: `crates/ledger` i
 (ADR-028) is its one external dependency and the workspace's first, taken with
 `default-features = false` so `no_std` keeps biting — CI compiles the hasher for
 `wasm32-unknown-unknown`, which is what a root that has to agree in a browser requires. Its
-`root_vectors` example publishes the digests docs/03 now tabulates.
+`root_vectors` example publishes the digests docs/03 now tabulates, its `commit` module runs the
+epoch pipeline, and `crates/memory` is A3's half: the slab that holds the records in the first place.
 
 **Not yet met (the rest of Phase 0's exit criteria):**
 
@@ -127,14 +128,15 @@ and that division is now load-bearing rather than theoretical: `crates/ledger` i
   questions (OQ-34, OQ-01, OQ-08, OQ-02, ADR-012). A-01 and **A-10 are frozen**; A-10 is the first
   artifact frozen against computed digests rather than against prose, which is the pattern the
   remaining six should follow.
-- **There is a hasher now, and only a hasher.** `crates/ledger` computes leaves, branches, the empty
-  ladder, the slot table, the region roots and the epoch root, and it is `no_std` on purpose so the
-  browser target compiles it. What it does **not** do is the commit path: nothing writes a delta into
-  a slab, so gate **P1.2**'s throughput, gate **P1.3**'s sub-ms Merkle pass and
-  [OQ-47](13-risks-open-questions.md)'s frame-0 visibility still have no code to measure, and the
-  `12N`-hash cost model in docs/03 remains a hypothesis. `sort_walk_order` is an O(N²) insertion sort
-  for the same reason: correct, allocation-free, and waiting on SPEC-06 and spike S2 to say what the
-  real ordering costs.
+- **The commit path exists and has numbers.** `crates/memory` appends records into slabs with an
+  `O(1)` bump-pointer reset, `crates/ledger::commit` resolves last-write-wins and roots them, and the
+  test suite proves the pipeline reproduces `EPOCH_0` from raw `DeltaRecord`s rather than from
+  hand-fed leaves. Spike S2's first pass measured it (docs/03 § Slab allocation, § Region roots):
+  **P1.2 met** at 57.2 M appends/sec with p99 200 ns, **P1.3 not met** at 4.9 ms for the pass over one
+  full 64 KB slab region and 93 ms for the whole commit — which is why [OQ-49](13-risks-open-questions.md)
+  now asks whether the gate, the budget, or the scope is the thing that moves. Still unmeasured: the
+  four devices of gate P1.5 (this is one machine), and [OQ-47](13-risks-open-questions.md)'s frame-0
+  visibility, which needs the projection into `M_active` that no crate owns yet.
 
 ## Phase 1 — Engine runtime (domain-agnostic)
 

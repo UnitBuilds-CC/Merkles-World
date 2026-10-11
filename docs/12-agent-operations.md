@@ -202,6 +202,13 @@ migration note + version bump + ADR, never an edit to make one agent's test pass
   built, `EmptyLadder` derives the 13 absent-subtree digests, and
   `cargo run --release --example root_vectors -p ledger` prints the vectors docs/03 tabulates. A2 may
   not redefine any of it — a shape change is an ADR-030 re-open plus regenerated root vectors.
+- **A3 `crates/memory` landed 2026-10-12** with the slab: a borrowed `&mut [u64]` buffer, one store
+  per append, `O(1)` bump reset, and **both** candidate budgets (64 KB / 1 MB) exposed as constants,
+  because choosing between them is spike S2's call and not A3's. It speaks to A2 only through A-03's
+  `DeltaRecord` — `ledger` reads record words and never reaches into a slab — which is [AGENTS.md](../AGENTS.md)
+  §2's boundary holding between two crates that touch the same bytes. Capacity is still
+  [SPEC-06](13-risks-open-questions.md)'s question, and `SlabFull` stays a crate-local error rather than a
+  new `LedgerError` variant until a measured number exists to freeze into the shared surface.
 - The `contracts` crate is `#![no_std]`, which is a *structural* guard for
   [AGENTS.md](../AGENTS.md) §3/§4: no contract type can reach a clock, a filesystem, a process or
   `alloc`. CI proves the guard still bites by building the crate for `wasm32-unknown-unknown`.
