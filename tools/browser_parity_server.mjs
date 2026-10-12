@@ -16,17 +16,26 @@
 //
 // Usage:
 //   cargo build --release --target wasm32-wasip1 -p engine
-//   node tools/browser_parity_server.mjs target/wasm32-wasip1/release/engine.wasm
+//   node tools/browser_parity_server.mjs target/wasm32-wasip1/release/engine.wasm [--port 8123]
 // then open the printed http://127.0.0.1:<port>/ URL in a browser, or drive it from a harness.
 //
-// localhost-only, no filesystem outside the two files it serves, and it exits when the first run is
-// fetched - this is a probe, not a service.
+// --port is for CI: a fixed port lets a headless step build the URL before the server has answered,
+// which a random port cannot. The default stays random so a local run never collides with something.
+//
+// localhost-only, binds 127.0.0.1, and serves exactly two files - the module and the shim - so it is a
+// probe rather than a service. It runs until it is killed.
 
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 
-const wasmPath = process.argv[2] ?? "target/wasm32-wasip1/release/engine.wasm";
+const argv = process.argv.slice(2);
+const portFlag = argv.indexOf("--port");
+const requestedPort = portFlag === -1 ? 0 : Number(argv[portFlag + 1]);
+const wasmPath =
+  argv[0] && argv[0] !== "--port"
+    ? argv[0]
+    : "target/wasm32-wasip1/release/engine.wasm";
 const shimPath = fileURLToPath(new URL("./wasi_shim.mjs", import.meta.url));
 
 const [wasm, shimSource] = await Promise.all([
@@ -40,6 +49,7 @@ const page = `<!doctype html>
   <body style="font: 13px/1.5 ui-monospace, monospace; margin: 2rem;">
     <p id="status">running the wasip1 engine inside this browser engine&hellip;</p>
     <pre id="out"></pre>
+    <pre id="meta"></pre>
     <script type="module">
       const status = document.getElementById("status");
       const out = document.getElementById("out");
@@ -63,13 +73,21 @@ const page = `<!doctype html>
         }
         const text = shim.text();
         out.textContent = text;
+        // A digest of the whole output, written into the DOM, so a headless harness can assert equality
+        // without scraping fourteen lines - and so the comparison is against the native run's own hash
+        // rather than against a literal copied into this file.
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+        const sha256 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
         window.__mlws = {
           ok: text.includes("boot complete"),
           exit,
+          sha256,
           lines: text.trim().split("\\n").length,
           userAgent: navigator.userAgent,
           text,
         };
+        document.getElementById("meta").textContent =
+          "mlws-sha256=" + sha256 + " mlws-lines=" + window.__mlws.lines;
         status.textContent = "done - " + window.__mlws.lines + " lines, " + exit;
       } catch (error) {
         window.__mlws = { ok: false, error: String(error) };
@@ -104,7 +122,7 @@ const server = createServer((request, response) => {
   response.end("not found");
 });
 
-server.listen(0, "127.0.0.1", () => {
+server.listen(requestedPort, "127.0.0.1", () => {
   const { port } = server.address();
   console.log(`serving ${wasmPath} (${wasm.length} bytes) on http://127.0.0.1:${port}/`);
   console.log("open that URL in a browser, or read window.__mlws from a harness.");
