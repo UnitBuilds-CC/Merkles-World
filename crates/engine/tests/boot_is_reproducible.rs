@@ -120,7 +120,7 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
     // regression here also shows up in the reproducibility check above.
     let output = boot();
     assert!(
-        output.contains("authored shape lowered by assetc (5 nodes, depth 3)"),
+        output.contains("authored shape lowered by assetc (11 nodes, depth 4)"),
         "the engine is expected to build its scene through assetc:
 {output}"
     );
@@ -136,6 +136,15 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
     assert!(
         output.contains("rays found surface"),
         "the boot must raster the scene:
+{output}"
+    );
+    // The two culled paths must be reported as different measurements, because that difference is the
+    // demo's own evidence for ADR-024: a scene of one compact object has a tight single bound and nothing
+    // for a hierarchy to do, so the spread objects are what make the columns disagree. Pinned to the line
+    // rather than to a number, so the claim survives a camera change.
+    assert!(
+        output.contains("with the scene cull") && output.contains("with the hierarchy descent"),
+        "the boot must report both culling paths so their difference is checkable:
 {output}"
     );
 }

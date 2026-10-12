@@ -256,7 +256,7 @@ fn main() {
         "the hierarchy descent moved a surface the march found"
     );
     println!(
-        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations, {} with the scene cull (bound r {:.2}, {} of {} rays proved empty), {} with the hierarchy descent ({} proved empty, root licence {} - this scene blends, so the descent inherits the single bound; cull_probe prices that licence) (informational; gate R1 is a GPU frame and stays unmet)",
+        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations, {} with the scene cull (one bound r {:.2}, {} of {} rays proved empty), {} with the hierarchy descent ({} proved empty, root licence {}) - the spread is what makes the two columns disagree, which is ADR-024 in the demo rather than in a probe (informational; gate R1 is a GPU frame and stays unmet)",
         frame.width,
         frame.height,
         raster.hits,
@@ -295,7 +295,7 @@ fn main() {
 /// picture rather than a failed test.
 fn scene_tree() -> render::Tree {
     use assetc::{lower, reader, writer, Shape};
-    let authored = Shape::Union {
+    let hero = Shape::Union {
         a: Box::new(Shape::RoundedBox {
             half: [0.35, 0.35, 0.9],
             r: 0.12,
@@ -311,6 +311,33 @@ fn scene_tree() -> render::Tree {
             }),
             k: 0.5,
         }),
+    };
+    // Three separate objects at a distance, joined with plain unions and *nothing* blended between them.
+    // That is deliberate and it is the demo's point: the hero alone is a compact object whose one scene
+    // bound is already tight, so culling has nothing to prove there - cull_probe measured that a single
+    // bound saturates the moment geometry spreads, and the boot's camera was the small version of it. With
+    // a spread the root sphere grows loose and the bound hierarchy is what earns the frame: the children
+    // stay as tight as their own geometry however far apart they are. It also gives `assetc`'s median-split
+    // rebalance and the blend's own k-aware skip something real to operate on inside the shipped binary.
+    let spread = Shape::Union {
+        a: Box::new(Shape::Sphere {
+            r: 0.5,
+            centre: [-6.0, 0.0, 1.5],
+        }),
+        b: Box::new(Shape::Union {
+            a: Box::new(Shape::Sphere {
+                r: 0.5,
+                centre: [6.2, -0.4, -1.0],
+            }),
+            b: Box::new(Shape::Sphere {
+                r: 0.5,
+                centre: [1.0, 3.2, 7.5],
+            }),
+        }),
+    };
+    let authored = Shape::Union {
+        a: Box::new(hero),
+        b: Box::new(spread),
     };
     match lower(&authored) {
         Ok(asset) => {
@@ -356,9 +383,20 @@ fn scene_tree_by_hand() -> render::Tree {
     let right = push(NODE_SPHERE, 0, 1, &[0.7, 0.9, 0.0, 0.0], 0);
     let blended = push(NODE_SMOOTH_UNION, 2, 3, &[0.5], 0);
     let block = push(NODE_ROUNDED_BOX, 0, 1, &[0.35, 0.35, 0.9, 0.12], 0);
-    let whole = push(NODE_UNION, 2, 5, &[], FLAG_IS_ROOT);
+    let far_left = push(NODE_SPHERE, 0, 1, &[0.5, -6.0, 0.0, 1.5], 0);
+    let far_right = push(NODE_SPHERE, 0, 1, &[0.5, 6.2, -0.4, -1.0], 0);
+    let far_high = push(NODE_SPHERE, 0, 1, &[0.5, 1.0, 3.2, 7.5], 0);
+    // Grouped the way the authored shape groups them. The grouping of a plain union cannot change the
+    // field - the same claim `assetc`'s rebalance rests on, checked here against the lowered tree rather
+    // than asserted in isolation - and `lower` is free to emit these in sorted order because of it.
+    let inner = push(NODE_UNION, 2, 3, &[], 0);
+    let hero = push(NODE_UNION, 2, 5, &[], 0);
+    let spread = push(NODE_UNION, 2, 5, &[], 0);
+    let whole = push(NODE_UNION, 2, 11, &[], FLAG_IS_ROOT);
     let tree = render::Tree {
-        nodes: vec![whole, block, blended, left, right],
+        nodes: vec![
+            whole, hero, block, blended, left, right, spread, far_left, inner, far_right, far_high,
+        ],
         params,
     };
     render::validate(&tree).expect("the hand-assembled scene must validate");

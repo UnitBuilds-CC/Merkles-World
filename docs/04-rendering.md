@@ -1,4 +1,4 @@
-# 04 — Rendering (current boot digest: `c6c4ec046bec1260…`)
+# 04 — Rendering
 
 **Status:** design locked; feasibility unproven (spikes S1, S9).
 **Depends on:** docs 02, 03. **Implements:** ADR-011, 012, 024.
@@ -172,7 +172,8 @@ is not, varying by about 2x between the very runners that agree exactly on the w
 nanoseconds would be a claim about a machine, and this project ships to several.
 
 The boot prints the same shape at a smaller scale, and a sparser frame makes the point harder: its
-64x48 grid reports 590 of 3,072 rays finding surface, and the 2,482 that missed are charged 238,272 of
+64x48 grid reported 590 of 3,072 rays finding surface (the hero scene; the shipped scene is a
+spread now and reports 605), and the 2,482 that missed are charged 238,272 of
 the 243,008 evaluations - **98.1% of that frame's cost spent finding nothing at all**. The counts are
 integers on purpose: the march and the normal use only add, multiply and `sqrt`, all exact under IEEE-754,
 so the same numbers can be read off three different architectures in CI - and were: run `38250242415`
@@ -193,8 +194,8 @@ proved empty, because a 2.1-unit sphere around a scene fills a camera that close
 quoted above print `178880 … 668 of 3072`: two rays moved back across the line when a skip began testing
 the bound grown by the marcher's hit tolerance (see the third-layer section below), and they are the boot's
 own grazing cases. The shape of the line is unchanged, the numbers in it are measured, and the whole
-fourteen-line output hashes to `c5ca867b681e897…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current boot digest: `c6c4ec046bec1260…`)
-`8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`) (current boot digest: `c6c4ec046bec1260…`)
+fourteen-line output hashes to `c5ca867b681e897…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current boot digest: `649eff38a5529b1b…`)
+`8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`) (current boot digest: `649eff38a5529b1b…`)
 value), which both the docs gate and CI check rather than believe.
 
 The counts repeated identically run to run; the wall times did not (the 320×240 grid measured 53 ms and
