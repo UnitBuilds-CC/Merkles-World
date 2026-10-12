@@ -79,7 +79,7 @@ pub fn assign_ranks<'out>(
 pub fn compact(edits: &mut [Edit]) -> usize {
     // A total order over (voxel, rank): voxel groups the collisions, rank makes the winner last within a
     // group and makes the whole comparison tie-free, so an unstable sort is deterministic anyway.
-    edits.sort_unstable_by(|a, b| (voxel_of(a.record), a.rank).cmp(&(voxel_of(b.record), b.rank)));
+    edits.sort_unstable_by_key(|edit| (voxel_of(edit.record), edit.rank));
 
     // Runs are now groups of one voxel. Keep the tail of each run - the greatest rank - and compact
     // toward the front. The write cursor never passes the read cursor, so this is in place.
