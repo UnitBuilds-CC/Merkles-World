@@ -227,7 +227,20 @@ Three readings, in order of usefulness:
   that is measured here: one thread, a CPU, four nodes, no BVH, no culling, no shader. The example
   exists to give spike S1 a curve to compare the WGSL marcher against, not to substitute for it.
 
-### The first early-out exists, and the 3× estimate in the reading above was the wrong axis (2026-10-12)
+### A frame can be drawn into memory the caller owns (2026-10-12)
+
+AGENTS.md §3 bans allocation churn during gameplay frames and doc 09 promises AS4's "no allocation
+churn", and neither had a number until now. `render::raster` gained `render_into`, `render_culled_into`,
+`render_bnb_into` and `render_bnb_with`, which draw into a `Frame` the caller keeps; `Frame::prepare`
+clears and reserves without ever shrinking, so a frame rendered at a stable resolution stops allocating
+in its own buffers after the first one. `examples/allocation_audit.rs` prints the evidence and names its
+own limit: counting allocations would take a `#[global_allocator]`, that needs an `unsafe impl`, and
+`unsafe_code = "forbid"` refuses it - so what is *measured* is buffer capacity that does not move, and
+what is *read off the code* is the bound table, two vectors per call unless the caller hoists it, which is
+why `render_bnb_with` exists. Six tests in `tests/frame_reuse.rs` hold the part that matters more than the
+memory: a reused frame is the same picture, pixel for pixel, at every entry point.
+
+### The first early-out exists, and spike S1's 3× estimate was the wrong variable (2026-10-12)
 
 `crates/render/src/cull.rs` is the cheapest possible answer to the miss share: one conservative sphere per
 subtree, derived by set relation — a union is covered by both children, a smooth union grows that cover by
@@ -282,7 +295,7 @@ cluster, 5,134,680 and 2,757,440 for the line — prints identically on x86-64 L
 ARM64 macOS (`38292159934`). A f32 radius compared against a f32 distance is exactly where a cull could
 go quietly machine-specific; here it does not.
 
-Spike S1's third reading above guessed that "an early-out on a scene like this is worth up to about 3×".
+Spike S1's third reading guessed that "an early-out on a scene like this is worth up to about 3×".
 Between the two layers the truth is neither a ceiling nor a floor but the wrong variable: what determines
 the saving is the bound's tightness relative to the frustum, times how many bounds there are to consult.
 

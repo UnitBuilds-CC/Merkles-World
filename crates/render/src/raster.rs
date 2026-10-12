@@ -60,6 +60,41 @@ impl Frame {
     /// The depth written for a pixel that found no surface.
     pub const NO_HIT: f32 = f32::MAX;
 
+    /// An empty frame with room for `width * height` pixels.
+    pub fn new(width: u32, height: u32) -> Frame {
+        let rays = (width * height) as usize;
+        Frame {
+            width,
+            height,
+            pixels: Vec::with_capacity(rays * 3),
+            depth: Vec::with_capacity(rays),
+        }
+    }
+
+    /// Make this frame ready to be written as a `width x height` image, **reusing whatever memory it
+    /// already holds**. Capacity only ever grows, so a frame rendered every frame at a stable resolution
+    /// stops allocating after the first one - which is the part of doc 09's zero-copy promise that can be
+    /// measured on a CPU. Shrinking is not done on purpose: releasing the buffer to save memory the
+    /// renderer will immediately ask for again is the churn the hot-path ban is about.
+    pub fn prepare(&mut self, width: u32, height: u32) {
+        let rays = (width * height) as usize;
+        self.width = width;
+        self.height = height;
+        self.pixels.clear();
+        self.depth.clear();
+        self.pixels.reserve_exact(rays * 3);
+        self.depth.reserve_exact(rays);
+    }
+
+    /// Every depth reset to [`Frame::NO_HIT`] and no pixel counted as a hit.
+    ///
+    /// [`render_into`] and friends do this themselves; it is public because a caller that writes pixels by
+    /// hand (a compositor, a test) needs the same guarantee the marcher gets.
+    pub fn clear(&mut self) {
+        self.pixels.clear();
+        self.depth.clear();
+    }
+
     #[inline]
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 3] {
         let at = ((y * self.width + x) as usize) * 3;
@@ -106,7 +141,18 @@ pub struct Stats {
 /// March every pixel with no culling. This is the reference: whatever a culled path produces has to
 /// produce the same image, and only the evaluation count may differ.
 pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
-    render_with(tree, camera, None, None)
+    let mut frame = Frame::new(camera.width, camera.height);
+    let stats = render_into(tree, camera, &mut frame);
+    (frame, stats)
+}
+
+/// [`render`] writing into a frame the caller keeps.
+///
+/// This is the form the hot path is supposed to use, and the reason doc 09's "no allocation churn"
+/// promise is checkable at all: `examples/allocation_audit.rs` counts what each render allocates, and a
+/// reused frame is where the number has to reach zero.
+pub fn render_into(tree: &Tree, camera: &Camera, frame: &mut Frame) -> Stats {
+    march_into(tree, camera, None, None, frame)
 }
 
 /// March every pixel against the scene's own [`crate::cull::Enclosure`], charging nothing for a ray that
@@ -117,14 +163,24 @@ pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
 /// A scene containing an unbounded node (a plane, a tiling) yields `skipped = 0`, which is the refusal
 /// working: no bound, no early-out, no invented box.
 pub fn render_culled(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
+    let mut frame = Frame::new(camera.width, camera.height);
+    let stats = render_culled_into(tree, camera, &mut frame);
+    (frame, stats)
+}
+
+/// [`render_culled`] writing into a reused frame. Note that this path still builds a bound table per call,
+/// which is an allocation - the audit reports that honestly rather than pretending the frame is the only
+/// memory a frame costs.
+pub fn render_culled_into(tree: &Tree, camera: &Camera, frame: &mut Frame) -> Stats {
     // The counting table, not the pruning one: this entry point is the ray-level early-out and the
     // unpruned baseline to compare `render_bnb` against.
     let bounds = crate::cull::counting_bounds(tree);
-    render_with(
+    march_into(
         tree,
         camera,
         Some(bounds.enclosure_of(crate::ROOT as usize)),
         Some(&bounds),
+        frame,
     )
 }
 
@@ -133,22 +189,47 @@ pub fn render_culled(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
 /// anything. See `examples/cull_probe.rs` for the measured difference between the two - it is large, and
 /// it is the reason the ray-level version alone was not enough.
 pub fn render_bnb(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
+    let mut frame = Frame::new(camera.width, camera.height);
+    let stats = render_bnb_into(tree, camera, &mut frame);
+    (frame, stats)
+}
+
+/// [`render_bnb`] writing into a reused frame.
+pub fn render_bnb_into(tree: &Tree, camera: &Camera, frame: &mut Frame) -> Stats {
     let bounds = crate::cull::scene_bounds(tree);
-    render_with(
+    render_bnb_with(tree, camera, frame, &bounds)
+}
+
+/// [`render_bnb_into`] with the bound table supplied by the caller.
+///
+/// This exists for the hot path. A `SceneBounds` is two vectors sized by the node count, so building one
+/// per frame is the allocation churn AGENTS.md §3 bans during gameplay frames even when the pixel buffers
+/// are reused - and a scene's bounds only change when its asset does. A caller that hoists the table out
+/// of its loop is the form doc 09's "no allocation churn" promise can honestly be made about, which is
+/// what `examples/allocation_audit.rs` counts.
+pub fn render_bnb_with(
+    tree: &Tree,
+    camera: &Camera,
+    frame: &mut Frame,
+    bounds: &crate::cull::SceneBounds,
+) -> Stats {
+    march_into(
         tree,
         camera,
         Some(bounds.enclosure_of(crate::ROOT as usize)),
-        Some(&bounds),
+        Some(bounds),
+        frame,
     )
 }
 
-/// March every pixel of `camera`'s grid against `tree` and shade what comes back.
-fn render_with(
+/// March every pixel of `camera`'s grid against `tree` and shade what comes back, into `frame`.
+fn march_into(
     tree: &Tree,
     camera: &Camera,
     cull: Option<Enclosure>,
     bounds: Option<&crate::cull::SceneBounds>,
-) -> (Frame, Stats) {
+    frame: &mut Frame,
+) -> Stats {
     let forward = unit(camera.forward);
     let right = unit(camera.right);
     let up = unit(camera.up);
@@ -157,8 +238,9 @@ fn render_with(
     // measurement is the reason this is a multiple of the surface epsilon rather than the epsilon itself.
     let normal_eps = camera.surface * 16.0;
     let rays = camera.width * camera.height;
-    let mut pixels = Vec::with_capacity((rays as usize) * 3);
-    let mut depth = Vec::with_capacity(rays as usize);
+    frame.prepare(camera.width, camera.height);
+    let pixels = &mut frame.pixels;
+    let depth = &mut frame.depth;
     let mut hits = 0u32;
     let mut evaluations = 0u64;
     let mut skipped = 0u32;
@@ -178,7 +260,7 @@ fn render_with(
             if let Some(enclosure) = cull {
                 if !ray_may_hit(enclosure, camera.origin, dir, camera.max_t) {
                     skipped += 1;
-                    push_rgb(&mut pixels, sky(dir));
+                    push_rgb(pixels, sky(dir));
                     depth.push(Frame::NO_HIT);
                     continue;
                 }
@@ -211,33 +293,25 @@ fn render_with(
                     hits += 1;
                     evaluations += u64::from(hit.steps) + 1;
                     let n = normal(tree, ROOT, hit.point, normal_eps);
-                    push_rgb(&mut pixels, normal_to_rgb(n));
+                    push_rgb(pixels, normal_to_rgb(n));
                     depth.push(hit.t);
                 }
                 None => {
                     evaluations += u64::from(camera.max_steps);
-                    push_rgb(&mut pixels, sky(dir));
+                    push_rgb(pixels, sky(dir));
                     depth.push(Frame::NO_HIT);
                 }
             }
         }
     }
 
-    (
-        Frame {
-            width: camera.width,
-            height: camera.height,
-            pixels,
-            depth,
-        },
-        Stats {
-            rays,
-            hits,
-            evaluations,
-            skipped,
-            visits: bounds.map_or(0, |scene| scene.visits()),
-        },
-    )
+    Stats {
+        rays,
+        hits,
+        evaluations,
+        skipped,
+        visits: bounds.map_or(0, |scene| scene.visits()),
+    }
 }
 
 fn unit(v: Vec3) -> Vec3 {
