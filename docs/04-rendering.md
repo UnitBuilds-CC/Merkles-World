@@ -142,6 +142,28 @@ Two things in that table matter more than the milliseconds:
   culling workstream has to move. The charge for a miss is an upper bound - `march` can also exit on
   range - so the true share is somewhat lower and the direction of the argument is unaffected.
 
+The same example answers the second question the budget needs - what one more node costs. Holding the
+frame fixed (96x72, `surface = 1e-3`, 96-step budget) and growing only the tree, as a balanced union of
+spheres spread along x:
+
+| Leaves | Nodes | March steps | ns per node-step | Marginal ns per node |
+|---|---|---|---|---|
+| 1 | 1 | 659,801 | 2.95 | - |
+| 2 | 3 | 656,338 | 1.46 | 0.72 |
+| 4 | 7 | 649,430 | 1.52 | 1.57 |
+| 8 | 15 | 635,973 | 1.65 | 1.77 |
+| 16 | 31 | 627,890 | 1.62 | 1.59 |
+
+**The step count barely moves while the tree grows 31x** - 659,801 steps against 627,890, a 5% change -
+because a step is a property of the field along the ray, not of the tree: a bigger union makes each step
+*more expensive*, not the march *longer*. So the frame law is `steps x nodes`, and the two levers a
+compile-time budget can bind are the step budget and the node count. That is the measured reason
+`MAX_TREE_DEPTH` exists rather than being a tidy number, and the shape AS5 would enforce. The marginal cost
+settles near 1.6 ns per extra node per step on this machine - but treat the nanoseconds as the noisy half:
+the same binary measured the one-node grid at 1.9 ms and at 3.5 ms on different runs, a 2x spread, while the
+step counts repeated exactly every run. A budget written in node-steps is portable; one written in
+milliseconds is a claim about a laptop.
+
 The boot prints the same shape at a smaller scale, and a sparser frame makes the point harder: its
 64x48 grid reports 590 of 3,072 rays finding surface, and the 2,482 that missed are charged 238,272 of
 the 243,008 evaluations - **98.1% of that frame's cost spent finding nothing at all**. The counts are

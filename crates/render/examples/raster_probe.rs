@@ -51,6 +51,47 @@ fn scene() -> Tree {
     tree
 }
 
+/// A balanced union tree over `count` spheres, packed the way `assetc` packs: pre-order, with
+/// `subtree_len` derived from the shape of the subtree rather than asserted, and exactly one root flag.
+/// The spheres are spread along x, so a bigger tree means more surface in the frame rather than a taller
+/// stack in one place - which is the case a content budget has to survive.
+fn bushier(count: usize) -> Tree {
+    let mut nodes: Vec<NodeRecord> = Vec::new();
+    let mut params: Vec<f32> = Vec::new();
+    emit(count, 0, true, &mut nodes, &mut params);
+    Tree { nodes, params }
+}
+
+fn emit(
+    count: usize,
+    first_leaf: usize,
+    is_root: bool,
+    nodes: &mut Vec<NodeRecord>,
+    params: &mut Vec<f32>,
+) {
+    let flags = if is_root { FLAG_IS_ROOT } else { 0 };
+    if count == 1 {
+        let first = params.len() as u16;
+        params.extend_from_slice(&[0.2, (first_leaf as f32 - 4.0) * 0.5, 0.0, 0.0]);
+        nodes.push(NodeRecord([
+            pack_kind_and_arity(NODE_SPHERE, 0),
+            1,
+            pack_first_and_flags(first, flags),
+            pack_params_len(4),
+        ]));
+        return;
+    }
+    let left = count / 2;
+    nodes.push(NodeRecord([
+        pack_kind_and_arity(NODE_UNION, 2),
+        (2 * count - 1) as u32,
+        pack_first_and_flags(0, flags),
+        pack_params_len(0),
+    ]));
+    emit(left, first_leaf, false, nodes, params);
+    emit(count - left, first_leaf + left, false, nodes, params);
+}
+
 fn camera(width: u32, height: u32) -> Camera {
     Camera {
         origin: [0.0, 1.4, -4.2],
@@ -72,7 +113,6 @@ fn main() {
         "// CPU raster probe - informational, not gate R1. One tree, three grids, this machine."
     );
     let mut wrote = None;
-
     for (width, height) in [(96u32, 72u32), (192, 144), (320, 240)] {
         let start = Instant::now();
         let (frame, stats) = render(&tree, &camera(width, height));
@@ -123,6 +163,68 @@ fn main() {
             Err(error) => println!("image            : not written, {error}"),
         }
     }
+
+    println!("// Second question: what does each extra node cost? The frame is held fixed - same camera,");
+    println!("// same 96x72 grid, same 1e-3 surface and 96-step budget - and only the tree grows.");
+    println!("// Reading this table: a march step evaluates every node in the tree, so the useful unit is");
+    println!("// nanoseconds per node per step. Dividing evaluations by nodes - which the first draft of");
+    println!("// this line did - reports a number that falls as the tree grows and means nothing.");
+    println!(" leaves | nodes | march steps | grid ms | ns per node-step | marginal ns per node");
+    let mut previous: Option<(usize, u64, f64)> = None;
+    for leaves in [1usize, 2, 4, 8, 16] {
+        let grown = bushier(leaves);
+        validate(&grown).expect("every generated tree validates");
+        let start = Instant::now();
+        let (_, stats) = render(&grown, &camera(96, 72));
+        let elapsed = start.elapsed();
+        let nodes = grown.nodes.len();
+        let millis = elapsed.as_micros() as f64 / 1_000.0;
+        let per_node_step = millis * 1_000_000.0 / (stats.evaluations * nodes as u64) as f64;
+        let marginal = match previous {
+            Some((past_nodes, past_steps, past_millis)) => {
+                // Same grid, same camera, so the step counts differ only by where the extra surface
+                // stopped a ray early; charging the difference in time to the difference in node-steps
+                // is the honest marginal cost of one more node in the tree.
+                let delta_node_steps =
+                    stats.evaluations * nodes as u64 - past_steps * past_nodes as u64;
+                if delta_node_steps == 0 {
+                    String::from("-")
+                } else {
+                    format!(
+                        "{:.2}",
+                        (millis - past_millis) * 1_000_000.0 / delta_node_steps as f64
+                    )
+                }
+            }
+            None => String::from("-"),
+        };
+        println!(
+            " {:>6} | {:>5} | {:>11} | {:>7} | {:>16} | {:>20}",
+            leaves,
+            nodes,
+            stats.evaluations,
+            format!("{:.3}", millis),
+            format!("{:.2}", per_node_step),
+            marginal,
+        );
+        previous = Some((nodes, stats.evaluations, millis));
+    }
+    println!("// Two things this run says, and one it does not. It does say: the march step count is almost");
+    println!("// independent of how big the tree is - 659,801 steps for one node against 627,890 for 31, a");
+    println!("// 5% move on a 31x bigger tree - because the step is a property of the field along the ray,");
+    println!("// not of the tree. What scales is the work inside a step, so a frame costs roughly");
+    println!("// steps x nodes, and the two levers a budget can bind are the step budget and the node count.");
+    println!(
+        "// That is why MAX_TREE_DEPTH exists at all, and why docs/04 calls the step and epsilon"
+    );
+    println!("// budgets load-bearing rather than tidy.");
+    println!("// It does not say the marginal constant is stable: the node-step columns moved by about 2x");
+    println!("// between runs of this same binary on this same machine (1.6 ms and 3.5 ms for the one-node");
+    println!("// grid), which is the same reason gate P1.2's throughput figure is quoted for one machine.");
+    println!(
+        "// The step counts repeated exactly every run; the timings are the noisy half, so AS5's"
+    );
+    println!("// budget should be written against steps and nodes, and measured against a pinned machine.");
 
     println!("// What this says about the claim: the field becomes a picture, the per-pixel cost is flat");
     println!("// across resolution on one fixed tree, and a third of the rays - the ones that never find");

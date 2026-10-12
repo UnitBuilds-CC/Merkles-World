@@ -58,6 +58,12 @@ converts once at its boundary and never leaks it.
 | Level | Extent | Address |
 |-------|--------|---------|
 | Voxel | 1 unit | `GlobalVoxelPos` (3×i64) |
+
+**Not stated here, and deliberately not invented in code:** whether the integer names the unit cube
+`[x, x+1)` or a cube centred on `(x+0.5, y+0.5, z+0.5)`. Nothing hashed depends on it — a voxel's world
+position never enters a root — but the renderer, doc 07's collision, and the eventual base-terrain generator
+all have to agree, so it is [OQ-50](13-risks-open-questions.md) rather than a private choice in whichever
+subsystem needs it first.
 | Slab | plane tile: 256² voxels × 64 deep = 2²² voxels (4 MiB @ 1 B/voxel), 3 orientations | `(RegionKey, axis, plane_index)` — a lookup identity, **not** a delta-record field since [ADR-029](decisions.md); geometry still [SPEC-06](13-risks-open-questions.md)'s |
 | Region | 4096³ voxels = 2³⁶ voxels | `RegionKey` (3×i64) |
 | Sector | 16 regions per axis (16³ = 4096 regions) | `(Rx>>4, Ry>>4, Rz>>4)` |
