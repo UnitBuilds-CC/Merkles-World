@@ -168,6 +168,22 @@ ring-recycled across epochs, so nothing is allocated mid-frame.
 | GPU-authoritative state | Breaks cross-GPU bit equality (ADR-017) |
 | Ray tracing hardware acceleration (`NVBLAS` etc.) | Vendor-specific; the march is already coherent-ray friendly — revisit post-launch |
 
+## The node grammar contract
+
+**Drafted 2026-10-12 as artifact A-07 (`contracts/sdf.rs`), DRAFT, proposed in [ADR-031](decisions.md).** ADR-012 decided content is data rather than source and named the consequence itself: the grammar is a public API surface living in `contracts/`. This is that surface, and it pins five things, each because a second implementation would otherwise get it differently:
+
+| Pinned | Choice | Why it is a contract and not a detail |
+|--------|--------|---------------------------------------|
+| Kind numbering | 15 kinds: primitives `0..=4`, combiners `8..=11`, transforms and noise `16..=20`, material leaf `24` | The numbering is on disk in every authored asset. A renumbering silently reinterprets them all, so values are never reused or shuffled |
+| Arity | Fixed per kind, read from `arity_of`, never from the file. Combiners are **binary**: `assetc` flattens an n-ary authoring union into a left-leaning chain | One branch to budget instead of *n*, and a tree cannot hide a wide fan-out. The validator and the interpreter read the same table, so a tree that would make the shader guess is refused before upload |
+| Record | 16 bytes, four words: `kind` + `arity`, `subtree_len`, `params_first` + `flags`, `params_len` + reserved | The tree is one WGSL storage buffer. Indices replace pointers, which do not survive upload, and pre-order plus `subtree_len` makes a sibling `index + subtree_len` - arithmetic, not a walk |
+| Depth cap | `MAX_TREE_DEPTH = 16`, **a draft** | Chosen so a validator exists at all. Spike S1 s frame-time curve is what should set it, and saying so is the difference between a number and a guess |
+| Float rule | Geometry is `f32` and never hashed; `sin` and `cos` are legal inside Twist, Bend and domain warp | [AGENTS.md](../AGENTS.md) section 4 and ADR-017, because this doc's determinism boundary says the renderer outputs pixels only. A material id a peer must agree on is a ledger value from A-03, not a grammar value |
+
+**A lesson from the drafting, kept in the open.** The first record layout packed `params_first`, `params_len` **and** `flags` into one word, and shifting `flags` by 24 overwrote the top byte of `params_len`: a node wanting `0x0abc` parameters read back `0x0acc`. Nothing failed to compile and review did not catch it - a test did. A layout shared between `assetc`, WGSL and a WASM binding that loses bits on write is worse than one with fewer fields, because the loss is invisible in the writer and fatal in the reader. `the_record_round_trips_without_losing_fields` pins that case, and `a_record_can_be_caught_lying_about_its_arity` is the validator half of it.
+
+**Why this section does not mirror the contract verbatim**, the way docs/03 mirrors A-10: a contract whose doc comments contain fenced code blocks unbalances the markdown block a mirror needs, and `tools/check_docs.mjs` then reports an odd fence count for the document. `contracts/sdf.rs` is the single source of truth for the grammar until A-07's FlatBuffer half (doc 09) and ADR-031's sign-off settle a mirror-safe form.
+
 ## Validation gates
 
 | Gate | Test | Target / source |

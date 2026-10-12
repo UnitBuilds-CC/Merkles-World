@@ -27,3 +27,9 @@ pub mod tx;
 /// (docs/03 § The tree shape, ADR-030). The grammar is shared; the hasher is `crates/ledger`.
 #[path = "../tree.rs"]
 pub mod tree;
+
+/// A-07 - the shape/material node grammar: kinds and their fixed arity, the 16-byte record the
+/// interpreter reads from one storage buffer, and the evaluator signature (docs/04, ADR-012 and
+/// ADR-031).
+#[path = "../sdf.rs"]
+pub mod sdf;

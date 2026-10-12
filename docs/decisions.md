@@ -38,6 +38,7 @@ spike result or an open question; `proposed` = our recommendation, needs sign-of
 | [028](#adr-028--blake3-256-as-the-ledger-digest) | BLAKE3-256 as the ledger digest | **locked 2026-10-11** — signed off: locks [SPEC-04](13-risks-open-questions.md)'s hashing half and makes BLAKE3 the first external dependency the workspace takes |
 | [029](#adr-029--delta-records-address-voxels-by-region-slot--intra-region-triple) | Delta records address voxels by region slot + intra-region triple (SPEC-09) | **locked 2026-10-11** — signed off; resolves SPEC-09 |
 | [030](#adr-030--merkle-tree-shape-arity-child-order-and-the-empty-rules) | Merkle tree shape: arity, child order, empty rules, byte order | **locked 2026-10-12** — signed off after `crates/ledger` computed and published the root vectors; freezes artifact A-10 and makes a rule change a shape break |
+| [031](#adr-031--the-node-grammar-as-a-16-byte-record) | The node grammar as a 16-byte record | proposed - artifact A-07 (`contracts/sdf.rs`) is written against it; the FlatBuffer envelope half (doc 09) and sign-off are still owed |
 
 ---
 
@@ -937,3 +938,68 @@ hypothesis until a spike measures it.
 required to prove two different-lengthed collections equal, or if root chaining is adopted as a
 storage requirement — in which case the epoch root's payload gains a predecessor and every published
 vector is regenerated.
+
+---
+
+## ADR-031 - the node grammar as a 16-byte record
+
+**Status: proposed 2026-10-12.** ADR-012 chose interpretation over generated shaders and stated its own
+consequence: "the grammar is a public API surface - it lives in `contracts/`, versioned". Artifact
+**A-07** (`contracts/sdf.rs`) is that surface, and this ADR records the choices in it that a second
+implementation would otherwise make differently. Sign-off is owed before `assetc`, the WGSL interpreter
+or a WASM binding treat the record as frozen.
+
+**Context.** docs/04 lists operators in prose - `Sphere`, `RoundedBox`, `SmoothUnion(k)`, `Repeat`,
+`Twist`, `Noise` - and says the tree lives in a FlatBuffer so the interpreter reads it zero-copy. Prose
+of that kind is not a contract: two honest implementations can agree on every operator name and still
+disagree on how many children a union has, whether a node's parameter count survives the trip through a
+packed word, or where a sibling is. And because the grammar is the **asset format**, a disagreement is
+not a crash - it is a silently different shape on screen, in a project whose entire mod story is that
+agents emit data rather than source.
+
+**Decision.**
+
+- **16 bytes, four words, one field place each**: `kind` and `arity`, `subtree_len`, `params_first` and
+  `flags`, `params_len` with the upper half reserved. Reserved means reserved: it stays zero until a
+  revision has a use for it, so an old reader cannot misread a new writer by accident.
+- **Pre-order traversal with `subtree_len`.** A child is at `index + 1`, a sibling at
+  `index + subtree_len`: no pointers (which do not survive an upload) and no stack in the walker.
+- **Arity is a property of the kind table, never of the file.** Combiners are binary because `assetc`
+  flattens an n-ary authoring union into a left-leaning chain - one branch to budget instead of *n*.
+  `arity_matches_the_table` is the validator's check; a tree that fails it never reaches a buffer.
+- **15 kinds with stable numbering** (primitives `0..=4`, combiners `8..=11`, transforms and noise
+  `16..=20`, material leaf `24`), with gaps so related operators join their band without renumbering a
+  single existing kind.
+- **`MAX_TREE_DEPTH = 16`, labelled a draft.** It exists so `assetc` can refuse a tree the marcher
+  cannot budget. Spike S1's curve sets the number; until then the doc says which is which.
+- **Geometry stays `f32` and is never hashed.** `sin` and `cos` are legal here - Twist, Bend, domain
+  warp - because docs/04's determinism boundary says the renderer outputs pixels only (ADR-017,
+  [AGENTS.md](../AGENTS.md) section 4). A material id a peer must agree on is a ledger value from A-03,
+  not a grammar value.
+
+**What the drafting exposed, recorded rather than hidden.** The first layout packed `params_first`,
+`params_len` **and** `flags` into one 32-bit word, and shifting `flags` by 24 silently overwrote the top
+byte of `params_len`. Nothing failed to compile, review did not catch it, a test did. That outcome is the
+argument for pinning the record as a contract at all: a shared byte layout that loses information on
+write is invisible in the writer and fatal in the reader.
+
+**Rejected.** Per-entity hand-written shaders (ADR-012's bottleneck, and uniformly unbudgetable); a
+visual node-graph editor (an art tool in disguise - ADR-011); n-ary combiners in the wire form (a wide
+fan-out is precisely what a budget-checking validator must not have to reason about); pointers or
+handles inside a record (they do not survive the upload, and they make the tree unreadable by a WASM
+binding); packing three fields into one word for tidiness (see above); a `NODE_MESH` or `NODE_TEXTURE`
+kind (there is no art pipeline to feed one, and adding the kind is the crack the pipeline walks in
+through).
+
+**Consequences.** A-07 joins the artifact queue **half-written**: the node record and the evaluator
+signature exist, the FlatBuffer envelope that carries a tree (doc 09, and A-07's `.fbs` clause) does
+not, so `assetc` still has nothing to emit and docs/04 does not mirror the contract verbatim the way
+docs/03 mirrors A-10 - a contract whose comments contain fenced blocks unbalances the markdown and the
+docs checker reports an odd fence count, so the mirror waits for a fence-free form. Spike S1 now has
+something concrete to march over; gates R1 and R5 stay unmeasurable until an interpreter exists. The
+grammar is also the surface a mod authors through, so A-02 (`ledger-api.wit`) and ADR-013 meet it here -
+a second reason `GRAMMAR_VERSION` has to be real rather than a comment.
+
+**Re-open if** a backend cannot do 16-byte records, if `assetc` is asked to emit n-ary combiners
+directly, if a material node ever needs children (that is A-04 and OQ-08 territory, and it would make
+the leaf rule false), or if spike S1 shows the depth cap binding content rather than guarding frames.
