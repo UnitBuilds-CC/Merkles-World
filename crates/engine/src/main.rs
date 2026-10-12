@@ -16,8 +16,10 @@
 //!    `ShapeAsset` bytes that `assetc::reader` loads back and `crates/render` evaluates, so the demo's
 //!    scene clause describes an asset rather than a tree this binary built in memory. It is still a CPU
 //!    evaluation, and the line that prints it says so.
-//! 7. the same field is marched as a grid of rays - a small frame, shaded on a CPU - and reported as
-//!    counts, not shown. Nothing displays it; that half is still the renderer workstream's.
+//! 7. the same field is marched as a grid of rays **three ways** - unculled, against the scene's one
+//!    enclosure, and against the bound hierarchy - and reported as counts, not shown. The three frames are
+//!    asserted identical, and the line prints which of the two culls the scene's own licence allows, which
+//!    for a blended scene is none. Nothing displays it; that half is still the renderer workstream's.
 //!
 //! Usage: `engine` compiles its own scene and loads those bytes back; `engine <asset.bin>` boots from
 //! a file an `assetc` run wrote, which is the shape doc 09's dev profile ends in.
@@ -220,7 +222,7 @@ fn main() {
     println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU; a single ray, so nothing to skip)");
 
     // ---- 7. the same field as a frame: a grid of rays, still on the CPU ----
-    // Both paths run, and the boot asserts they agree. That is the claim the raster cull rests on: a
+    // All three paths run, and the boot asserts they agree. That is the claim the raster cull rests on: a
     // bound that is too small deletes geometry and the result looks like a correct render, so the check
     // belongs where a real frame is drawn, not only in a suite that never marches this scene.
     let (frame, raster) = render::raster::render(&tree, &probe_camera());
@@ -237,8 +239,24 @@ fn main() {
         render::cull::Enclosure::Bounded { radius, .. } => radius,
         render::cull::Enclosure::Unbounded => f32::NAN,
     };
+    // The third path is the hierarchy: the same ray question asked of each child instead of the one cover
+    // sphere. It runs here because `cull_probe` measured that the answer can be worth two orders of
+    // magnitude - and because on *this* scene the answer is the licence's own story: the root union sits
+    // above a smooth union, and a blend poisons the skip precondition for as far up as it reaches, so the
+    // descent inherits the single bound's verdict. Printing the licence bit next to the two counts is what
+    // turns that from a code reading into a measured line in the demo.
+    let licensed = render::cull::scene_bounds(&tree).respects(render::ROOT as usize);
+    let (bnb_frame, bnb_raster) = render::raster::render_bnb(&tree, &probe_camera());
+    assert_eq!(
+        frame.pixels, bnb_frame.pixels,
+        "the hierarchy descent changed the boot's picture - a bound is too small somewhere"
+    );
+    assert_eq!(
+        frame.depth, bnb_frame.depth,
+        "the hierarchy descent moved a surface the march found"
+    );
     println!(
-        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations, {} with the scene cull (bound r {:.2}, {} of {} rays proved empty) (informational; gate R1 is a GPU frame and stays unmet)",
+        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations, {} with the scene cull (bound r {:.2}, {} of {} rays proved empty), {} with the hierarchy descent ({} proved empty, root licence {} - this scene blends, so the descent inherits the single bound; cull_probe prices that licence) (informational; gate R1 is a GPU frame and stays unmet)",
         frame.width,
         frame.height,
         raster.hits,
@@ -247,7 +265,10 @@ fn main() {
         culled_raster.evaluations,
         bound,
         culled_raster.skipped,
-        raster.rays
+        raster.rays,
+        bnb_raster.evaluations,
+        bnb_raster.skipped,
+        if licensed { "granted" } else { "refused" },
     );
 
     // ---- 8. the commit's cheap half: recycling the slab ----

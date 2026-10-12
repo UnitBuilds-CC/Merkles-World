@@ -26,7 +26,7 @@
 
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
-    NODE_SPHERE, NODE_UNION,
+    NODE_SMOOTH_UNION, NODE_SPHERE, NODE_UNION,
 };
 use core::cmp::Ordering;
 use render::cull::{scene_enclosure, Enclosure};
@@ -40,9 +40,30 @@ const SPACING: f32 = 1.2;
 /// is arithmetic (a full binary tree over `count` leaves is `2 * count - 1` nodes), so no fix-up pass is
 /// needed and the root flag lands on node 0 by construction.
 fn scene(centres: &[[f32; 3]]) -> Tree {
+    build(centres, None)
+}
+
+/// The same tree shape with every branch written as a `smooth union` instead of a plain one. One number
+/// differs between the two scenes - the blend strength - and that is the whole experiment: a blend is what
+/// an author adds to make geometry look like one object, and it is also what takes the hierarchy away.
+fn blended(centres: &[[f32; 3]]) -> Tree {
+    build(centres, Some(BLEND))
+}
+
+const BLEND: f32 = 0.2;
+
+fn build(centres: &[[f32; 3]], blend: Option<f32>) -> Tree {
     let mut nodes = Vec::new();
     let mut params: Vec<f32> = Vec::new();
-    emit(&mut nodes, &mut params, centres, 0, centres.len(), true);
+    emit(
+        &mut nodes,
+        &mut params,
+        centres,
+        0,
+        centres.len(),
+        true,
+        blend,
+    );
     Tree { nodes, params }
 }
 
@@ -53,6 +74,7 @@ fn emit(
     from: usize,
     to: usize,
     root: bool,
+    blend: Option<f32>,
 ) {
     let flags = if root { FLAG_IS_ROOT } else { 0 };
     if to - from == 1 {
@@ -68,15 +90,23 @@ fn emit(
         return;
     }
     let count = (to - from) as u32;
+    let first = params.len() as u16;
+    let (kind, params_len) = match blend {
+        Some(k) => {
+            params.push(k);
+            (NODE_SMOOTH_UNION, 1)
+        }
+        None => (NODE_UNION, 0),
+    };
     nodes.push(NodeRecord([
-        pack_kind_and_arity(NODE_UNION, 2),
+        pack_kind_and_arity(kind, 2),
         count * 2 - 1,
-        pack_first_and_flags(0, flags),
-        pack_params_len(0),
+        pack_first_and_flags(first, flags),
+        pack_params_len(params_len),
     ]));
     let mid = from + count as usize / 2;
-    emit(nodes, params, centres, from, mid, false);
-    emit(nodes, params, centres, mid, to, false);
+    emit(nodes, params, centres, from, mid, false, blend);
+    emit(nodes, params, centres, mid, to, false, blend);
 }
 
 fn camera() -> Camera {
@@ -250,6 +280,13 @@ fn main() {
         report("cluster", &scene(&cluster(count)), &camera);
         report("line", &scene(&line(count)), &camera);
     }
+    // The licence rows, printed with the same two arrangements and the same sphere counts. A blend
+    // strength is the only difference, and `report` asserts frame equality either way, so what these rows
+    // price is the authoring choice rather than a possible bug.
+    for count in [32usize, 128] {
+        report("cluster/blend", &blended(&cluster(count)), &camera);
+        report("line/blend", &blended(&line(count)), &camera);
+    }
     for count in [32usize, 128] {
         let scattered = scatter(count);
         let authored = scene(&scattered);
@@ -289,6 +326,24 @@ fn main() {
     );
     println!("//   too-small enclosure this module exists to make impossible, caught by the frame");
     println!("//   comparison rather than by reading the arithmetic.");
+    println!(
+        "// - THE LAST FOUR ROWS ARE AN AUTHORING RULE, PRICED. Identical spheres, identical tree"
+    );
+    println!("//   shape, identical camera - every branch written as a smooth union with k 0.2 instead of");
+    println!("//   a plain one - and the hierarchy is gone: the line/128 row goes from 97.1% of rays proved");
+    println!(
+        "//   empty and 648 evaluations to 0.0% and 287,128, a factor of 443, and cluster/128 from"
+    );
+    println!("//   93.8% to 32.8%. Node visits fall to 0.0% avoided too, because the per-step skip reads");
+    println!("//   the same licence bit. Nothing was broken getting there: the blended frames still match");
+    println!("//   the unculled render byte for byte, which is what makes the number a cost rather than a");
+    println!("//   bug.");
+    println!("// - why: a skip needs field >= distance to the node's own bound, and smin returns below min");
+    println!("//   by up to k/4, so a blend poisons its parent for as far up as it reaches - one blended");
+    println!("//   branch at the root is enough, which is exactly what the boot's own five-node scene is.");
+    println!("//   Whether the grown-by-k enclosure satisfies the inequality anyway is OQ-54: a proof hands");
+    println!("//   most of this back and a guess deletes geometry, so the row is published as a cost, not");
+    println!("//   as a TODO.");
     println!(
         "// - `evals plain` and `rays skipped` are the step-level story. One tight bound proves"
     );

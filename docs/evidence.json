@@ -3,10 +3,10 @@
   "_updated": "2026-10-12",
   "claims": {
     "boot_output_sha256": {
-      "value": "d80711e5fbdff94bfab194c454c7bee79af02a42a0d1877c91a0bbd21ad84cd0",
+      "value": "c5ca867b681e89712cb8de31fba5f4b1ca9a97d82f0f8bbed93faaf0b99ba470",
       "what": "SHA-256 of the whole fourteen-line output of `cargo run -p engine`, which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
-      "first_measured_at": "38316936594",
+      "first_measured_at": "38316936594 (previous value); this one awaits its own green run",
       "superseded": [
         {
           "value": "15c1e8af1b523d7382f705a6ffe6a19e7d3ef4dbfc4c585fd4ead8931c139cf3",
@@ -15,13 +15,17 @@
         {
           "value": "8cdd94f4c617922c10a95aef630524e256eb6cb9e95fdf56b41d3c9329270524",
           "why": "the enclosure a ray skip is tested against now grows by the marcher's hit tolerance (61491cc). Two grazing rays at the root bound that the bare-radius test proved empty are marched instead, so the boot's raster line reads 179072 evaluations and 666 of 3072 rays proved empty rather than 178880 and 668. No hashed value moved: epoch root, region list, slot table and the re-entered region root are the same digests, and the two frames the boot compares are still byte-identical"
+        },
+        {
+          "value": "d80711e5fbdff94bfab194c454c7bee79af02a42a0d1877c91a0bbd21ad84cd0",
+          "why": "the boot marches its grid a third way, through the bound hierarchy, and prints the descent's counts next to the scene cull's plus the scene's own licence bit. The demo's scene blends at its root, so the descent is refused there and both culled paths report the same 179072 evaluations and 666 of 3072 rays - the added clause is a measured refusal, not a new number. No hashed value moved."
         }
       ],
       "cited_in": [
         "docs/11-roadmap.md",
-        "docs/13-risks-open-questions.md"
+        "docs/04-rendering.md"
       ],
-      "_note_value_change": "measured by 38316936594 (the run that made the tolerance-grown skip public)"
+      "_note_value_change": "printed by the boot on this trunk; first_measured_at retargets once CI has measured it"
     }
   }
 }

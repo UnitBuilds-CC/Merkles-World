@@ -181,8 +181,10 @@ ARM64 macOS, which is the first time this repository has compared a whole pixel 
 machines. That comparison is a diagnostic, not a gate: nothing here feeds a digest, and a frame hash stays
 informational by policy (ADR-017, gate R4).
 
-The boot now marches that same grid twice and prints both - `243008 evaluations, 179072 with the scene
-cull (bound r 2.10, 666 of 3072 rays proved empty)` - and asserts inside the binary that the two frames
+The boot now marches that same grid three ways and prints all of them - `243008 evaluations, 179072 with
+the scene cull (bound r 2.10, 666 of 3072 rays proved empty), 179072 with the hierarchy descent (666
+proved empty, root licence refused - this scene blends, so the descent inherits the single bound;
+cull_probe prices that licence)` - and asserts inside the binary that the three frames
 are identical pixels and depth, because a bound that is too small deletes geometry and the result looks
 like a correct render, which is a fact worth checking where a real frame is drawn rather than only in a
 suite. It also shows the limit in the demo's own numbers: 81% of the boot's rays miss and only 21.7% are
@@ -191,8 +193,9 @@ proved empty, because a 2.1-unit sphere around a scene fills a camera that close
 quoted above print `178880 … 668 of 3072`: two rays moved back across the line when a skip began testing
 the bound grown by the marcher's hit tolerance (see the third-layer section below), and they are the boot's
 own grazing cases. The shape of the line is unchanged, the numbers in it are measured, and the whole
-fourteen-line output hashes to `d80711e5fbdff94b…` (`8cdd94f4c617922c…` before it) in `docs/evidence.json`,
-which both the docs gate and CI check rather than believe.
+fourteen-line output hashes to `c5ca867b681e897…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`)
+`8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`)
+value), which both the docs gate and CI check rather than believe.
 
 The counts repeated identically run to run; the wall times did not (the 320×240 grid measured 53 ms and
 86 ms in the same session on the same binary). That is the whole reason this section reports evaluations
@@ -277,6 +280,38 @@ radius 0.4, two arrangements of the same counts:
 | scatter, median split | 32 | 22.98 | 284,992 | 0.0% | 96.3% | 1,120 | 1,655,892 | 38,569 | 97.7% |
 | scatter, authored order | 128 | 138.01 | 284,800 | 0.0% | 96.2% | 1,024 | 6,474,195 | 207,263 | 96.8% |
 | scatter, median split | 128 | 84.69 | 284,800 | 0.0% | 96.2% | 1,024 | 6,474,195 | 115,304 | 98.2% |
+
+### The licence is an authoring choice, and the probe now prices it (2026-10-12)
+
+The same scene written twice - identical spheres, identical tree shape, identical camera, and every branch
+a `smooth union` with `k = 0.2` in one version and a plain `union` in the other - is the difference between
+having a hierarchy and not having one:
+
+| Arrangement, 128 spheres | Branch kind | Rays skipped by the root bound | Rays skipped by the descent | Evals after the descent | Node work avoided |
+|---|---|---|---|---|---|
+| line | plain union | 0.0% | **97.1%** | 648 | 98.3% |
+| line | smooth union | 0.0% | **0.0%** | 287,128 | 0.0% |
+| cluster | plain union | 44.3% | **93.8%** | 1,656 | 97.5% |
+| cluster | smooth union | 32.8% | **32.8%** | 180,662 | 0.0% |
+
+A blend poisons the skip precondition for as far up as it reaches, so **one blended branch at the root costs
+the whole hierarchy - a factor of 443 on the line row** - and it costs the per-step skip too, which is why
+the last column goes to zero rather than merely shrinking. The frames stay byte-identical in every row, so
+this is a price, not a bug. `cargo run --release --example cull_probe -p render` prints the four blended
+rows under their `cluster/blend` and `line/blend` labels.
+
+Two consequences worth stating where content authors will read them. **For the asset pipeline (doc 09),**
+the blending decision is a frame-cost decision, not only a look decision: a scene of plain unions over
+sphere-like features can be culled hierarchically and a blended one cannot, and nothing in the current
+grammar says so in the file itself. **For the demo,** the boot's own five-node scene is the refused case -
+its root union sits above a smooth union - which is why the boot prints `root licence refused` beside two
+identical culled counts rather than a saving.
+
+Whether the licence is *too* conservative is [OQ-53](13-risks-open-questions.md)'s neighbour and now
+**OQ-54**: a smooth union's enclosure is grown by `k`, while the dip `smin` can produce is bounded by
+`k/4`, which suggests the grown bound may satisfy `field >= distance to bound` after all. The reasoning is
+sketched and deliberately not acted on - the failure mode of being wrong is deleted geometry, and the
+current refusal is what the tests assert.
 
 ### The third layer: a descent through the bounds, and the tolerance bug it found (2026-10-12)
 
