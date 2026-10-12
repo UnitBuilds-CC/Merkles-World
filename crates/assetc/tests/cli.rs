@@ -122,3 +122,41 @@ fn broken_input_is_refused_rather_than_compiled_into_something() {
     );
     let _ = std::fs::remove_file(&bad);
 }
+
+/// The fixture CI hashes on three architectures, checked here for the two things a digest cannot show:
+/// that the bytes are a *loadable* asset rather than arbitrary identical output, and that the
+/// reproducibility AS2 claims holds even locally. A cross-machine agreement on a file the reader would
+/// reject would be a green checkmark over a broken gate.
+#[test]
+fn the_cross_machine_fixture_is_loadable_and_repeated() {
+    let input = fixture("knot.ron");
+    let first = out_path("knot-a.bin");
+    let second = out_path("knot-b.bin");
+
+    let a = run(&[input.as_path(), first.as_path()]);
+    let b = run(&[input.as_path(), second.as_path()]);
+    assert!(a.status.success() && b.status.success());
+    let bytes_a = std::fs::read(&first).expect("first compile wrote a file");
+    let bytes_b = std::fs::read(&second).expect("second compile wrote a file");
+    assert_eq!(
+        bytes_a, bytes_b,
+        "two compiles of one source differ on one machine, so AS2 cannot be about two"
+    );
+
+    // Identical bytes are only useful if they are an asset: read them back through the load path the
+    // engine uses and compare against what the library lowers from the same source.
+    let loaded = from_bytes(&bytes_a).expect("the fixture's bytes load as a ShapeAsset");
+    let text = std::fs::read_to_string(&input).expect("fixture is readable");
+    let authored: assetc::Shape = ron::from_str(&text).expect("fixture parses");
+    let lowered = assetc::lower(&authored).expect("fixture lowers");
+    assert_eq!(loaded.nodes, lowered.tree.nodes);
+    assert_eq!(loaded.params, lowered.tree.params);
+    assert_eq!(loaded.depth, lowered.depth);
+    assert_eq!(
+        loaded.label, "knot.ron",
+        "the label is part of the bytes two machines are being compared on"
+    );
+
+    let _ = std::fs::remove_file(&first);
+    let _ = std::fs::remove_file(&second);
+}

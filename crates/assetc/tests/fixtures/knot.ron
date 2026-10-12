@@ -1,0 +1,32 @@
+// A non-trivial authored shape, for AS2 ("identical .bin bytes from identical source on two machines").
+//
+// sphere.ron is one node and four parameters: enough to prove the envelope, not enough to prove the
+// parts that could actually differ between machines — the order parameters land in the f32 pool, the
+// decimals that are not exactly representable in binary, the depth a hand-built vtable has to keep
+// straight, and the union ordering `assetc::order::rebalance` now performs at build time from f32
+// sort keys.
+//
+// So every value below is one a parser is entitled to disagree about: 0.1 and 0.3 are not
+// representable in binary, -0.0 has two bit patterns for one value, and 1e7 lands on the nearest f32
+// only if the decimal-to-binary rounding agrees. CI compiles this on x86-64 Linux, x86-64 Windows and
+// ARM64 macOS and requires the bytes to match.
+Union(
+    a: SmoothUnion(
+        a: Subtract(
+            kept: Union(
+                a: Sphere(r: 0.1, centre: (0.30000000000000004, -0.0, 7.5)),
+                b: Sphere(r: 0.30000000000000004, centre: (-1e7, 0.1, 2.5)),
+            ),
+            cutter: Sphere(r: 0.7, centre: (0.0, 0.0, 0.0)),
+        ),
+        b: RoundedBox(half: (0.1, 0.2, 0.3), r: 0.05),
+        k: 0.25,
+    ),
+    b: Mirror(
+        axis: 1,
+        child: Intersect(
+            a: RoundedBox(half: (1.5, 0.5, 2.25), r: 0.1),
+            b: Sphere(r: 1.25, centre: (0.0, -0.0, 0.3)),
+        ),
+    ),
+)

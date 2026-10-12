@@ -355,6 +355,83 @@ jobs:
           MLWS_NATIVE_OUTPUT: host.txt
         run: bash tools/safari_parity.sh target/wasm32-wasip1/release/engine.wasm
 
+  # doc 09's AS2: "identical `.bin` bytes from identical source on two machines (deterministic
+  # serialization)". Two is the floor and this harness has three, so each leg compiles the same two
+  # fixtures and a following job compares the digests. The things that could actually differ are not
+  # mysterious: the order parameters enter the f32 pool, the decimal-to-`f32` rounding of values that are
+  # not representable (0.1, 0.3, 1e7 in `knot.ron`), and the union ordering
+  # `assetc::order::rebalance` derives from `f32` sort keys at build time. Checking that on three
+  # architectures is what turns "deterministic serialization" from a claim into a gate.
+  asset-bytes:
+    name: asset bytes on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86-64 Linux
+            slug: linux-x86-64
+            os: ubuntu-latest
+          - label: x86-64 Windows
+            slug: windows-x86-64
+            os: windows-latest
+          - label: ARM64 macOS
+            slug: macos-arm64
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the compiler
+        shell: bash
+        run: cargo build --release -p assetc
+      - name: Compile both fixtures and hash the result
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures=crates/assetc/tests/fixtures
+          out=target/as2
+          mkdir -p "$out"
+          ./target/release/assetc "$fixtures/sphere.ron" "$out/sphere.bin"
+          ./target/release/assetc "$fixtures/knot.ron" "$out/knot.bin"
+          # Relative paths inside the digest lines, so the file is comparable across machines that use
+          # different path separators and working-directory spellings.
+          (cd "$out" && sha256sum sphere.bin knot.bin) > asset-digest.txt
+          wc -c "$out/sphere.bin" "$out/knot.bin"
+          cat asset-digest.txt
+      - name: Publish this architecture's digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-digest-${{ matrix.slug }}
+          path: asset-digest.txt
+
+  asset-bytes-agree:
+    name: asset bytes agree across machines (AS2)
+    needs: asset-bytes
+    runs-on: ubuntu-latest
+    steps:
+      # No `name:` on purpose: omitting it fetches every artifact from the run, each into a folder of its
+      # own, which is what a comparison across three architectures needs.
+      - uses: actions/download-artifact@v4
+      - name: Compare
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=$(find . -name asset-digest.txt | sort)
+          found=$(printf '%s\n' "$files" | grep -c . || true)
+          if [ "$found" -lt 2 ]; then
+            echo "AS2 needs at least two machines to agree; found $found digest file(s)" >&2
+            exit 1
+          fi
+          printf '%s\n' "$files" | while read -r file; do
+            echo "--- $file"
+            cat "$file"
+          done
+          distinct=$(printf '%s\n' "$files" | xargs sha256sum | awk '{print $1}' | sort -u | grep -c .)
+          if [ "$distinct" != 1 ]; then
+            echo "^^^ the same authored source produced different bytes on different machines" >&2
+            exit 1
+          fi
+          echo "AS2 ok: $found machines produced byte-identical assets from the same source"
+
   schema:
     name: asset schema (flatc)
     runs-on: ubuntu-latest
