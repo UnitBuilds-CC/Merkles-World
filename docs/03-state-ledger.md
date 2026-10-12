@@ -779,7 +779,23 @@ and a subtree's leaves stay one contiguous run for the builder to recurse over.
 builds its preimages with `preimage()` below and hashes them with its own BLAKE3, and that is the
 entire agreement it has to keep.
 
-### The published vectors
+#### Running the published vectors somewhere else, rather than agreeing about them
+
+A published root is only evidence if a second execution produces it. The strongest form of that check
+available without new hardware: build the engine for `wasm32-wasip1`, run the module under a WASM
+engine, and diff its output against the native build's. CI does exactly this, and the thirteen lines
+match - `EPOCH_0 91b97a52…`, the region list and the slot table included - so the digest is now
+produced by two different code generators, two link-time target configurations, and a different
+machine-model of function calls, with nothing in this repository writing an `unsafe` block or an
+export attribute to achieve it.
+
+Read the scope honestly, because the temptation here is specific and named in docs/02: a WASM engine
+is a fourth *kind* of target, not the fourth *device* spike S3 lists. And the lines this diff compares
+also carry marched `f32` values and raster counts, which match only because the march uses add,
+multiply and `sqrt`; those are presentation, they are not hashed, and no part of this check may be
+quoted as gate R4 or R1 evidence (ADR-017 keeps them informational).
+
+## The published vectors
 
 ADR-028's second half — "published test vectors so Rust, WASM and any future language binding agree
 bit-for-bit". They exist now, produced by `crates/ledger` and pinned as literals in

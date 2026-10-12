@@ -123,6 +123,39 @@ jobs:
       - name: Build contracts, coords, the ledger hasher and the slab for the browser target
         run: cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger -p memory
 
+      # Gate P1.5's fourth target family, and the part that was wrongly filed as blocked. The export-lint
+      # decision (OQ-41) is about a module *exporting* functions for a host to call; it has nothing to do
+      # with running a WASI command, whose `_start` comes from the Rust runtime rather than from an
+      # unsafe attribute in this repository. So the whole engine is built for wasm32-wasip1, executed
+      # under a WASM engine, and its output diffed against the native build's. The boot prints the epoch
+      # root, the region list and the slot table, so an identical diff is a statement about hashed state
+      # on a fourth kind of target - not yet spike S3's M1 *browser*, which needs a browser.
+      - name: Install the WASI target
+        run: rustup target add wasm32-wasip1
+
+      - name: Build the engine as a WASI command module
+        run: cargo build --release --target wasm32-wasip1 -p engine
+
+      - name: Run the engine under a WASM engine and diff it against the host build
+        run: |
+          set -euo pipefail
+          node --version
+          cargo run --release -q -p engine > host.txt
+          node --experimental-wasi-unstable-preview1 tools/wasm_parity.mjs \
+            target/wasm32-wasip1/release/engine.wasm > wasm.txt 2> wasm.err
+          # An empty file diffs clean against an empty file. The engine asserts its own vectors, so if it
+          # ever exits early the comparison below would be vacuous - check there is something to compare.
+          test -s wasm.txt || { echo "the WASM run printed nothing"; exit 1; }
+          # Node's WASI support is experimental and warns on stderr; anything else on that stream is a
+          # failure worth seeing, so keep it visible rather than swallowing it.
+          grep -v 'ExperimentalWarning\|trace-warnings' wasm.err >&2 || true
+          if ! diff -u host.txt wasm.txt; then
+            echo "^^^ the WASM build and the host build disagree; a root has diverged across engines" >&2
+            exit 1
+          fi
+          echo "parity: $(wc -l < host.txt) lines identical, including:"
+          grep -E 'epoch root|region list|slot table' wasm.txt
+
   schema:
     name: asset schema (flatc)
     runs-on: ubuntu-latest
