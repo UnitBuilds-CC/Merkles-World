@@ -105,6 +105,11 @@ jobs:
       - name: Spike S1 march steps (informational)
         run: cargo run --release --example scene_steps -p render
 
+      # The cull probe prints counts only, so unlike the timings above it is comparable across runners -
+      # and it is the baseline a BVH has to beat, which is worth having on the record per commit.
+      - name: Enclosure cull probe (informational)
+        run: cargo run --release --example cull_probe -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.

@@ -22,6 +22,8 @@
 //! [`raster`] - a CPU probe that turns a tree into a pixel grid, which is geometry evidence and not a
 //! frame.
 
+/// Conservative subtree bounds, and the ray early-out that spends zero evaluations on empty space.
+pub mod cull;
 pub mod raster;
 
 use contracts::sdf::{
@@ -203,7 +205,7 @@ fn depth_of(tree: &Tree, index: usize) -> u32 {
 // ---------------------------------------------------------------------------
 
 #[inline]
-fn length(a: Vec3) -> f32 {
+pub(crate) fn length(a: Vec3) -> f32 {
     (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
 }
 

@@ -19,6 +19,7 @@
 //! floats are forbidden in a renderer but because a square root is a smaller thing to be wrong about
 //! than a tangent, and every number a ray depends on here is one the tests can recompute.
 
+use crate::cull::{ray_may_hit, Enclosure};
 use crate::{march, normal, Tree, Vec3, ROOT};
 
 /// Where the probe looks from. `forward`, `right` and `up` are normalised by [`render`], so a caller can
@@ -87,10 +88,31 @@ pub struct Stats {
     /// bound - `march` can also exit on range - and the bound is tightest precisely on the miss-heavy
     /// grids that culling exists to fix.
     pub evaluations: u64,
+    /// Rays that [`render_culled`] proved could not reach the scene and therefore never evaluated. Zero
+    /// from [`render`], which has no bound to consult: the field exists so the saving is stated next to
+    /// the number it reduced rather than in prose.
+    pub skipped: u32,
+}
+
+/// March every pixel with no culling. This is the reference: whatever a culled path produces has to
+/// produce the same image, and only the evaluation count may differ.
+pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
+    render_with(tree, camera, None)
+}
+
+/// March every pixel against the scene's own [`crate::cull::Enclosure`], charging nothing for a ray that
+/// provably cannot reach it.
+///
+/// The image is identical to [`render`]'s - pixels, depth and hit count - because a bounded enclosure is a
+/// superset of the surface, and `tests/cull.rs` asserts that equality rather than trusting the arithmetic.
+/// A scene containing an unbounded node (a plane, a tiling) yields `skipped = 0`, which is the refusal
+/// working: no bound, no early-out, no invented box.
+pub fn render_culled(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
+    render_with(tree, camera, Some(crate::cull::scene_enclosure(tree)))
 }
 
 /// March every pixel of `camera`'s grid against `tree` and shade what comes back.
-pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
+fn render_with(tree: &Tree, camera: &Camera, cull: Option<Enclosure>) -> (Frame, Stats) {
     let forward = unit(camera.forward);
     let right = unit(camera.right);
     let up = unit(camera.up);
@@ -103,6 +125,7 @@ pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
     let mut depth = Vec::with_capacity(rays as usize);
     let mut hits = 0u32;
     let mut evaluations = 0u64;
+    let mut skipped = 0u32;
 
     for py in 0..camera.height {
         // Top row first: pixel (0, 0) is the upper-left, which is what a PPM expects.
@@ -116,6 +139,14 @@ pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
                 forward[1] + right[1] * ndc_x + up[1] * ndc_y,
                 forward[2] + right[2] * ndc_x + up[2] * ndc_y,
             ]);
+            if let Some(enclosure) = cull {
+                if !ray_may_hit(enclosure, camera.origin, dir, camera.max_t) {
+                    skipped += 1;
+                    push_rgb(&mut pixels, sky(dir));
+                    depth.push(Frame::NO_HIT);
+                    continue;
+                }
+            }
             match march(
                 tree,
                 ROOT,
@@ -152,6 +183,7 @@ pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
             rays,
             hits,
             evaluations,
+            skipped,
         },
     )
 }

@@ -195,7 +195,9 @@ interpreter exists, on two architectures, with the third skipping out loud - and
 validating a shader is still not a machine on which gate R1's frame budget can be measured.
 
 **Still not claimed, in this section's own words: this is not R1.** No GPU, no WGSL interpreter, no BVH,
-no culling, no region streaming, and a normal-to-rgb colour that is geometry evidence rather than
+no per-entity culling (the enclosure early-out two sections below is one bound for the whole scene, which is
+a different thing and mostly does not help), no region streaming, and a normal-to-rgb colour that is
+geometry evidence rather than
 rendering. What landed is that the field can become an image inside this repository, with a measured cost
 shape, so the renderer workstream now has an on-CPU anchor to beat rather than only arithmetic.
 
@@ -224,6 +226,54 @@ Three readings, in order of usefulness:
 - **What this is not.** R1's number is 1080p/60 with 500 *culled* entities on a mid-range GPU. None of
   that is measured here: one thread, a CPU, four nodes, no BVH, no culling, no shader. The example
   exists to give spike S1 a curve to compare the WGSL marcher against, not to substitute for it.
+
+### The first early-out exists, and the 3× estimate in the reading above was the wrong axis (2026-10-12)
+
+`crates/render/src/cull.rs` is the cheapest possible answer to the miss share: one conservative sphere per
+subtree, derived by set relation — a union is covered by both children, a smooth union grows that cover by
+`k` because `smin` rounds outward by at most `k`, a subtract or intersect takes its **first operand's**
+bound because the result is a subset of it, and a mirror covers the child and its reflection. Then one
+segment test per ray. `render::raster::render_culled` is the same march with that test in front of it, and
+`cargo run --release --example cull_probe -p render` prices it on a 64×48 grid, 96-step budget, spheres of
+radius 0.4, two arrangements of the same counts:
+
+| Arrangement | Spheres | Bound r | Evals plain | Evals culled | Rays skipped | Work saved |
+|---|---|---|---|---|---|---|
+| cluster | 1 | 0.40 | 294,544 | 16 | 99.9% | **100.0%** |
+| cluster | 8 | 2.20 | 291,594 | 14,250 | 94.0% | 95.1% |
+| cluster | 32 | 4.96 | 279,551 | 70,271 | 71.0% | 74.9% |
+| cluster | 128 | 16.09 | 278,136 | 147,384 | 44.3% | 47.0% |
+| line | 8 | 4.60 | 291,164 | 80,540 | 71.4% | 72.3% |
+| line | 32 | 19.00 | 287,112 | 287,112 | 0.0% | **0.0%** |
+| line | 128 | 76.60 | 287,112 | 287,112 | 0.0% | **0.0%** |
+
+Spike S1's third reading above guessed that "an early-out on a scene like this is worth up to about 3×".
+The measurement says the guess was not a ceiling or a floor but the wrong variable: the same one-sphere
+early-out saves **100.0%** of the work, and the same spheres laid down a line save **nothing at all** — the
+root bound grows until it contains the whole frustum, every ray is merely *permitted* to march, and the hit
+count stays where it was (88 hits, 0 rays skipped). What determines the saving is the bound's tightness
+relative to the frustum, not whether an early-out exists.
+
+That is ADR-024's hierarchy stated as a requirement rather than a promise, and it arrived by building the
+weak version first: one bound is a fixed win that decays as the scene spreads, so the next structure has to
+be **many bounds, chosen per ray** — the `O(log N)` skip the mechanism table below already names. The
+`Work saved` column is the baseline a BVH is measured against at the same hit fraction.
+
+Two honesty notes this section keeps rather than smooths over:
+
+- **Correctness was the design constraint, not speed.** A bound that is too small silently deletes
+  geometry — a frame that looks like a render. So the module's refusals are load-bearing (`Plane`,
+  `Repeat`, `Twist`, `Bend`, `Noise` and any unknown kind answer `Unbounded`, which means "no early-out",
+  never "a guessed box"), and `crates/render/tests/cull.rs`'s seven tests assert that a culled frame is
+  **byte-identical** to an unculled one — pixels, depth and hit count — while requiring the evaluation
+  count to drop by exactly `skipped × max_steps`. A second test samples the evaluator for interior points
+  and demands the enclosure contain them, which makes the field, not this file's arithmetic, the oracle.
+  Those tests found nothing to fix first try, which is worth saying plainly: their value is that the next
+  bound rule — a hierarchy's, or a deformation's — cannot be shipped on a guess.
+- **No gate moved.** R1 and R2 are still frame-time claims with no GPU behind them. These are counts of
+  work avoided, not nanoseconds, and the arithmetic is sqrt-and-multiply on purpose: a transcendental here
+  could make two machines disagree about which rays were skipped, and while nothing hashed depends on it
+  (docs/02's float discipline), a picture that differs per platform is still a bug.
 
 | Mechanism | Notes |
 |-----------|-------|
