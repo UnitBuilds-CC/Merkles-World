@@ -104,6 +104,13 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
         "the boot's scene must arrive through the compiled format, not in memory:
 {output}"
     );
+    // And that the loaded tree is marched as a grid, not only as the one probe ray: this is the line
+    // that says the field became pixels inside the boot itself.
+    assert!(
+        output.contains("rays found surface"),
+        "the boot must raster the scene:
+{output}"
+    );
 }
 
 /// doc 09's promise in one line: the compiler runs on save and the runtime reads bytes. This writes an

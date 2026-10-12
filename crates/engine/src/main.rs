@@ -13,6 +13,8 @@
 //!    `ShapeAsset` bytes that `assetc::reader` loads back and `crates/render` evaluates, so the demo's
 //!    scene clause describes an asset rather than a tree this binary built in memory. It is still a CPU
 //!    evaluation, and the line that prints it says so.
+//! 6. the same field is marched as a grid of rays - a small frame, shaded on a CPU - and reported as
+//!    counts, not shown. Nothing displays it; that half is still the renderer workstream's.
 //!
 //! Usage: `engine` compiles its own scene and loads those bytes back; `engine <asset.bin>` boots from
 //! a file an `assetc` run wrote, which is the shape doc 09's dev profile ends in.
@@ -165,7 +167,14 @@ fn main() {
     }
     println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU, no culling)");
 
-    // ---- 6. the commit's cheap half: recycling the slab ----
+    // ---- 6. the same field as a frame: a grid of rays, still on the CPU ----
+    let (frame, raster) = render::raster::render(&tree, &probe_camera());
+    println!(
+        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations (informational; gate R1 is a GPU frame and stays unmet)",
+        frame.width, frame.height, raster.hits, raster.rays, raster.evaluations
+    );
+
+    // ---- 7. the commit's cheap half: recycling the slab ----
     slab.reset();
     println!(
         "after commit     : slab reset to {} records in O(1), capacity unchanged at {}",
@@ -287,6 +296,23 @@ fn scene_from_disk(path: &str) -> render::Tree {
         loaded.label
     );
     tree
+}
+
+/// The grid camera for step 6: the scene's own extents at a distance that fits them in frame, on the
+/// axis so the pinhole's basis stays honest without any trigonometry.
+fn probe_camera() -> render::raster::Camera {
+    render::raster::Camera {
+        origin: [0.0, 0.6, -4.0],
+        forward: [0.0, -0.1, 1.0],
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        half_height: 0.5,
+        width: 64,
+        height: 48,
+        max_t: 40.0,
+        surface: 1e-3,
+        max_steps: 96,
+    }
 }
 
 fn scene_t_probe(tree: &render::Tree) -> (f32, u32) {
