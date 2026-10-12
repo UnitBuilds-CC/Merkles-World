@@ -263,7 +263,11 @@ proof that skipping is safe, and the reason this probe's first run reported a sa
 the whole per-node layer. So `SceneBounds` carries a node-visit tally, `render_culled` is the walk that
 counts **without** skipping and `render_bnb` the one that skips, and the two columns are the same frame
 with the same steps measured twice. `render` reports `visits: 0` for itself, because it has no table and
-will not print a number it did not measure.
+will not print a number it did not measure. One more reason to trust those counts: the probe runs as a CI
+step on all three architectures and every number above — 3,291,795 unpruned and 747,137 pruned for the
+cluster, 5,134,680 and 2,757,440 for the line — prints identically on x86-64 Linux, x86-64 Windows and
+ARM64 macOS (`38292159934`). A f32 radius compared against a f32 distance is exactly where a cull could
+go quietly machine-specific; here it does not.
 
 Spike S1's third reading above guessed that "an early-out on a scene like this is worth up to about 3×".
 Between the two layers the truth is neither a ceiling nor a floor but the wrong variable: what determines
