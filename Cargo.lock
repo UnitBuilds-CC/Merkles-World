@@ -344,6 +344,7 @@ name = "gpu"
 version = "0.1.0"
 dependencies = [
  "contracts",
+ "naga",
  "pollster",
  "render",
  "wgpu",
