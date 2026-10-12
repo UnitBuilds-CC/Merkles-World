@@ -175,7 +175,7 @@ budget violation rather than discovered as a frame drop.
 | Gate | Test | Source |
 |------|------|--------|
 | AS1 | `pig.ron` → `.bin` → GPU buffer with zero runtime parse, hot-reloaded | ADR-014 |
-| AS2 | Identical `.bin` bytes from identical source on two machines (deterministic serialization) | OQ-30 |
+| AS2 | Identical `.bin` bytes from identical source on two machines (deterministic serialization). **Measured 2026-10-12:** CI compiles `sphere.ron` and `knot.ron` on x86-64 Linux, x86-64 Windows and ARM64 macOS and the following job fails unless the digests agree (`4f9da1a4…`, `52b85b4b…` on all three at `38302996493`). `knot.ron` exists for this gate: twelve nodes, depths to five, and values a parser is entitled to round differently - 0.1, 0.3, -0.0, 1e7 - plus the union ordering `order::rebalance` derives from `f32` sort keys. | OQ-30 |
 | AS3 | Schema violation fails the build with a span-accurate message | doc 12 agent loop |
 | AS4 | A `.mpack` loads with no allocation churn and no parse step | ADR-015 |
 | AS5 | An over-budget SDF is rejected at compile time | doc 04 budget |

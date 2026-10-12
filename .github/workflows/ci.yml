@@ -393,8 +393,11 @@ jobs:
           ./target/release/assetc "$fixtures/sphere.ron" "$out/sphere.bin"
           ./target/release/assetc "$fixtures/knot.ron" "$out/knot.bin"
           # Relative paths inside the digest lines, so the file is comparable across machines that use
-          # different path separators and working-directory spellings.
-          (cd "$out" && sha256sum sphere.bin knot.bin) > asset-digest.txt
+          # different path separators - and normalised beyond that, because sha256sum on Git Bash prints
+          # "*name" (its binary-mode marker) where Linux and macOS print "  name". The comparison job
+          # ignores separators too; this makes the published artefact itself comparable text.
+          (cd "$out" && sha256sum sphere.bin knot.bin) \
+            | sed -E 's/^([0-9a-f]{64}) [^A-Za-z0-9._-]*/\1  /' > asset-digest.txt
           wc -c "$out/sphere.bin" "$out/knot.bin"
           cat asset-digest.txt
       - name: Publish this architecture's digest
@@ -421,13 +424,30 @@ jobs:
             echo "AS2 needs at least two machines to agree; found $found digest file(s)" >&2
             exit 1
           fi
-          printf '%s\n' "$files" | while read -r file; do
+          # A `for` loop, not `printf | while`: the piped form runs the body in a subshell, so an
+          # `exit 1` inside it sets nothing and the step reports success over a broken artefact.
+          for file in $files; do
             echo "--- $file"
             cat "$file"
+            lines=$(awk 'END { print NR }' "$file")
+            if [ "$lines" != 2 ]; then
+              echo "^^^ $file should carry one digest per fixture (2), found $lines" >&2
+              exit 1
+            fi
           done
-          distinct=$(printf '%s\n' "$files" | xargs sha256sum | awk '{print $1}' | sort -u | grep -c .)
-          if [ "$distinct" != 1 ]; then
-            echo "^^^ the same authored source produced different bytes on different machines" >&2
+          # The comparison is over the (hash, name) pairs with the mode marker removed, not the files.
+          # Two reasons, both learned the hard way: sha256sum on Git Bash prints "*name" where Linux and
+          # macOS print "  name", so comparing whole files was red while all three assets matched; and
+          # comparing only the first field would let the same hash on two different names look like
+          # agreement. Normalising the name and keeping the pair is what makes one distinct pair per
+          # asset, so a machine that serialised differently shows up as a third pair.
+          pairs=$(printf '%s\n' "$files" \
+            | while read -r file; do
+              awk '{ name = $2; sub(/^\*/, "", name); printf "%s %s\n", $1, name }' "$file"
+            done \
+            | sort -u | grep -c .)
+          if [ "$pairs" != 2 ]; then
+            echo "AS2 expected 2 distinct asset digests across $found machines, saw $pairs - one machine serialised differently" >&2
             exit 1
           fi
           echo "AS2 ok: $found machines produced byte-identical assets from the same source"
@@ -535,3 +555,8 @@ jobs:
           node-version: 20
       - name: Links, anchors, tables, contract mirror
         run: node tools/check_docs.mjs
+      # A gate that cannot tell agreement from divergence is worse than no gate, and the first version of
+      # the AS2 comparison was red on three machines that agreed. So the workflow's own comparison logic
+      # is exercised here, against synthetic digest files, in both directions plus a truncated artefact.
+      - name: AS2 comparison logic (the gate that checks the gate)
+        run: bash tools/check_as2_gate.sh
