@@ -338,21 +338,35 @@ fn main() {
     println!("//   the same licence bit. Nothing was broken getting there: the blended frames still match");
     println!("//   the unculled render byte for byte, which is what makes the number a cost rather than a");
     println!("//   bug.");
-    println!("// - the reason is NOT the skip licence, and correcting that is this run's finding. A blend's");
-    println!("//   grown-by-k enclosure does satisfy field >= distance-to-bound with 3k/4 to spare - the");
+    println!("// - THE BLEND ROWS ARE A STORY ABOUT A WRONG EXPLANATION. They used to read 0.0% node work");
+    println!("//   avoided, and the reason published with them was the skip licence. The licence was never");
+    println!("//   the obstacle: a blend's grown-by-k enclosure satisfies field >= distance-to-bound with");
     println!(
-        "//   margin measures at exactly +k on a lattice and dense sweeps, and the licence has"
+        "//   3k/4 to spare, so the bit was granted (22986bb) and these rows did not move by one"
     );
-    println!("//   therefore been granted. These rows do not move, because a smooth union's zero set lies");
-    println!("//   BETWEEN its children, outside both child spheres, so no descent may decompose a blend:");
-    println!("//   the grown cover sphere is the tightest statement a blend can make, and in an all-blend");
-    println!("//   tree there is no plain-union arm above the blends to take the per-step skip either. The");
+    println!("//   visit. What was missing was an arm a blend can take, and smin supplies one - once the");
     println!(
-        "//   lever that would pay is a k-aware arm inside the smooth-union evaluator itself (smin"
+        "//   children are k apart, h has collapsed to zero, smin IS min, and a second child whose"
+    );
+    println!("//   licensed bound exceeds a + k cannot have bent the answer. With that arm these four rows");
+    println!("//   avoid 20.3%, 35.8%, 65.7% and 45.6% of their node visits (cluster/128 goes 3,898,950 ->");
+    println!("//   1,336,864) with the frames byte-identical, and the tight-blend scene in tests/cull.rs");
+    println!(
+        "//   still avoids nothing, which is what makes it a proved skip rather than a lucky one."
     );
     println!(
-        "//   equals min whenever |b - a| >= k), which is OQ-54's remaining half, not this line."
+        "// - what the arm does NOT do is prove rays empty: columns five and six stay put on every"
     );
+    println!(
+        "//   blend row, because a smooth union's zero set lies between its children, outside both"
+    );
+    println!(
+        "//   child spheres. No descent may decompose a blend, so its grown cover sphere is the"
+    );
+    println!(
+        "//   tightest claim it can make - that half of the 443x is geometry, not an optimisation"
+    );
+    println!("//   someone forgot to write.");
     println!(
         "// - `evals plain` and `rays skipped` are the step-level story. One tight bound proves"
     );

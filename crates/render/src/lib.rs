@@ -348,8 +348,26 @@ fn eval_at(
         }
         NODE_SMOOTH_UNION => {
             let a = eval_at(tree, first, p, depth + 1, bounds);
+            let k = params[0];
+            // The second skip ADR-024 asks for, and the only shape a blend can take. The union arm's test
+            // (`bound >= a`) is not enough here, because `smin` is not `min`: a far second child still
+            // bends the result through `h`. But `h = max(0, 1 - |b - a| / k)` is exactly zero once the two
+            // children are `k` apart, and at that point `smin` *is* `min`, so the blend has nothing left to
+            // add and the answer is `a`. The comparison is strict for a reason: `distance >= a + k` in `f32`
+            // could sit a rounding step below the true `b - a`, and `h` squared is then tiny but not zero,
+            // which is an overestimate of the field where an underestimate is what keeps a march honest.
+            // `k.max(0.0)` is the other half: a non-positive strength makes `smin` a plain `min`, and the
+            // threshold must then be the union arm's `a`, not `a + k` with a negative `k` pulling it down.
+            let slack = a + k.max(0.0);
+            if let Some(scene) = bounds {
+                if let Some(distance) = scene.lower_bound(second, p) {
+                    if distance > slack {
+                        return a;
+                    }
+                }
+            }
             let b = eval_at(tree, second, p, depth + 1, bounds);
-            smin(a, b, params[0])
+            smin(a, b, k)
         }
         NODE_SUBTRACT => {
             let kept = eval_at(tree, first, p, depth + 1, bounds);

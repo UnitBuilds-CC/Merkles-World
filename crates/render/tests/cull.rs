@@ -755,3 +755,55 @@ fn the_smooth_union_bound_holds_the_field_with_k_to_spare() {
         );
     }
 }
+
+#[test]
+fn the_k_aware_arm_skips_a_second_child_the_blend_cannot_have_touched() {
+    // The union arm's test is `bound >= a`; a blend needs `bound > a + k`, because `smin` equals `min` only
+    // once the children are `k` apart and `h` has therefore collapsed to zero. Both halves matter: the arm
+    // must fire (or the skip is dead code that only looks conservative), and it must not fire when the
+    // children are close enough for the blend to bend the result. The witness is node visits, since a skip
+    // inside a step cannot change a step count, and the belt is the frame.
+    let camera = camera_at([0.0, 0.0, -6.0]);
+    // The third scene is the one that makes this a test of the arm rather than of optimism: children 0.2
+    // apart under a blend strength of 1.5 are never `k` apart anywhere the camera reaches, so `h` has not
+    // collapsed, and the arm must fire on none of those walks. `expect_removed` says which way each row
+    // cuts, so a blanket skip and a dead skip both fail here.
+    for (label, tree, expect_removed) in [
+        ("blend k 0.4, offset 2.0", smooth_union(0.4, 2.0), true),
+        ("blend k 1.5, offset 3.0", smooth_union(1.5, 3.0), true),
+        ("blend k 1.5, offset 0.2", smooth_union(1.5, 0.2), false),
+    ] {
+        validate(&tree).unwrap_or_else(|e| panic!("{label} must validate: {e:?}"));
+        let (plain, plain_stats) = render(&tree, &camera);
+        let (_, counting) = render_culled(&tree, &camera);
+        let (bnb, pruned) = render_bnb(&tree, &camera);
+        assert_eq!(
+            plain.pixels, bnb.pixels,
+            "{label}: the blend's skip changed pixels"
+        );
+        assert_eq!(
+            plain.depth, bnb.depth,
+            "{label}: the blend's skip moved a surface"
+        );
+        assert_eq!(
+            plain_stats.hits, pruned.hits,
+            "{label}: the hit count moved"
+        );
+        if expect_removed {
+            assert!(
+                pruned.visits * 2 < counting.visits * 3,
+                "{label}: the arm must remove at least a quarter of the visits, saw {} of {}",
+                pruned.visits,
+                counting.visits
+            );
+        } else {
+            assert_eq!(
+                pruned.visits,
+                counting.visits,
+                "{label}: the arm fired on children that are never k apart - {} pruned of {}",
+                counting.visits - pruned.visits,
+                counting.visits
+            );
+        }
+    }
+}

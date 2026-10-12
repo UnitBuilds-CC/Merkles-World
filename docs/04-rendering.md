@@ -322,16 +322,32 @@ sound by derivation and not merely by sampling: outside the grown sphere
 -0.000000 at the far corner - its own bound is tight to `f32` rounding - which is
 why the test measures violations relative to `surface` rather than against zero. Evidence, still not a
 proof: a lattice cannot speak for every point in space, so OQ-54 stays open and the refusal stays in place
-the inequality is now derived, and **the 443x did not move - which is the claim this section got wrong and
-now retracts**. Granting the licence makes a blend prunable by a plain union above it (the boot's own shape);
-it does nothing to the blended rows, because a smooth union's zero set lies *between* its children - outside
-both child spheres - so no descent and no skip may decompose a blend, and in an all-blend tree there is no
-plain-union arm above the blends to take the per-step skip either. The grown cover sphere is the tightest
-statement a blend can make. Where the saving actually lives is a **k-aware arm in the smooth-union
-evaluator**: `smin(a,b,k)` equals `min(a,b)` whenever the two children are at least `k` apart, so a second
-child whose licensed bound reaches `a + k` cannot change the result and may be skipped - provable from the
-same formula, checkable with the same frame-equality belt. That is
-[OQ-54](13-risks-open-questions.md)'s remaining half.
+the inequality is now derived, and **the 443x did not move with the grant - the claim this section got wrong,
+retracted in place.** A blend's zero set lies *between* its children, outside both child spheres, so no
+descent may decompose a blend and its grown cover sphere is the tightest statement it can make; the grant
+buys pruning below a parent plain union (the boot's own shape) and nothing else.
+
+**The saving then appeared where the derivation said it could, in an arm a blend can take.** `smin(a, b, k)`
+equals `min(a, b)` exactly when `h = max(0, 1 - |b - a| / k)` is zero - once the children are `k` apart the
+blend has nothing left to add - so a second child whose licensed bound exceeds `a + k` cannot have bent the
+result and is skipped. The comparison is strict, because `distance >= a + k` after `f32` rounding could sit a
+step below the true separation and `h^2 * k / 4` is then tiny but not zero: an overestimate of the field is
+exactly what a march cannot afford. Blended node work avoided, measured on the same four rows that used to
+read 0.0%:
+
+| Blended arrangement (k 0.2) | Spheres | Visits unpruned | Visits pruned | Work avoided |
+|---|---|---|---|---|
+| cluster | 32 | 688,086 | 548,603 | 20.3% |
+| line | 32 | 1,277,892 | 820,930 | 35.8% |
+| cluster | 128 | 3,898,950 | 1,336,864 | **65.7%** |
+| line | 128 | 5,172,420 | 2,814,446 | **45.6%** |
+
+Frames byte-identical throughout, and the belt is deliberately asymmetric:
+`the_k_aware_arm_skips_a_second_child_the_blend_cannot_have_touched` also carries a tight-blend scene
+(children 0.2 apart under a strength of 1.5, never `k` apart anywhere the camera reaches) and requires it to
+avoid **nothing** - so a blanket skip and a dead skip both fail. The ray-level half of the earlier difference
+stays unbuyable, and doc 09 can now say precisely what an author gets: a proved skip inside each blend, and
+no hierarchy through one.
 
 ### The third layer: a descent through the bounds, and the tolerance bug it found (2026-10-12)
 
