@@ -52,7 +52,16 @@ parsed document:
 `assetc` exists in three stages. `crates/assetc::lower` turns an authored `Shape` into the pre-order
 `NodeRecord` array and `f32` pool the envelope carries, deriving `subtree_len` from the children
 instead of asserting it and refusing a bad axis, a non-finite parameter and a tree past
-`MAX_TREE_DEPTH`. Four tests in `crates/assetc/tests/lowering.rs` check the lowered tree against
+`MAX_TREE_DEPTH`. Before any of that, `crates/assetc::order::rebalance` normalises union forests: the
+children of a plain `Union` are flattened into a set, sorted along the widest axis by their extents and
+rebuilt balanced, so eight spheres authored as a chain arrive at the marcher as depth 4 instead of 8 and
+with spatially coherent bounds. It is a semantics-preserving transform and is tested as one — a chain and
+a balanced tree of the same four spheres lower to *identical bytes*, and the lowered field equals the
+minimum of those spheres computed in the test, at 288 sample points. The scope is deliberately narrow:
+`Subtract`'s operand order is its meaning, a `SmoothUnion`'s children are not free to move past its blend,
+and a `Plane` or `Repeat` has no finite extent to sort on, so those forests are left as authored rather
+than given an invented coordinate. The reason to do this at all is measured in doc 04: tree shape is worth
+2.6× to 3.0× of the renderer's per-node culling, and an author should not have to know that. Four tests in `crates/assetc/tests/lowering.rs` check the lowered tree against
 `crates/render`'s hand-built scene, so a compiled tree answers the same distance questions as the
 tree an author would have written by hand. `crates/assetc::writer::to_bytes` serialises that into real `ShapeAsset` bytes.
 `crates/assetc::reader::from_bytes` is the load side doc 09 has always asked for: walk the root

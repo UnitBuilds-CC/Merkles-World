@@ -18,6 +18,8 @@ use contracts::sdf::{
     arity_of, is_known_kind, pack_first_and_flags, pack_kind_and_arity, pack_params_len,
     NodeRecord, FLAG_HAS_MATERIAL, FLAG_IS_ROOT, MAX_TREE_DEPTH,
 };
+pub mod order;
+
 use render::Tree;
 
 /// A shape in the authoring sense: what a content file declares, before any buffer exists.
@@ -204,6 +206,7 @@ fn depth_of(shape: &Shape) -> Result<u32, LowerError> {
 /// Lower into pre-order records: parent first, children left to right, `subtree_len` derived from the
 /// children's own spans so the layout is computed rather than asserted.
 pub fn lower(root: &Shape) -> Result<Asset, LowerError> {
+    let root = &order::rebalance(root);
     let depth = depth_of(root)?;
     if depth > MAX_TREE_DEPTH {
         return Err(LowerError::TooDeep { depth });
