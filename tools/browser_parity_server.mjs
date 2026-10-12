@@ -43,6 +43,9 @@ const [wasm, shimSource] = await Promise.all([
   readFile(shimPath, "utf8"),
 ]);
 
+// What the page last reported. Empty until a browser finishes, which is exactly what a harness polls for.
+let report = "";
+
 const page = `<!doctype html>
 <html lang="en">
   <head><meta charset="utf-8"><title>Merkles World - WASI command in a browser</title></head>
@@ -95,10 +98,22 @@ const page = `<!doctype html>
           " mlws-lines=" + window.__mlws.lines +
           " mlws-stubs=" + (host.stubCalls().join(",") || "none");
         status.textContent = "done - " + window.__mlws.lines + " lines, " + exit;
+        // Report rather than wait to be sampled: a harness polling this endpoint cannot mistake a slow
+        // page for a wrong one, which is what a DOM dump can do.
+        try {
+          await fetch("/report", { method: "POST", body: sha256 });
+        } catch (reported) {
+          // The DOM still carries the result, so a failed report degrades the harness, not the evidence.
+        }
       } catch (error) {
         window.__mlws = { ok: false, error: String(error) };
         status.textContent = "failed: " + String(error);
         out.textContent = String(error && error.stack);
+        try {
+          await fetch("/report", { method: "POST", body: "error:" + String(error) });
+        } catch (reported) {
+          // As above.
+        }
       }
     </script>
   </body>
@@ -107,6 +122,25 @@ const page = `<!doctype html>
 const server = createServer((request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
   response.setHeader("Access-Control-Allow-Origin", "*");
+  // The page posts its own digest when it finishes, and a harness polls this. That is deliberate:
+  // --dump-dom samples the page at a moment, and on a loaded runner that moment can arrive before the
+  // fetch and WebAssembly compile have finished - run 38288428274 saw a 3 KB DOM with no result in it.
+  // A page that reports is not a page that happens to be caught.
+  if (url.pathname === "/report") {
+    if (request.method === "POST") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        report = body.trim();
+        response.end("ok");
+      });
+      return;
+    }
+    response.end(report);
+    return;
+  }
   if (url.pathname === "/wasi_shim.mjs") {
     // The same file on disk the Node control run imports, served as an ES module rather than inlined into
     // the page - so "the two hosts ran the same shim" is a fact about a file, not about a copy.
