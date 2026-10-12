@@ -99,6 +99,12 @@ jobs:
       - name: Spike S1 march steps (informational)
         run: cargo run --release --example scene_steps -p render
 
+      # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
+      # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
+      # the part that repeats across architectures while the milliseconds do not.
+      - name: Raster probe and node-cost sweep (informational)
+        run: cargo run --release --example raster_probe -p render
+
       # The engine asserts docs/03's published vectors itself, so running it is a gate check rather
       # than a smoke test: a wrong digest anywhere in slab -> commit -> read -> march exits non-zero.
       - name: Engine boots and reproduces the published vectors

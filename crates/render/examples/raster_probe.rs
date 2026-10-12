@@ -219,7 +219,7 @@ fn main() {
     );
     println!("// budgets load-bearing rather than tidy.");
     println!("// It does not say the marginal constant is stable: the node-step columns moved by about 2x");
-    println!("// between runs of this same binary on this same machine (1.6 ms and 3.5 ms for the one-node");
+    println!("// between runs of this same binary on this same machine (1.9 ms and 3.5 ms for the one-node");
     println!("// grid), which is the same reason gate P1.2's throughput figure is quoted for one machine.");
     println!(
         "// The step counts repeated exactly every run; the timings are the noisy half, so AS5's"
