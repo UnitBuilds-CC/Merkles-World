@@ -128,13 +128,15 @@ epoch pipeline, and `crates/memory` is A3's half: the slab that holds the record
   Attempted 2026-10-12 and blocked by the workspace's own `unsafe_code = "forbid"`: an exported
   symbol is an unsafe attribute to rustc, so the runner has to be `wit-bindgen` output, which needs
   A-02. Recorded against [OQ-41](13-risks-open-questions.md) rather than worked around by hand.
-- **A-02/A-04/A-05/A-06/A-07 are unwritten**, and A-03, A-08 and A-09 exist only as **DRAFT**, so the
-  exit clause "every contract is frozen enough" is still not met — for a different reason than before:
-  three artifacts now need *decisions* (OQ-45, OQ-46, and the payload shapes A-09 inherits from
-  A-02/A-05/A-07) rather than files, while the five unwritten ones still wait on their own open
-  questions (OQ-34, OQ-01, OQ-08, OQ-02, ADR-012). A-01 and **A-10 are frozen**; A-10 is the first
+- **A-04, A-05 and A-06 have no file at all**, and of the seven that do, only **A-01 and A-10 are
+  frozen**: A-02 (`ledger-api.wit`), A-03, A-07 (`sdf.rs` plus `sdf.fbs`), A-08 and A-09 are written and
+  parse- or schema-checked but stay **DRAFT**, so the exit clause "every contract is frozen enough" is
+  still unmet — for a different reason than before: three artifacts now need *decisions* (OQ-45, OQ-46,
+  and the payload shapes A-09 inherits from A-02/A-05/A-07) rather than files, while the three
+  unwritten ones still wait on their own open questions (OQ-01, OQ-08, OQ-02). A-10 is the first
   artifact frozen against computed digests rather than against prose, which is the pattern the
-  remaining six should follow.
+  remaining ones should follow; A-02's own next step is not a decision but the export-lint question in
+  the paragraph above, since a binding generated from it is the only way its exports can compile here.
 - **The commit path exists and has numbers.** `crates/memory` appends records into slabs with an
   `O(1)` bump-pointer reset, `crates/ledger::commit` resolves last-write-wins and roots them, and the
   test suite proves the pipeline reproduces `EPOCH_0` from raw `DeltaRecord`s rather than from
