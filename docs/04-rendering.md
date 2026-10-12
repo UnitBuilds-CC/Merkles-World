@@ -89,6 +89,30 @@ fn color_pig(p: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 Legs use `abs(p.x)` for bilateral symmetry — mirroring in the domain is the cheapest form of
 "modelling".
 
+## The CPU reference (crates/render)
+
+**Landed 2026-10-12.** A Rust evaluator for the grammar above - `validate`, `sdf_eval`, `march`,
+`normal` - covering the eleven kinds implemented so far and **refusing** `Twist`, `Bend` and `Noise`
+rather than answering a distance question with a guess. It is the reference the WGSL interpreter has to
+agree with, and it is what lets two of this doc's claims be measured before a shader exists:
+
+- **The step guarantee.** A ray from six units out along x hits the unit sphere at `t = 5` in at most
+  two steps, the hit point is on the surface, and a ray aimed away terminates on the step budget
+  rather than spinning. That is "each step equals the SDF value" being a proven-empty jump, tested
+  rather than asserted in prose.
+- **R5, in the narrow sense it can be tested at this stage.** A scene and a millionth-scale copy of it,
+  marched with proportionally scaled epsilons, need nearly the same number of steps and agree on the
+  hit to under 1% relative, and the tetrahedral normal at 1e-6 still comes out unit length. The
+  measurement also found its own limit: the `f32` ulp near 1e-6 is about 1e-12, so an absolute epsilon
+  finer than that can never be satisfied and the ray walks past. That is not a shader bug - it is the
+  concrete reason docs/02 keeps coordinates camera-relative and AGENTS.md §4 keeps floats off the
+  hashed side.
+
+What it does **not** measure: R1's 1080p/60 with 500 culled entities and R2's ten-minute edit loop.
+Steps per ray on a CPU are not nanoseconds per frame on a GPU, and there is no WGSL interpreter, no
+BVH, and no `assetc` to emit an asset yet - so those stay targets, and this file says so instead of
+quoting the reference implementation's speed as if it were the renderer's.
+
 ## Culling and the frame budget
 
 | Mechanism | Notes |
