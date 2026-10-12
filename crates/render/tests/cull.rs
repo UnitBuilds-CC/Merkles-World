@@ -366,11 +366,11 @@ fn a_smooth_union_is_the_one_combinator_that_may_not_be_skipped() {
 
 #[test]
 fn the_counter_measures_the_thing_the_step_count_cannot() {
-    // Two spheres, one in front of the camera and one off to the side. The march's step count is
-    // identical with and without the per-node skip - a skipped subtree returns the distance the walk
-    // would have returned anyway - so the only witness is nodes entered per frame. This asserts both
-    // what the counter means (exactly one visit per node per field walk, unpruned) and that pruning
-    // strictly reduces it on the same frame.
+    // Two spheres, one in front of the camera and one off to the side. The per-node skip inside a step is
+    // invisible to the march's step count - a skipped subtree returns the distance the walk would have
+    // returned anyway - so the witness for that half is nodes entered per frame. The ray-level descent is
+    // visible, because it removes whole rays. This asserts both, plus what the counter means (exactly one
+    // visit per node per field walk, unpruned) and that pruning strictly reduces it on the same frame.
     let tree = union(3.0);
     let nodes = tree.nodes.len() as u64;
     let camera = camera_at([0.0, 0.0, -6.0]);
@@ -398,7 +398,23 @@ fn the_counter_measures_the_thing_the_step_count_cannot() {
         unpruned.visits / nodes,
         unpruned.evaluations
     );
-    assert_eq!(unpruned.evaluations, pruned.evaluations);
+    // The step count does now see the descent, and that is a change of fact rather than of metric: a ray
+    // the hierarchy proves empty is charged nothing, while the single root bound could only ever prove the
+    // rays outside its own sphere. The per-*step* subtree skip is still invisible here - a skipped subtree
+    // returns the distance the unpruned walk would have returned - which is why `visits` below remains the
+    // witness for that half.
+    assert!(
+        pruned.skipped > unpruned.skipped,
+        "a union with a sphere 3 units aside must let the children prove rays the cover permits: {} vs {}",
+        pruned.skipped,
+        unpruned.skipped
+    );
+    assert!(
+        pruned.evaluations < unpruned.evaluations,
+        "more skipped rays has to mean fewer charged steps: {} vs {}",
+        pruned.evaluations,
+        unpruned.evaluations
+    );
     assert!(
         pruned.visits < unpruned.visits,
         "with a sphere 3 units to the side, some rays must provably not need it: {} vs {}",
@@ -493,4 +509,53 @@ fn the_frame_the_cull_produces_is_the_frame_the_marcher_produced_all_along() {
         culled_stats.skipped,
         plain_stats.rays
     );
+}
+
+#[test]
+fn the_descent_adds_rejections_where_children_are_licensed_and_none_where_they_are_not() {
+    // The headline of the whole module, stated as two assertions and one refusal. Two spheres 3 units
+    // apart: their cover sphere is loose, so the root test lets rays through that the pair of children
+    // provably do not need - which is the exact failure mode cull_probe measured at 0.0% for a spread
+    // scene. The descent fixes that, and the picture must not move by a byte while it does.
+    let spread = union(3.0);
+    let camera = camera_at([0.0, 0.0, -6.0]);
+    let (plain, plain_stats) = render(&spread, &camera);
+    let (_, root_only) = render_culled(&spread, &camera);
+    let (bnb_frame, descent) = render_bnb(&spread, &camera);
+    assert!(
+        descent.skipped > root_only.skipped,
+        "the children must prove empty at least one ray the cover permits: {} vs {}",
+        descent.skipped,
+        root_only.skipped
+    );
+    assert_eq!(plain.pixels, bnb_frame.pixels, "the descent changed pixels");
+    assert_eq!(plain.depth, bnb_frame.depth, "the descent changed depth");
+    assert_eq!(plain_stats.hits, descent.hits);
+
+    // The refusal, on the ray-level path where a too-eager child test would do the most damage: a smooth
+    // union's field dips below its own bound, so it gets no descent and therefore not one extra
+    // rejection over the single sphere it is licensed to test.
+    let blended = smooth_union(0.4, 2.0);
+    let (_, blended_root) = render_culled(&blended, &camera);
+    let (blended_frame, blended_descent) = render_bnb(&blended, &camera);
+    assert_eq!(
+        blended_descent.skipped, blended_root.skipped,
+        "a smooth union may not be descended into"
+    );
+    let (plain_blend, _) = render(&blended, &camera);
+    assert_eq!(plain_blend.pixels, blended_frame.pixels);
+
+    // And the no-bound case: a plane gives the descent nothing to test, so it behaves exactly as the
+    // unbounded early-out already does - zero skipped rays, whole budget charged.
+    let plane = Tree {
+        nodes: vec![leaf(NODE_PLANE, 0, 4, true)],
+        params: vec![0.0, 1.0, 0.0, 0.0],
+    };
+    let (plane_frame, plane_stats) = render_bnb(&plane, &camera);
+    assert_eq!(
+        plane_stats.skipped, 0,
+        "no bound, no early-out, no invented box"
+    );
+    let (plain_plane, _) = render(&plane, &camera);
+    assert_eq!(plain_plane.pixels, plane_frame.pixels);
 }

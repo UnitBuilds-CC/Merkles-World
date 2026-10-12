@@ -233,6 +233,17 @@ impl SceneBounds {
         self.enclosure[node]
     }
 
+    /// Whether this table is allowed to license work avoidance at all.
+    ///
+    /// The counting table answers `false` and every licensed query then returns the neutral value, which is
+    /// what keeps [`crate::raster::render_culled`] a baseline rather than a second optimisation to compare
+    /// against — the two runs of one scene have to differ in exactly one thing before their difference
+    /// means anything.
+    #[inline]
+    pub fn prunes(&self) -> bool {
+        self.pruning
+    }
+
     /// Whether this subtree's field is at least the distance to its own enclosure, everywhere.
     ///
     /// That is the condition a per-node skip needs, and it is *not* the same as "the enclosure covers the
@@ -263,6 +274,86 @@ impl SceneBounds {
         let d = length([p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]]);
         Some((d - radius).max(0.0))
     }
+
+    /// Whether a unit-direction ray from `origin` along `dir` can reach *any* surface in this subtree,
+    /// descending the hierarchy instead of asking the one question a root sphere can answer.
+    ///
+    /// This is the structure cull_probe said was missing. `ray_may_hit` tests one sphere, and the probe
+    /// measured a single root bound collapsing to "everything might hit" as soon as a scene spreads out -
+    /// 0.0% of the work avoided for 32 and 128 spheres along a line, because a sphere covering a long row
+    /// covers the frustum with room to spare. The same question asked of each *child* does not degrade that
+    /// way: a child's sphere stays as tight as its own geometry however far apart the children are, so the
+    /// ray that passes between two spheres is proved empty by the pair even though their cover permits it.
+    /// That is ADR-024's `O(log N)` claim in a form a harness can measure.
+    ///
+    /// **`false` is a proof, and it rests on one property.** `respects[node]` says the subtree's field is at
+    /// least the distance to its own enclosure, so a point with field <= 0 lies inside that sphere, so a ray
+    /// that touches the surface must reach the sphere first. Combining children takes only the rule each
+    /// combinator actually grants: a hard union's zero set *is* the union of its children's zero sets, so
+    /// either child reaching is enough; a subtract or an intersect has a field at least its first operand's,
+    /// so it inherits the first operand's reach - the carve may delete surface, it cannot create any outside.
+    ///
+    /// `surface` is the marcher's hit tolerance, and it is *added* to every enclosure tested on the way
+    /// down. A skip is a claim about the marcher, not about the geometry: the marcher reports a hit at any
+    /// point whose field is within `surface` of zero, and the field of a sphere is distance-minus-radius, so
+    /// a ray that passes `surface` outside the sphere still gets reported as hitting it. Testing the bare
+    /// radius instead was not hypothetical - the 8-sphere cluster row of cull_probe found exactly that ray
+    /// and the frames disagreed, which is the too-small enclosure this module exists to make impossible.
+    ///
+    /// Everything else answers `true`, which is the safe direction: a counting table (a baseline that prunes
+    /// is not a baseline), a node whose `respects` bit is off (`smin` returns less than `min`, so its field
+    /// can dip below its own bound), an unbounded node, an unknown kind.
+    ///
+    /// **Deliberately absent: the entry distance.** The obvious next step is to return it and start the march
+    /// there instead of at the camera. That was built, measured, and removed on purpose. On the test scenes it
+    /// saved 8 march steps out of 85,508 on a mirror scene while changing 4 to 12 pixels per frame by up to
+    /// 3x the surface epsilon: the hit *set* stayed identical, the converged points did not, because a trace
+    /// starting later takes a different sequence of steps and stops somewhere else inside its tolerance. This
+    /// crate's invariant is byte-identical frames (docs/04), and trading it for a saving two orders of
+    /// magnitude smaller than the skip's own is a renderer policy question, not a local optimisation - it is
+    /// [OQ-53](../../../docs/13-risks-open-questions.md).
+    pub fn may_reach_subtree(
+        &self,
+        tree: &Tree,
+        node: usize,
+        origin: [f32; 3],
+        dir: [f32; 3],
+        surface: f32,
+    ) -> bool {
+        if !self.pruning || !self.respects[node] {
+            return true;
+        }
+        if !may_reach(self.enclosure[node].grown(surface), origin, dir) {
+            return false;
+        }
+        let record = tree.nodes[node];
+        if record.arity() == 0 {
+            return true;
+        }
+        let first = node + 1;
+        let second = first + tree.nodes[first].subtree_len() as usize;
+        match record.kind() {
+            NODE_UNION => {
+                self.may_reach_subtree(tree, first, origin, dir, surface)
+                    || self.may_reach_subtree(tree, second, origin, dir, surface)
+            }
+            NODE_SUBTRACT | NODE_INTERSECT => {
+                self.may_reach_subtree(tree, first, origin, dir, surface)
+            }
+            // Mirror duplicates surface into the reflected copy, so the child's own bound does not cover
+            // the node, and any kind not listed above has no granted rule. The node's own answer, already
+            // computed, is the whole claim.
+            _ => true,
+        }
+    }
+}
+
+/// The unbounded-distance form of [`ray_may_hit`]: can the ray reach this enclosure at all, with no `max_t`
+/// stopping it. Same arithmetic and the same single comparison, so the sphere-entry rule exists in exactly
+/// one place — a second copy of a bound test is how a renderer ends up with a too-small enclosure.
+#[inline]
+pub fn may_reach(enclosure: Enclosure, origin: [f32; 3], dir: [f32; 3]) -> bool {
+    ray_may_hit(enclosure, origin, dir, f32::INFINITY)
 }
 
 fn enclose_at(tree: &Tree, index: usize, depth: u32) -> Enclosure {

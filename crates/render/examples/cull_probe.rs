@@ -192,9 +192,20 @@ fn report(arrangement: &str, tree: &Tree, camera: &Camera) {
     assert_eq!(plain.depth, bnb.depth, "{arrangement}: depth changed");
     assert_eq!(plain.hit_count(), culled.hit_count());
     assert_eq!(plain.hit_count(), bnb_stats.hits);
-    assert_eq!(
-        culled_stats.evaluations, bnb_stats.evaluations,
-        "{arrangement}: a skip changed the step count, which is what it must never do"
+    // The per-*step* subtree skip still cannot change a step count - it returns the distance the unpruned
+    // walk would have returned. What the descent does change is the *number* of stepped rays, because a ray
+    // it proves empty is charged nothing, and that is the difference this column now reports. So the
+    // comparison is an inequality: never more work, and less exactly when the children know something the
+    // cover sphere does not.
+    assert!(
+        bnb_stats.evaluations <= culled_stats.evaluations,
+        "{arrangement}: the descent cost more than the single bound: {} vs {}",
+        bnb_stats.evaluations,
+        culled_stats.evaluations
+    );
+    assert!(
+        bnb_stats.skipped >= culled_stats.skipped,
+        "{arrangement}: the descent proved fewer rays empty than the root sphere did, which cannot happen"
     );
 
     let bound = match scene_enclosure(tree) {
@@ -202,16 +213,19 @@ fn report(arrangement: &str, tree: &Tree, camera: &Camera) {
         Enclosure::Unbounded => f32::NAN,
     };
     let rays_skipped = 100.0 * f64::from(culled_stats.skipped) / f64::from(plain_stats.rays);
+    let descent_skipped = 100.0 * f64::from(bnb_stats.skipped) / f64::from(plain_stats.rays);
     let avoided = 100.0 * (culled_stats.visits.saturating_sub(bnb_stats.visits)) as f64
         / culled_stats.visits.max(1) as f64;
     println!(
-        " {:>9} | {:>5} | {:>5} | {:>7.2} | {:>9} | {:>8.1}% | {:>14} | {:>12} | {:>8.1}%",
+        " {:>9} | {:>5} | {:>5} | {:>7.2} | {:>9} | {:>8.1}% | {:>8.1}% | {:>9} | {:>14} | {:>12} | {:>8.1}%",
         arrangement,
         spheres,
         plain_stats.hits,
         bound,
         plain_stats.evaluations,
         rays_skipped,
+        descent_skipped,
+        bnb_stats.evaluations,
         culled_stats.visits,
         bnb_stats.visits,
         avoided,
@@ -220,7 +234,7 @@ fn report(arrangement: &str, tree: &Tree, camera: &Camera) {
 
 fn main() {
     println!(
-        "// culling probe - a bound per ray and a bound per node, identical pixels in all three paths"
+        "// culling probe - a bound per ray, a bound per node, and a descent through the nodes"
     );
     println!(
         "// host {} / arch {}; integers only, no milliseconds",
@@ -229,7 +243,7 @@ fn main() {
     );
     println!();
     println!(
-        " arrangement | spheres |  hits | bound r | evals plain | rays skipped | nodes unpruned | nodes pruned | work avoided"
+        " arrangement | spheres |  hits | bound r | evals plain | skip by root | skip by descent | evals descent | nodes unpruned | nodes pruned | work avoided"
     );
     let camera = camera();
     for count in [1usize, 8, 32, 128] {
@@ -248,15 +262,33 @@ fn main() {
         let (b, b_stats) = render_bnb(&split_scene, &camera);
         assert_eq!(a.pixels, b.pixels, "median split changed the picture");
         assert_eq!(a.depth, b.depth, "median split moved a surface");
-        assert_eq!(a_stats.evaluations, b_stats.evaluations);
+        // Steps are no longer equal between the two trees, and that is the descent's own effect: a tighter
+        // tree shape proves more rays empty, so it charges fewer of them. Only the picture may not move.
+        assert_eq!(a_stats.hits, b_stats.hits, "median split moved hits");
         println!(
-            "   (scatter {count}: the split tree agrees pixel for pixel with the authored order, and the same steps)"
+            "   (scatter {count}: the split tree agrees pixel for pixel with the authored order; the step columns now differ, because a tighter tree proves more rays empty)"
         );
         report("scatter/index", &authored, &camera);
         report("scatter/split", &split_scene, &camera);
     }
     println!();
     println!("// What the table says:");
+    println!("// - THE HEADLINE IS THE SIXTH AND SEVENTH COLUMNS. The single root bound reaches 0.0% on the");
+    println!("//   32- and 128-sphere line rows and on both scatter rows - every ray is merely permitted,");
+    println!("//   because one sphere around a long row swallows the frustum. Asking the children instead");
+    println!("//   turns those same rows into 96-98% of rays proved empty, and the charged steps fall with");
+    println!("//   them: the 128-sphere line goes from 287,112 evaluations to 648, a factor of 443, on a");
+    println!("//   frame that is byte-identical. That is ADR-024's hierarchy measured rather than asserted,");
+    println!("//   and it is the first number here that says what a BVH is worth instead of that one is due.");
+    println!("// - getting it cost a real bug, and the bug is the second lesson: the descent tested the bare");
+    println!("//   radius, and a grazing ray that passes within `surface` of a sphere yet outside it is a");
+    println!("//   hit as far as the marcher is concerned. The 8-sphere cluster row disagreed by one pixel");
+    println!("//   and one hit before the fix. A skip is a claim about the marcher's tolerance, not about");
+    println!(
+        "//   geometry, so every enclosure tested for one is now grown by `surface` first - the"
+    );
+    println!("//   too-small enclosure this module exists to make impossible, caught by the frame");
+    println!("//   comparison rather than by reading the arithmetic.");
     println!(
         "// - `evals plain` and `rays skipped` are the step-level story. One tight bound proves"
     );

@@ -259,19 +259,49 @@ segment test per ray. `render::raster::render_culled` is the same march with tha
 `cargo run --release --example cull_probe -p render` prices it on a 64×48 grid, 96-step budget, spheres of
 radius 0.4, two arrangements of the same counts:
 
-| Arrangement | Spheres | Bound r | Evals plain | Rays skipped | Nodes unpruned | Nodes pruned | Work avoided |
-|---|---|---|---|---|---|---|---|
-| cluster | 1 | 0.40 | 294,544 | 99.9% | 16 | 16 | 0.0% |
-| cluster | 8 | 2.20 | 291,594 | 94.0% | 29,700 | 22,974 | 22.6% |
-| cluster | 32 | 4.96 | 279,551 | 71.0% | 534,933 | 343,956 | 35.7% |
-| cluster | 128 | 16.09 | 278,136 | 44.3% | 3,291,795 | 747,137 | **77.3%** |
-| line | 8 | 4.60 | 291,164 | 71.4% | 98,280 | 69,122 | 29.7% |
-| line | 32 | 19.00 | 287,112 | 0.0% | 1,268,568 | 784,424 | **38.2%** |
-| line | 128 | 76.60 | 287,112 | 0.0% | 5,134,680 | 2,757,440 | **46.3%** |
-| scatter, authored order | 32 | 33.11 | 284,992 | 0.0% | 1,655,892 | 1,403,902 | 15.2% |
-| scatter, median split | 32 | 22.98 | 284,992 | 0.0% | 1,655,892 | 892,554 | **46.1%** |
-| scatter, authored order | 128 | 138.01 | 284,800 | 0.0% | 6,474,195 | 5,150,135 | 20.5% |
-| scatter, median split | 128 | 84.69 | 284,800 | 0.0% | 6,474,195 | 2,961,586 | **54.3%** |
+| Arrangement | Spheres | Bound r | Evals plain | Rays skipped by the root bound | Rays skipped by the descent | Evals after the descent | Nodes unpruned | Nodes pruned | Work avoided |
+|---|---|---|---|---|---|---|---|---|---|
+| cluster | 1 | 0.40 | 294,544 | 99.9% | 99.9% | 16 | 16 | 16 | 0.0% |
+| line | 1 | 0.40 | 294,546 | 99.9% | 99.9% | 18 | 18 | 18 | 0.0% |
+| cluster | 8 | 2.20 | 291,594 | 94.0% | 98.8% | 234 | 29,805 | 2,705 | 90.9% |
+| line | 8 | 4.60 | 291,164 | 71.4% | 98.6% | 284 | 98,280 | 2,824 | 97.1% |
+| cluster | 32 | 4.96 | 279,551 | 70.9% | 94.3% | 1,439 | 535,311 | 59,449 | 88.9% |
+| line | 32 | 19.00 | 287,112 | **0.0%** | **97.1%** | 648 | 1,268,568 | 23,570 | 98.1% |
+| cluster | 128 | 16.09 | 278,136 | 44.3% | 93.8% | 1,656 | 3,291,795 | 81,518 | 97.5% |
+| line | 128 | 76.60 | 287,112 | **0.0%** | **97.1%** | 648 | 5,134,680 | 86,526 | 98.3% |
+| scatter, authored order | 32 | 33.11 | 284,992 | 0.0% | 96.3% | 1,120 | 1,655,892 | 59,141 | 96.4% |
+| scatter, median split | 32 | 22.98 | 284,992 | 0.0% | 96.3% | 1,120 | 1,655,892 | 38,569 | 97.7% |
+| scatter, authored order | 128 | 138.01 | 284,800 | 0.0% | 96.2% | 1,024 | 6,474,195 | 207,263 | 96.8% |
+| scatter, median split | 128 | 84.69 | 284,800 | 0.0% | 96.2% | 1,024 | 6,474,195 | 115,304 | 98.2% |
+
+### The third layer: a descent through the bounds, and the tolerance bug it found (2026-10-12)
+
+The middle columns above did not exist an hour before it did. `SceneBounds::may_reach_subtree` asks the
+question the ray early-out asks - can this sphere contain surface this ray can reach? - of each **child**,
+and stops at any node the bound rule does not licence. The single root sphere collapses to 0.0% on the 32-
+and 128-sphere line rows and on every scatter row, because one sphere around a long row swallows the
+frustum; the children do not, and on those same rows the descent proves **96 to 98% of rays empty**. The
+charged step count falls with it: the 128-sphere line goes from 287,112 evaluations to **648**, a factor of
+443, on a frame asserted byte-identical. That is ADR-024's hierarchy measured rather than asserted, and the
+first number in this repository that says what a BVH is worth instead of only that one is due.
+
+**It cost a real bug to get here, and the bug is the part worth reading.** The first version tested each
+sphere's bare radius, and the 8-sphere cluster row disagreed with the unculled frame by one pixel and one
+hit: a grazing ray that passes within `surface` of a sphere yet outside it is a *hit* as far as the marcher
+is concerned, because the marcher stops wherever `|field| < surface` and a sphere's field is distance minus
+radius. A skip is a claim about the marcher's tolerance, not about geometry, so every enclosure consulted
+for a skip is grown by `surface` first. The property that caught it is the one the module was built around -
+compare the frames, never read the arithmetic - and it is the same reasoning `respects` already encodes for
+the per-step skip, where `smin` dips below its own bound and is therefore refused outright.
+
+**What the descent deliberately does not do.** The entry distance is available, and starting the march there
+instead of at the camera would skip the empty approach. That was built, measured, and removed: on the test
+scenes it saved 8 march steps out of 85,508 on a mirror row while shifting 4 to 12 pixels per frame by up to
+3x `surface`, because a trace starting later takes a different sequence of steps and stops at a different
+point inside its tolerance. The hit *set* is unchanged; the bytes are not. Trading byte-identical frames -
+the invariant every row above rests on, and the reason the counts can be believed at all - for a saving two
+orders of magnitude smaller than the skip's is a renderer-policy question, recorded as
+[OQ-53](13-risks-open-questions.md).
 
 **The last four rows are a build decision, not an algorithm one.** Same scattered spheres, same camera,
 same picture, same steps, same unpruned node visits — only the order the leaves were emitted in differs,
@@ -282,22 +312,24 @@ as well as traversal, and both are bought at build time. The safe place to spend
 lowering of plain unions, where commutativity of `min` makes reordering exactly semantics-preserving;
 under `subtract` operand order *is* meaning, so the rule must be per kind and never a general sort.
 
-Two layers, two very different failure modes. **A single bound per ray** is the `Rays skipped` column: it
-proves 99.9% of rays empty on a compact scene and exactly **0.0%** on the same 32 or 128 spheres laid
-along a line — the bound grows to r 19.0 and 76.6, contains the frustum, every ray is merely *permitted*
-to march, and the hit count never budges (88 hits either way). Nothing is wrong with the early-out; it ran
-out of information. **A bound per node** is the last two columns, and it is the layer that survives the
-spread: on those same zero-saving rows it avoids 38.2% and 46.3% of the node visits, 77.3% on the
-128-sphere cluster, and the share *grows* with the count instead of decaying — which is the shape
-ADR-024 claimed and the shape this table now shows.
+Three layers, and the middle one is the one that failed first. **A single bound per ray** is the
+`Rays skipped by the root bound` column: it proves 99.9% of rays empty on a compact scene and exactly
+**0.0%** on the same 32 or 128 spheres laid along a line - the bound grows to r 19.0 and 76.6, contains the
+frustum, every ray is merely *permitted* to march, and the hit count never budges. Nothing is wrong with
+the early-out; it ran out of information. **A descent through the bounds per ray** is the next column, and
+it is what that information looks like: 97.1% of the line's rays proved empty, 443x fewer charged steps.
+**A bound per node inside a step** is the last two columns - the layer that also survives the spread, 98.1%
+and 98.3% of node visits avoided on those same zero-saving rows, 97.5% on the 128-sphere cluster, the share
+growing with the count instead of decaying, which is the shape ADR-024 claimed and this table now shows.
 
 The counter in those last columns is itself the correction. `Stats::evaluations` counts **march steps**,
 and a skip inside a step cannot change a step count: the skipped subtree would have returned a distance
 larger than the one already in hand, so the trajectory is identical by construction — which is equally the
 proof that skipping is safe, and the reason this probe's first run reported a saving of exactly zero for
 the whole per-node layer. So `SceneBounds` carries a node-visit tally, `render_culled` is the walk that
-counts **without** skipping and `render_bnb` the one that skips, and the two columns are the same frame
-with the same steps measured twice. `render` reports `visits: 0` for itself, because it has no table and
+counts **without** skipping and `render_bnb` the one that skips, and the two columns are the same frame measured twice -
+same pixels, and since the descent arrived, fewer steps in the pruning run because whole rays were proved
+empty before any of them was walked. `render` reports `visits: 0` for itself, because it has no table and
 will not print a number it did not measure. One more reason to trust those counts: the probe runs as a CI
 step on all three architectures and every number above — 3,291,795 unpruned and 747,137 pruned for the
 cluster, 5,134,680 and 2,757,440 for the line — prints identically on x86-64 Linux, x86-64 Windows and

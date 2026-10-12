@@ -455,14 +455,13 @@ pub fn march(
     )
 }
 
-/// The same loop, evaluating through [`sdf_eval_bnb`] so each step may skip subtrees the bound table
-/// licenses.
+/// The same loop, with ADR-024's hierarchy consulted: a ray is first proved empty (or not) by
+/// [`cull::SceneBounds::may_reach_subtree`], and each step may then skip subtrees the bound table licenses
+/// through [`sdf_eval_bnb`].
 ///
-/// What it is allowed to change is *nothing about the frame* - same trajectory, same distance values,
-/// same hit - and `tests/cull.rs` asserts exactly that. What it changes is the work inside a step, which
-/// this crate cannot yet report: [`raster::Stats::evaluations`] counts march steps, and a hierarchy
-/// shortens each step rather than their number, so the two currently print the same figure. Naming the
-/// limit here is the point: the saving is real arithmetic and unmeasured by this harness.
+/// What it is allowed to change is **nothing about the picture** — same pixels, same depth, same hit count
+/// as [`march`] — and `tests/cull.rs` asserts that against the frame rather than against the arithmetic.
+/// What it changes is how much of the frame it had to compute to get there.
 pub fn march_bnb(tree: &Tree, bounds: &cull::SceneBounds, root: u32, ray: Ray) -> Option<Hit> {
     march_with(tree, root, ray, Some(bounds))
 }

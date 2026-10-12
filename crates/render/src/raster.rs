@@ -257,13 +257,47 @@ fn march_into(
                 forward[1] + right[1] * ndc_x + up[1] * ndc_y,
                 forward[2] + right[2] * ndc_x + up[2] * ndc_y,
             ]);
-            if let Some(enclosure) = cull {
-                if !ray_may_hit(enclosure, camera.origin, dir, camera.max_t) {
-                    skipped += 1;
-                    push_rgb(pixels, sky(dir));
-                    depth.push(Frame::NO_HIT);
-                    continue;
+            // Two ways to prove a ray is empty, and the table decides which is available. A pruning table
+            // gets the hierarchy's answer, which *contains* the single-sphere test: the descent's first
+            // question is the root's own enclosure, so every ray the root rejects is rejected here too, and
+            // what the children add is the ray that passes between two spheres inside a loose cover - the
+            // case cull_probe measured at 0.0% for a spread scene. A counting table gets the root test and
+            // nothing else, so the baseline stays a baseline.
+            let reachable = match bounds {
+                Some(scene) if scene.prunes() => {
+                    // Both proofs, composed: the root sphere within the ray's own range, then the descent
+                    // into the children the root's cover cannot judge. Neither subsumes the other - the
+                    // descent asks about an unbounded distance, and it refuses outright below a node whose
+                    // bound is not licensed (a smooth union, a plane) - so skipping the first would quietly
+                    // lose rejections the single-sphere path already had.
+                    ray_may_hit(
+                        scene.enclosure_of(ROOT as usize).grown(camera.surface),
+                        camera.origin,
+                        dir,
+                        camera.max_t,
+                    ) && scene.may_reach_subtree(
+                        tree,
+                        ROOT as usize,
+                        camera.origin,
+                        dir,
+                        camera.surface,
+                    )
                 }
+                _ => match cull {
+                    Some(enclosure) => ray_may_hit(
+                        enclosure.grown(camera.surface),
+                        camera.origin,
+                        dir,
+                        camera.max_t,
+                    ),
+                    None => true,
+                },
+            };
+            if !reachable {
+                skipped += 1;
+                push_rgb(pixels, sky(dir));
+                depth.push(Frame::NO_HIT);
+                continue;
             }
             let hit = match bounds {
                 None => march(
