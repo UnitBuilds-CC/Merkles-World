@@ -119,7 +119,13 @@ quoting the reference implementation's speed as if it were the renderer's.
 agreement` uploads the engine's own five-node boot scene and compares the two implementations at
 1,521 fixed sample points on a device. On the `Microsoft Basic Render Driver [Dx12, Cpu]` adapter the
 maximum deviation was **0.000000000 world units** — not "close", identical, which is what you want
-from two `f32` evaluators of the same formulas. CI runs it on every gate job; the x86-64 Linux runner
+from two `f32` evaluators of the same formulas. CI, on two different vendors, is the more interesting
+measurement (run `38268554246`): the Windows runner, also on the software adapter, reproduced the exact
+zero, while **ARM64 macOS on Metal differed by 0.000000238 world units** at a point 2.44 units from the
+surface — a relative 1e-7, which is one fused-multiply-add being contracted by one compiler and not the
+other. The 1e-4 tolerance is written to pass that and fail the 0.042 divergence above, and the reason it
+can be that loose without becoming weak is docs/02: nothing here is hashed, so a vendor-level `f32`
+difference is a shading nuance rather than a desync. The Linux runner printed its SKIP and exited 0. CI runs it on every gate job; the x86-64 Linux runner
 has no adapter and the step prints a SKIP and exits 0, so a missing device can never read as
 agreement, and an adapter that refuses to open a device is a hard failure rather than a skip.
 
