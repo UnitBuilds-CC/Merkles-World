@@ -160,6 +160,26 @@ zero knowledge of pigs or wood.
 procedural scene, an edit that persists, and one deterministic hash that matches across all four
 determinism targets (gate P1.5).
 
+### Phase 1 exit, gate by gate — measured 2026-10-12
+
+The completion test has four clauses and eleven gates hanging off it, so each is listed with the
+evidence that decides it rather than with a colour. Read the last row first: **the honest summary is
+that the ledger half of the demo exists and the engine half does not.**
+
+| Clause or gate | State | The evidence |
+|---|---|---|
+| An edit persists (ledger level) | **met** | `p1_1_delta_record_round_trip`, `p1_1_record_resolves_back_to_the_exact_voxel` (gate P1.1); `the_commit_path_reproduces_the_frozen_vectors` (records to `EPOCH_0`); `the_read_and_the_root_never_disagree` (reader agrees with the root) |
+| P1.2 slab write throughput | **met on one machine** | `crates/memory/examples/slab_throughput.rs`: 57.2 M appends/sec, p99 200 ns, x86-64 Windows. The four named P1.5 devices have not run it |
+| P1.3 Merkle pass under 1 ms | **not met, decision pending** | `merkle_pass` example: 52 ms scattered and 7 ms clustered per full 64 KB slab, ~508 ns of each digest being BLAKE3 itself. Which of target, budget, compaction frequency or scope moves is [OQ-49](13-risks-open-questions.md) |
+| P1.4 eviction and re-entry | **no code** | Nothing tiers or evicts; `TierRestoreIncomplete` exists in A-09 with no producer |
+| P1.5 roots identical on four targets | **three architectures, not four devices** | CI run `38232526797` prints `EPOCH_0 91b97a52…` and the six C2 vectors byte-identically on x86-64 Linux, x86-64 Windows, ARM64 macOS. The browser half is blocked behind [OQ-41](13-risks-open-questions.md) and the export-lint decision in task 14 |
+| P1.6 divergent voxel detected | **detection met, repair deferred** | `crates/ledger/tests/bisection.rs`, including `divergence_and_root_equality_never_disagree`. Choosing a winner is [OQ-46](13-risks-open-questions.md), deferred with multiplayer by ADR-004 |
+| P1.7 persistence is readable | **proposed gate, tested** | `crates/ledger/tests/read_path.rs`. The frame-visibility half of [OQ-47](13-risks-open-questions.md) has no code |
+| A rendered procedural scene, R1, R2 | **no renderer** | `crates/render` evaluates and marches on a CPU; `scene_steps` gives ~15 evaluations per hit ray and ~53 per ray overall. That is the cost shape culling must fix, not a frame time |
+| R5 no polygonation at 1e-6 | **met in part** | `scale_changes_little_but_precision` in `crates/render/tests/scene.rs`, including its own limit: an epsilon finer than `f32` at that scale cannot be satisfied |
+| Mod loading, W1 to W3, AS1 to AS5 | **no compiler, no bindings** | A-07 is whole (grammar and envelope, flatc-checked in CI) but nothing emits an asset until task 15; A-02 exists and is parse-checked, and its `wit-bindgen` binding is the blocked step |
+| A booting engine | **does not exist** | There is no binary in the workspace: every crate is a library or an example. The dev profile (edit RON, see a change) needs `assetc` for the same reason |
+
 ## The Bitwise Determinism Suite
 
 The name AGENTS.md §4 and [ADR-017](decisions.md) cite as the acceptance test for anything another
