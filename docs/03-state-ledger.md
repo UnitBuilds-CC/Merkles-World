@@ -663,11 +663,16 @@ two runs of the same binary, the counts did not move at all.
   three coordinates nearly constant and reported 12,287 digests for the same count, a *faster* pass over a
   different arrangement. Comparing against the published number is what caught it.
 - **Batching across regions does not reduce the hashing; it increases it.** The same 65,536 edits as eight
-  regions of 8,192 compute **548,192 digests in 404.9 ms**; kept in one region of 65,536 they compute
-  **483,285 digests in 370.7 ms**. Spreading costs 13.4% more digests and 9.2% more time, because
-  separate trees cannot share interior nodes. So the "batch the pass across regions" option in OQ-49 is a
-  *parallelism* idea, not a work-reduction one - it helps only if cores are available, and it is the
-  renderer's job to say whether any are.
+  regions of 8,192 compute **548,192 digests**; kept in one region of 65,536 they compute
+  **483,285**. Spreading costs 13.4% more digests, because separate trees cannot share interior nodes,
+  and the counts are the part that repeats: CI run `38251942742` prints exactly those two numbers on
+  x86-64 Linux, x86-64 Windows and ARM64 macOS. The milliseconds did not carry the conclusion. Spread
+  versus together measured 9.2% slower here, 15.0% slower on Linux (232.9 vs 202.4 ms), 14.5% slower on
+  Windows (262.7 vs 229.5) - and 10.1% *faster* on ARM64 macOS (276.6 vs 308.7). The work difference is
+  real and portable; a shared runner cannot be trusted to rank two timings 10% apart, which is the same
+  reason gate P1.2's throughput figure is quoted for one machine. So the "batch the pass across regions"
+  option in OQ-49 is a *parallelism* idea, not a work-reduction one: it can only help if cores are
+  available, and it never reduces the hashing.
 - **The epoch's own lists are not where the time goes.** Committing 512 scattered edits with a slot table
   of 1, 2, 8 or 16 rows costs 4.10-4.43 ms in every case: the region pass dominates and the number of
   slots barely registers. More live regions per epoch is therefore cheap in ledger terms, which is the
