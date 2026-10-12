@@ -1,25 +1,28 @@
-//! What a single scene enclosure actually buys, measured on scenes of increasing size.
+//! What culling actually buys, on scenes that grow and on scenes that spread.
 //!
 //! `cargo run --release --example cull_probe -p render`
 //!
 //! docs/04's culling claim is "naive evaluation of many entities collapses the frame rate; a BVH skips
 //! them in `O(log N)`", and the raster probe turned the first half into a number: on the boot's grid the
-//! third of rays that hit nothing pay 69.6% of all evaluations. [`render::cull`] is the cheapest possible
-//! answer to that - one conservative sphere around the whole scene, one segment test per ray - so this
-//! example exists to report what it saves and, more usefully, **where it stops helping**. A bound that
-//! contains the scene is only tight if the scene is compact; spread the same spheres down a line and the
-//! root sphere grows until every ray "might" hit, and the saving goes to zero without a single line of
-//! the early-out being wrong. That is the case a real hierarchy is for, and having it measured is what
-//! stops the next structure from being built on a vibe.
+//! third of rays that hit nothing pay 69.6% of all evaluations. [`render::cull`] answers that in two
+//! layers - one bound for the whole scene, tested once per ray, and one bound per node, tested inside the
+//! march - so this reports what each layer is worth and where each stops helping. A bound containing the
+//! scene is tight only while the scene is compact: spread the same spheres down a line, the root sphere
+//! grows until every ray "might" hit, and the ray layer's saving goes to zero without one line of it
+//! being wrong. That is the case a hierarchy exists for.
 //!
-//! Two arrangements per count, one line, one cluster, same spheres, same camera. The interesting column
-//! pair is the last two: the ray cull and the per-node hierarchy, which this run shows reporting exactly
-//! the same number - and the reason they do is in the closing commentary, because it is a fact about the
-//! metric rather than about the structures.
+//! **Why the last three columns count nodes rather than steps.** That is the lesson of this probe's first
+//! run, where the per-node layer looked worthless: a skipped subtree is one that would have returned a
+//! distance *larger* than the one already in hand, so the march takes identical steps either way and a
+//! step count cannot see the skip at all. The only unit it can show up in is nodes entered per frame.
+//! `render_culled` therefore counts without skipping, so the two node columns are the same frame - same
+//! rays, same steps, same pixels - measured twice, and their difference is exactly the work the per-node
+//! bounds removed.
 //!
-//! Informational output, release profile, one machine - the same labelling every timing here carries.
-//! Unlike the other probes this one prints no milliseconds: everything it reports is a count, and counts
-//! repeat across runners.
+//! Informational output, release profile, one machine. Unlike the other probes this prints no
+//! milliseconds: every column is an integer or a ratio of integers, and integers are what repeat across
+//! runners. No column here may be quoted as a frame time - gates R1 and R2 need a GPU that this
+//! repository does not have yet.
 
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
@@ -32,9 +35,9 @@ use render::{validate, Tree};
 const RADIUS: f32 = 0.4;
 const SPACING: f32 = 1.2;
 
-/// Pre-order union tree over `centres`, built the way `assetc`'s lowering would: the branch's
-/// `subtree_len` is arithmetic (a full binary tree over `count` leaves is `2 * count - 1` nodes), so no
-/// fix-up pass is needed and the root flag lands on node 0 by construction.
+/// Pre-order union tree over `centres`, built the way `assetc`'s lowering would: a branch's `subtree_len`
+/// is arithmetic (a full binary tree over `count` leaves is `2 * count - 1` nodes), so no fix-up pass is
+/// needed and the root flag lands on node 0 by construction.
 fn scene(centres: &[[f32; 3]]) -> Tree {
     let mut nodes = Vec::new();
     let mut params: Vec<f32> = Vec::new();
@@ -90,86 +93,81 @@ fn camera() -> Camera {
     }
 }
 
+/// Spheres along x, so the scene bound grows with the count.
 fn line(count: usize) -> Vec<[f32; 3]> {
     (0..count)
         .map(|i| [(i as f32 - count as f32 / 2.0) * SPACING, 0.0, 0.0])
         .collect()
 }
 
+/// The same spheres packed into a cube, so the bound stays tight. The question is the bound's shape,
+/// never the count.
 fn cluster(count: usize) -> Vec<[f32; 3]> {
-    // Same number of spheres, packed into a cube of side `2 * RADIUS + a little`, because the question
-    // is about the bound's tightness rather than about the count.
     (0..count)
         .map(|i| {
             let step = 2.0 * RADIUS + 0.1;
             let per_row = 4usize;
-            let row = i / per_row;
-            let column = i % per_row;
-            let depth = i / (per_row * per_row);
-            [column as f32 * step, row as f32 * step, depth as f32 * step]
+            [
+                (i % per_row) as f32 * step,
+                (i / per_row) as f32 * step,
+                (i / (per_row * per_row)) as f32 * step,
+            ]
         })
         .collect()
 }
 
 fn report(arrangement: &str, tree: &Tree, camera: &Camera) {
     assert!(validate(tree).is_ok(), "{arrangement} must validate");
-    let spheres = tree.nodes.iter().filter(|n| n.arity() == 0).count();
+    let spheres = tree.nodes.iter().filter(|node| node.arity() == 0).count();
     let (plain, plain_stats) = render(tree, camera);
     let (culled, culled_stats) = render_culled(tree, camera);
-    let (_, bnb_stats) = render_bnb(tree, camera);
-    assert_eq!(
-        plain.pixels, culled.pixels,
-        "{arrangement}: culling changed pixels"
-    );
-    assert_eq!(
-        plain.depth, culled.depth,
-        "{arrangement}: culling changed depth"
-    );
-    assert_eq!(
-        plain.pixels,
-        bnb_pixels(tree, camera),
-        "{arrangement}: the per-node skip changed pixels"
-    );
+    let (bnb, bnb_stats) = render_bnb(tree, camera);
+
+    // Everything the columns mean rests on this: culling may change work, never the picture.
+    assert_eq!(plain.pixels, culled.pixels, "{arrangement}: pixels changed");
+    assert_eq!(plain.depth, culled.depth, "{arrangement}: depth changed");
+    assert_eq!(plain.pixels, bnb.pixels, "{arrangement}: pixels changed");
+    assert_eq!(plain.depth, bnb.depth, "{arrangement}: depth changed");
     assert_eq!(plain.hit_count(), culled.hit_count());
     assert_eq!(plain.hit_count(), bnb_stats.hits);
+    assert_eq!(
+        culled_stats.evaluations, bnb_stats.evaluations,
+        "{arrangement}: a skip changed the step count, which is what it must never do"
+    );
+
     let bound = match scene_enclosure(tree) {
         Enclosure::Bounded { radius, .. } => radius,
         Enclosure::Unbounded => f32::NAN,
     };
-    let saved_ray = plain_stats.evaluations - culled_stats.evaluations;
-    let saved_bnb = plain_stats.evaluations - bnb_stats.evaluations;
+    let rays_skipped = 100.0 * f64::from(culled_stats.skipped) / f64::from(plain_stats.rays);
+    let avoided = 100.0 * (culled_stats.visits.saturating_sub(bnb_stats.visits)) as f64
+        / culled_stats.visits.max(1) as f64;
     println!(
-        " {:>9} | {:>5} | {:>5} | {:>7.2} | {:>9} | {:>8} | {:>8} | {:>6.1}% | {:>6.1}%",
+        " {:>9} | {:>5} | {:>5} | {:>7.2} | {:>9} | {:>8.1}% | {:>14} | {:>12} | {:>8.1}%",
         arrangement,
         spheres,
         plain_stats.hits,
         bound,
         plain_stats.evaluations,
-        culled_stats.evaluations,
-        bnb_stats.evaluations,
-        100.0 * saved_ray as f64 / plain_stats.evaluations as f64,
-        100.0 * saved_bnb as f64 / plain_stats.evaluations as f64,
+        rays_skipped,
+        culled_stats.visits,
+        bnb_stats.visits,
+        avoided,
     );
-}
-
-/// The per-node path's pixels, kept as a separate call so the assertion above compares the plain frame
-/// against both culled frames rather than against itself.
-fn bnb_pixels(tree: &Tree, camera: &Camera) -> Vec<u8> {
-    render_bnb(tree, camera).0.pixels
 }
 
 fn main() {
     println!(
-        "// culling probe - one scene enclosure, two arrangements, identical pixels either way"
+        "// culling probe - a bound per ray and a bound per node, identical pixels in all three paths"
     );
     println!(
-        "// host {} / arch {}; counts only, no milliseconds",
+        "// host {} / arch {}; integers only, no milliseconds",
         std::env::consts::OS,
         std::env::consts::ARCH
     );
     println!();
     println!(
-        " arrangement | spheres |  hits | bound r | evals plain | evals ray | evals bnb | saved ray | saved bnb"
+        " arrangement | spheres |  hits | bound r | evals plain | rays skipped | nodes unpruned | nodes pruned | work avoided"
     );
     let camera = camera();
     for count in [1usize, 8, 32, 128] {
@@ -179,34 +177,29 @@ fn main() {
     println!();
     println!("// What the table says:");
     println!(
-        "// - the cluster keeps a tight sphere as it grows, so most rays are proved empty and the"
+        "// - `evals plain` and `rays skipped` are the step-level story. One tight bound proves"
     );
     println!(
-        "//   saving tracks the miss share docs/04 names. This is the case one bound can serve."
-    );
-    println!("// - the line's bound grows with the scene, and the moment it covers the frustum's corners");
-    println!(
-        "//   every ray 'might' hit: skipped falls toward zero and the saving with it, while the"
-    );
-    println!("//   pixels stay identical. The early-out did not fail; it ran out of information.");
-    println!("// - the last two columns are EQUAL, and that is the real finding of this run. The per-node");
-    println!("//   skips are built and correct (tests/cull.rs proves the frames agree, and proves a smooth");
-    println!("//   union is refused the skip because smin dips below its own bound), but this table cannot");
-    println!("//   see them: Stats counts *march steps*, and pruning inside one step does not change how");
-    println!("//   many steps the march takes - the distance it returns is the same one the unpruned field");
-    println!("//   would have returned. A hierarchy shortens each step, not their number. Pricing ADR-024");
-    println!(
-        "//   therefore needs a counter of primitive evaluations per frame, which does not exist"
-    );
-    println!("//   yet, and until it does the honest reading of the last column is 'no worse than the ray");
-    println!("//   cull, and unmeasured below that'.");
-    println!("// - so the next structure is not optional polish: the line rows show one bound running out");
-    println!("//   of information as entities spread, and the only thing that keeps a bound tight is more");
-    println!(
-        "//   bounds. It also needs its own metric before anyone is allowed to claim a saving."
+        "//   99.9% of rays empty on a compact scene; the same 128 spheres laid along a line grow"
     );
     println!(
-        "// - unchanged by this probe: gate R1 and R2 are frame-time claims and there is still no"
+        "//   that bound to r 76.6, past the frustum, and the ray layer is then worth nothing."
     );
-    println!("//   GPU. Counts here are work avoided, never nanoseconds saved.");
+    println!(
+        "// - `nodes unpruned` against `nodes pruned` is the per-node story, measured on the same"
+    );
+    println!("//   frame with the same steps: the two differ only by subtrees the bounds proved irrelevant");
+    println!(
+        "//   at that point in the march. Steps cannot show a skip; nodes can, which is why this"
+    );
+    println!("//   probe has both and why its first run reported a saving of exactly zero.");
+    println!("// - `work avoided` is where ADR-024's argument lands. The layer that survives a spreading");
+    println!(
+        "//   scene is the one holding many bounds and choosing per step, not the one holding a"
+    );
+    println!("//   single bound per ray - and now that it is measurable, the claim can be priced instead");
+    println!("//   of asserted.");
+    println!("// - what is still not here: gates R1 and R2 are frame-time claims with no GPU behind them.");
+    println!("//   Nodes avoided per frame is work; work has never been calibrated to nanoseconds in this");
+    println!("//   repository, so no column above may be quoted as a frame time.");
 }

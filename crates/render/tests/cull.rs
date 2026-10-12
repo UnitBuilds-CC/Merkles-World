@@ -365,6 +365,51 @@ fn a_smooth_union_is_the_one_combinator_that_may_not_be_skipped() {
 }
 
 #[test]
+fn the_counter_measures_the_thing_the_step_count_cannot() {
+    // Two spheres, one in front of the camera and one off to the side. The march's step count is
+    // identical with and without the per-node skip - a skipped subtree returns the distance the walk
+    // would have returned anyway - so the only witness is nodes entered per frame. This asserts both
+    // what the counter means (exactly one visit per node per field walk, unpruned) and that pruning
+    // strictly reduces it on the same frame.
+    let tree = union(3.0);
+    let nodes = tree.nodes.len() as u64;
+    let camera = camera_at([0.0, 0.0, -6.0]);
+
+    let (plain_frame, plain) = render(&tree, &camera);
+    let (_, unpruned) = render_culled(&tree, &camera);
+    let (bnb_frame, pruned) = render_bnb(&tree, &camera);
+
+    assert_eq!(
+        plain.visits, 0,
+        "the unculed path has no table, so it reports nothing rather than a number it did not measure"
+    );
+    // Exactly one visit per node per field walk, which is what the counter means. It cannot be pinned to
+    // `evaluations` as an equality, because a missed ray is charged the whole step budget whether or not
+    // the march used it - the same upper bound doc 04 records - so the relation is divisibility one way
+    // and an inequality the other.
+    assert_eq!(
+        unpruned.visits % nodes,
+        0,
+        "a counting walk enters every node or none of it, never a partial subtree"
+    );
+    assert!(
+        unpruned.visits / nodes <= unpruned.evaluations,
+        "walks cannot exceed the steps charged: {} over {}",
+        unpruned.visits / nodes,
+        unpruned.evaluations
+    );
+    assert_eq!(unpruned.evaluations, pruned.evaluations);
+    assert!(
+        pruned.visits < unpruned.visits,
+        "with a sphere 3 units to the side, some rays must provably not need it: {} vs {}",
+        pruned.visits,
+        unpruned.visits
+    );
+    assert_eq!(plain_frame.pixels, bnb_frame.pixels);
+    assert_eq!(plain_frame.depth, bnb_frame.depth);
+}
+
+#[test]
 fn a_subtract_keeps_the_first_operands_bound_rather_than_the_ones_the_carve_left() {
     // A difference is a subset of A, so A's sphere is conservative and correct. Asserting the radius is
     // A's rather than something tighter pins the design decision: this module bounds by set relation,

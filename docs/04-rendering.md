@@ -237,39 +237,43 @@ segment test per ray. `render::raster::render_culled` is the same march with tha
 `cargo run --release --example cull_probe -p render` prices it on a 64×48 grid, 96-step budget, spheres of
 radius 0.4, two arrangements of the same counts:
 
-| Arrangement | Spheres | Bound r | Evals plain | Evals ray-cull | Evals per-node | Rays skipped | Saved by ray | Saved per-node |
-|---|---|---|---|---|---|---|---|---|
-| cluster | 1 | 0.40 | 294,544 | 16 | 16 | 99.9% | **100.0%** | 100.0% |
-| cluster | 8 | 2.20 | 291,594 | 14,250 | 14,250 | 94.0% | 95.1% | 95.1% |
-| cluster | 32 | 4.96 | 279,551 | 70,271 | 70,271 | 71.0% | 74.9% | 74.9% |
-| cluster | 128 | 16.09 | 278,136 | 147,384 | 147,384 | 44.3% | 47.0% | 47.0% |
-| line | 8 | 4.60 | 291,164 | 80,540 | 80,540 | 71.4% | 72.3% | 72.3% |
-| line | 32 | 19.00 | 287,112 | 287,112 | 287,112 | 0.0% | **0.0%** | 0.0% |
-| line | 128 | 76.60 | 287,112 | 287,112 | 287,112 | 0.0% | **0.0%** | 0.0% |
+| Arrangement | Spheres | Bound r | Evals plain | Rays skipped | Nodes unpruned | Nodes pruned | Work avoided |
+|---|---|---|---|---|---|---|---|
+| cluster | 1 | 0.40 | 294,544 | 99.9% | 16 | 16 | 0.0% |
+| cluster | 8 | 2.20 | 291,594 | 94.0% | 29,700 | 22,974 | 22.6% |
+| cluster | 32 | 4.96 | 279,551 | 71.0% | 534,933 | 343,956 | 35.7% |
+| cluster | 128 | 16.09 | 278,136 | 44.3% | 3,291,795 | 747,137 | **77.3%** |
+| line | 8 | 4.60 | 291,164 | 71.4% | 98,280 | 69,122 | 29.7% |
+| line | 32 | 19.00 | 287,112 | 0.0% | 1,268,568 | 784,424 | **38.2%** |
+| line | 128 | 76.60 | 287,112 | 0.0% | 5,134,680 | 2,757,440 | **46.3%** |
 
-**The last two columns are identical, and that equality is the most useful number in the table.** The
-per-node skips exist: `scene_bounds` builds one enclosure *per node* in a single reverse pre-order pass,
-`sdf_eval_bnb` consults it inside the same `eval_at` (one evaluator, one field, no second implementation
-free to drift), and the union arm declines to evaluate its second child when that child's own bound is
-already farther than the value in hand. It is correct, and this instrument cannot see it, for one reason:
-`Stats::evaluations` counts **march steps**, and a skip inside a step changes no step count — the distance
-returned is the value the unpruned field would have returned, so the ray's trajectory is identical by
-construction. A hierarchy shortens each step rather than their number. Pricing ADR-024 therefore needs a
-counter of *primitive evaluations per frame*, which does not exist yet; until it does, the honest
-statement about per-node skipping is **implemented, provably frame-preserving, unmeasured** — and no
-saving may be quoted from this table for it.
+Two layers, two very different failure modes. **A single bound per ray** is the `Rays skipped` column: it
+proves 99.9% of rays empty on a compact scene and exactly **0.0%** on the same 32 or 128 spheres laid
+along a line — the bound grows to r 19.0 and 76.6, contains the frustum, every ray is merely *permitted*
+to march, and the hit count never budges (88 hits either way). Nothing is wrong with the early-out; it ran
+out of information. **A bound per node** is the last two columns, and it is the layer that survives the
+spread: on those same zero-saving rows it avoids 38.2% and 46.3% of the node visits, 77.3% on the
+128-sphere cluster, and the share *grows* with the count instead of decaying — which is the shape
+ADR-024 claimed and the shape this table now shows.
+
+The counter in those last columns is itself the correction. `Stats::evaluations` counts **march steps**,
+and a skip inside a step cannot change a step count: the skipped subtree would have returned a distance
+larger than the one already in hand, so the trajectory is identical by construction — which is equally the
+proof that skipping is safe, and the reason this probe's first run reported a saving of exactly zero for
+the whole per-node layer. So `SceneBounds` carries a node-visit tally, `render_culled` is the walk that
+counts **without** skipping and `render_bnb` the one that skips, and the two columns are the same frame
+with the same steps measured twice. `render` reports `visits: 0` for itself, because it has no table and
+will not print a number it did not measure.
 
 Spike S1's third reading above guessed that "an early-out on a scene like this is worth up to about 3×".
-The measurement says the guess was not a ceiling or a floor but the wrong variable: the same one-sphere
-early-out saves **100.0%** of the work, and the same spheres laid down a line save **nothing at all** — the
-root bound grows until it contains the whole frustum, every ray is merely *permitted* to march, and the hit
-count stays where it was (88 hits, 0 rays skipped). What determines the saving is the bound's tightness
-relative to the frustum, not whether an early-out exists.
+Between the two layers the truth is neither a ceiling nor a floor but the wrong variable: what determines
+the saving is the bound's tightness relative to the frustum, times how many bounds there are to consult.
 
 That is ADR-024's hierarchy stated as a requirement rather than a promise, and it arrived by building the
-weak version first: one bound is a fixed win that decays as the scene spreads, so the next structure has to
-be **many bounds, chosen per ray** — the `O(log N)` skip the mechanism table below already names. The
-`Work saved` column is the baseline a BVH is measured against at the same hit fraction.
+weak version first: one bound is a fixed win that decays as the scene spreads, so the structure that has
+to exist is **many bounds, chosen per step** — the `O(log N)` skip the mechanism table below names, now
+with a measured floor to beat (`Work avoided` at the same hit fraction, and `Nodes unpruned` as the
+naive cost it is priced against).
 
 Two honesty notes this section keeps rather than smooths over:
 

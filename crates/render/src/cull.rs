@@ -104,9 +104,26 @@ pub fn scene_enclosure(tree: &Tree) -> Enclosure {
 /// re-walking of subtrees is needed. The same is not true of [`enclose`], which is the on-demand form and
 /// re-descends per call - fine for building this table once, wrong for consulting per march step.
 pub fn scene_bounds(tree: &Tree) -> SceneBounds {
+    collect(tree, true)
+}
+
+/// The same table with the skips disabled, which exists for one reason: to price the skips.
+///
+/// Counting while pruning is on would report the work the pruning avoided as work done, and the two are
+/// then incomparable. This form walks the field exactly as the unpruned evaluator would - same values,
+/// same trajectory - but keeps a tally, so `render_culled` (counting) and `render_bnb` (pruning) can be
+/// compared against each other on identical frames. Without it there is no honest number for ADR-024,
+/// only a step count that cannot see the effect at all.
+pub fn counting_bounds(tree: &Tree) -> SceneBounds {
+    collect(tree, false)
+}
+
+fn collect(tree: &Tree, pruning: bool) -> SceneBounds {
     let mut bounds = SceneBounds {
         enclosure: vec![Enclosure::Unbounded; tree.nodes.len()],
         respects: vec![false; tree.nodes.len()],
+        pruning,
+        visits: core::cell::Cell::new(0),
     };
     for index in (0..tree.nodes.len()).rev() {
         let record = tree.nodes[index];
@@ -190,9 +207,27 @@ pub fn scene_bounds(tree: &Tree) -> SceneBounds {
 pub struct SceneBounds {
     enclosure: Vec<Enclosure>,
     respects: Vec<bool>,
+    pruning: bool,
+    visits: core::cell::Cell<u64>,
 }
 
 impl SceneBounds {
+    /// How many nodes the evaluator actually visited. Only meaningful after a frame, and only
+    /// comparable between two runs of the same scene and camera - which is why the counting-only table
+    /// exists alongside the pruning one.
+    #[inline]
+    pub fn visits(&self) -> u64 {
+        self.visits.get()
+    }
+
+    /// Called by the evaluator on every node it enters. `Cell` rather than a parameter because the
+    /// count belongs to the table, not to the call chain: threading `&mut u64` through `eval_at` would
+    /// put an argument in the hottest function in the crate for a number no frame uses.
+    #[inline]
+    pub(crate) fn count_visit(&self) {
+        self.visits.set(self.visits.get() + 1);
+    }
+
     #[inline]
     pub fn enclosure_of(&self, node: usize) -> Enclosure {
         self.enclosure[node]
@@ -214,9 +249,12 @@ impl SceneBounds {
 
     /// A lower bound on `node`'s field at `p`, when one is licensed. `None` means "you must evaluate it",
     /// which is a refusal rather than a zero.
+    ///
+    /// A counting-only table always answers `None`: it is there to measure the walk the evaluator would
+    /// otherwise have done, so offering it a skip would make the baseline and the pruned run the same run.
     #[inline]
     pub fn lower_bound(&self, node: usize, p: [f32; 3]) -> Option<f32> {
-        if !self.respects[node] {
+        if !self.pruning || !self.respects[node] {
             return None;
         }
         let Enclosure::Bounded { centre, radius } = self.enclosure[node] else {

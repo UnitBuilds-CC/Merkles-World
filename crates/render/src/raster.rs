@@ -92,6 +92,15 @@ pub struct Stats {
     /// from [`render`], which has no bound to consult: the field exists so the saving is stated next to
     /// the number it reduced rather than in prose.
     pub skipped: u32,
+    /// Nodes the evaluator entered, tallied only when a bound table is in play: [`render`] reports 0,
+    /// [`render_culled`] reports the **unpruned** walk (its table counts and declines to skip), and
+    /// [`render_bnb`] reports the pruned one. That pairing is the point — `evaluations` above cannot see a
+    /// per-node skip at all, because a skipped subtree returns the distance the walk would have returned
+    /// anyway, so the ray's step count is identical either way.
+    ///
+    /// March-step field walks only. The four gradient taps per hit go through the public evaluator and are
+    /// not counted, which is why the number is "nodes entered per frame" and not "cost of the frame".
+    pub visits: u64,
 }
 
 /// March every pixel with no culling. This is the reference: whatever a culled path produces has to
@@ -108,7 +117,15 @@ pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
 /// A scene containing an unbounded node (a plane, a tiling) yields `skipped = 0`, which is the refusal
 /// working: no bound, no early-out, no invented box.
 pub fn render_culled(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
-    render_with(tree, camera, Some(crate::cull::scene_enclosure(tree)), None)
+    // The counting table, not the pruning one: this entry point is the ray-level early-out and the
+    // unpruned baseline to compare `render_bnb` against.
+    let bounds = crate::cull::counting_bounds(tree);
+    render_with(
+        tree,
+        camera,
+        Some(bounds.enclosure_of(crate::ROOT as usize)),
+        Some(&bounds),
+    )
 }
 
 /// The whole culling story: the ray-level early-out of [`render_culled`] plus the per-step subtree skips
@@ -218,6 +235,7 @@ fn render_with(
             hits,
             evaluations,
             skipped,
+            visits: bounds.map_or(0, |scene| scene.visits()),
         },
     )
 }

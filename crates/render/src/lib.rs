@@ -276,10 +276,15 @@ fn eval_at(
     depth: u32,
     bounds: Option<&cull::SceneBounds>,
 ) -> f32 {
-    // `validate` is the gate; this is the recursion's own belt, so an unvalidated tree hangs a
-    // computation rather than a frame.
+    // The same belt the evaluator carries: `validate` is the gate, this is the recursion's own, so an
+    // unvalidated tree hangs a computation rather than a frame.
     if depth > MAX_TREE_DEPTH + 8 {
         return f32::MAX;
+    }
+    // One tally per node entered, pruned or not, which is the only unit in which a per-node skip can be
+    // priced: the march's step count cannot see it, because a skip returns the same distance.
+    if let Some(scene) = bounds {
+        scene.count_visit();
     }
     let record = tree.record(index);
     let params = tree.params_of(record);
