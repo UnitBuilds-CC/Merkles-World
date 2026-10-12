@@ -495,8 +495,9 @@ pub fn render_bnb_budget_in(
     frame.height = camera.height;
     frame.pixels.clear();
     frame.pixels.resize(rays * 3, 0);
-    for chunk in frame.pixels.chunks_exact_mut(3) {
-        chunk.copy_from_slice(&Frame::NOT_DRAWN_RGB);
+    let sentinel = Frame::NOT_DRAWN_RGB;
+    for (index, byte) in frame.pixels.iter_mut().enumerate() {
+        *byte = sentinel[index % 3];
     }
     frame.depth.clear();
     frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
