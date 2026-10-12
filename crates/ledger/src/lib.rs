@@ -32,6 +32,9 @@ pub mod repair;
 /// The read side: what a voxel commits to at the end of an epoch.
 pub mod read;
 
+/// Compaction: shrink a region's write-ahead records without changing what they commit to.
+pub mod compact;
+
 /// Region residency: the `M_active` / `M_cold` LRU bookkeeping gate P1.4 rests on.
 pub mod tier;
 

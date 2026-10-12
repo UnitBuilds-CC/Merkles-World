@@ -536,6 +536,54 @@ commit. Mitigations, none decided ([OQ-24](13-risks-open-questions.md)): commit-
 background commit when the pending pool crosses a size threshold, or per-interaction-commit for
 nearby regions with global consequences deferred.
 
+### What a compaction may and may not do (`crates::ledger::compact`)
+
+The bake above is a policy; the *transform* — take a region's outstanding records, hand back fewer
+of them — is now an implementation, and it comes with one property and one measured surprise.
+
+**The property:** a compaction re-encodes state, it never changes it, which here means the
+**region root is bit-identical before and after**. That is a strong claim and it rests on a detail
+of the frozen A-10 shape: a voxel leaf hashes only its payload, and duplicates resolve at the leaf
+by greatest append rank, so a region root depends on exactly one thing per voxel — *which payload
+won* — and not on list length, arrival order, or how many shadowed writes sit beside the winner.
+Compaction is therefore root-preserving precisely when its survivor per voxel is the record that
+would have won, and nothing else about ordering matters. `tests/compaction.rs` asserts the digest
+equality rather than arguing it, checks idempotence the way A-09's `CompactionNotIdempotent` asks
+for (a second pass removes nothing, and the survivor *set* is a set — a right-length answer with a
+duplicate and an omission would slip past the digest check alone), and pins that the winner follows
+arrival order under permuted input, because asserting a fixed payload would be asserting that
+compaction chooses by value.
+
+**Why a rank is passed in.** "The record that would have won" is causal order, and the ledger does
+not own causal order — commit-pipeline step 2 is [OQ-46](13-risks-open-questions.md), and with one
+writer it is append order. There is a mechanical reason too: with no allocator, the only in-place
+sort available is unstable, so ties are not preserved by construction. Making the caller supply the
+same `u32` the commit path stamps as `append` turns `(voxel, rank)` into a tie-free total order, so
+the result is deterministic *because* it is ordered, not because a sort happened to behave.
+[`compact::assign_ranks`] builds those ranks from a plain record slice for callers who are using
+append order, so the common path needs none of this reasoning.
+
+**The measured surprise:** compaction does **not** make the Merkle pass cheaper. On the fixture the
+tests use — 72 records over 36 distinct voxels, i.e. every cell written twice — the compacted set is
+exactly half the records and the same **79 digests**, root to root:
+
+```
+records 72 -> live 36; digests 79 -> 79; roots equal
+```
+
+Duplicates already collapse at the leaf for free: one cell, one leaf hash, the winner picked by
+comparison. That is the same discovery spike S2 made when it deleted the 46 ms `O(N²)` resolution
+pre-pass and moved last-write-wins into the walk. So the lever is **storage and capacity, not
+hashing**: half the records to keep in an arena, and half the leaf scratch a commit needs — which is
+[SPEC-06](13-risks-open-questions.md)'s question, and the test shows the refusal in both directions:
+scratch sized for the compacted region rejects the uncompacted one rather than committing to a
+partial region.
+
+**What this does *not* do:** it does not move gate P1.3. [OQ-49](13-risks-open-questions.md) lists
+compaction frequency as one of four candidate levers; on this evidence that option is empty, because
+frequency changes how often the pass runs, not what one pass costs, and the pass cost is unchanged
+per edit. The remaining candidates are the target, the per-epoch budget, and the gate's scope.
+
 ## The commit pipeline
 
 1. Flush outstanding deltas into the epoch transaction pool.
