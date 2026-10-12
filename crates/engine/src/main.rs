@@ -217,13 +217,37 @@ fn main() {
             "lowered and hand-assembled scenes must be one surface: {t}/{steps} vs {hand:?}"
         );
     }
-    println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU, no culling)");
+    println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU; a single ray, so nothing to skip)");
 
     // ---- 7. the same field as a frame: a grid of rays, still on the CPU ----
+    // Both paths run, and the boot asserts they agree. That is the claim the raster cull rests on: a
+    // bound that is too small deletes geometry and the result looks like a correct render, so the check
+    // belongs where a real frame is drawn, not only in a suite that never marches this scene.
     let (frame, raster) = render::raster::render(&tree, &probe_camera());
+    let (culled_frame, culled_raster) = render::raster::render_culled(&tree, &probe_camera());
+    assert_eq!(
+        frame.pixels, culled_frame.pixels,
+        "the scene enclosure changed the boot's picture - the bound is too small"
+    );
+    assert_eq!(
+        frame.depth, culled_frame.depth,
+        "the scene enclosure moved a surface the march found"
+    );
+    let bound = match render::cull::scene_enclosure(&tree) {
+        render::cull::Enclosure::Bounded { radius, .. } => radius,
+        render::cull::Enclosure::Unbounded => f32::NAN,
+    };
     println!(
-        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations (informational; gate R1 is a GPU frame and stays unmet)",
-        frame.width, frame.height, raster.hits, raster.rays, raster.evaluations
+        "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations, {} with the scene cull (bound r {:.2}, {} of {} rays proved empty) (informational; gate R1 is a GPU frame and stays unmet)",
+        frame.width,
+        frame.height,
+        raster.hits,
+        raster.rays,
+        raster.evaluations,
+        culled_raster.evaluations,
+        bound,
+        culled_raster.skipped,
+        raster.rays
     );
 
     // ---- 8. the commit's cheap half: recycling the slab ----

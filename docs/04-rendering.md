@@ -181,6 +181,15 @@ ARM64 macOS, which is the first time this repository has compared a whole pixel 
 machines. That comparison is a diagnostic, not a gate: nothing here feeds a digest, and a frame hash stays
 informational by policy (ADR-017, gate R4).
 
+The boot now marches that same grid twice and prints both - `243008 evaluations, 178880 with the scene
+cull (bound r 2.10, 668 of 3072 rays proved empty)` - and asserts inside the binary that the two frames
+are identical pixels and depth, because a bound that is too small deletes geometry and the result looks
+like a correct render, which is a fact worth checking where a real frame is drawn rather than only in a
+suite. It also shows the limit in the demo's own numbers: 81% of the boot's rays miss and only 21.7% are
+proved empty, because a 2.1-unit sphere around a scene fills a camera that close - the same saturation
+`cull_probe` measures on the line arrangement, arriving by accident in the shipped scene. Older CI runs
+quoted above print the shorter line; the shape changed, the counts did not.
+
 The counts repeated identically run to run; the wall times did not (the 320×240 grid measured 53 ms and
 86 ms in the same session on the same binary). That is the whole reason this section reports evaluations
 and `crates/render/tests/raster.rs` pins coverage against the analytic projection -
