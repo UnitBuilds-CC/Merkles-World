@@ -560,12 +560,12 @@ writer it is append order. There is a mechanical reason too: with no allocator, 
 sort available is unstable, so ties are not preserved by construction. Making the caller supply the
 same `u32` the commit path stamps as `append` turns `(voxel, rank)` into a tie-free total order, so
 the result is deterministic *because* it is ordered, not because a sort happened to behave.
-[`compact::assign_ranks`] builds those ranks from a plain record slice for callers who are using
+`ledger::compact::assign_ranks` builds those ranks from a plain record slice for callers who are using
 append order, so the common path needs none of this reasoning.
 
-**The measured surprise:** compaction does **not** make the Merkle pass cheaper. On the fixture the
-tests use — 72 records over 36 distinct voxels, i.e. every cell written twice — the compacted set is
-exactly half the records and the same **79 digests**, root to root:
+**The measured surprise, and its correction:** compaction does **not** make the *hashing* cheaper. On
+the fixture the tests use — 72 records over 36 distinct voxels, i.e. every cell written twice — the
+compacted set is exactly half the records and the same **79 digests**, root to root:
 
 ```
 records 72 -> live 36; digests 79 -> 79; roots equal
@@ -573,16 +573,39 @@ records 72 -> live 36; digests 79 -> 79; roots equal
 
 Duplicates already collapse at the leaf for free: one cell, one leaf hash, the winner picked by
 comparison. That is the same discovery spike S2 made when it deleted the 46 ms `O(N²)` resolution
-pre-pass and moved last-write-wins into the walk. So the lever is **storage and capacity, not
-hashing**: half the records to keep in an arena, and half the leaf scratch a commit needs — which is
-[SPEC-06](13-risks-open-questions.md)'s question, and the test shows the refusal in both directions:
-scratch sized for the compacted region rejects the uncompacted one rather than committing to a
-partial region.
+pre-pass and moved last-write-wins into the walk. The first reading of that result — "so compaction is
+not a lever on the Merkle pass" — was too strong, and `cargo run --release --example compaction_ratio
+-p ledger` is what caught it. 2,048 distinct voxels written 1, 2, 4 and 16 times each, in both of S2's
+arrangements:
 
-**What this does *not* do:** it does not move gate P1.3. [OQ-49](13-risks-open-questions.md) lists
-compaction frequency as one of four candidate levers; on this evidence that option is empty, because
-frequency changes how often the pass runs, not what one pass costs, and the pass cost is unchanged
-per edit. The remaining candidates are the target, the per-epoch budget, and the gate's scope.
+| arrangement | writes per voxel | records → live | digests (before = after) | pass time before → after |
+|---|---|---|---|---|
+| scattered | 1 | 2,048 → 2,048 | 18,489 | 13.9 ms → 15.5 ms (noise) |
+| scattered | 4 | 8,192 → 2,048 | 18,489 | 15.1 ms → 13.2 ms |
+| scattered | 16 | 32,768 → 2,048 | 18,489 | 20.7 ms → 13.2 ms (≈1.6×) |
+| clustered | 16 | 32,768 → 2,048 | 4,096 | 5.0 ms → 1.8 ms (≈2.7×) |
+
+The digest count is *identical in every row* — hashing is priced by **distinct voxels**, never by
+records, which is the sense in which `12N` was always a bound on leaves — while the wall time is not,
+because the walk partitions its leaf slice at each of the twelve levels and partitioning is per entry.
+So compaction removes the record-count term and leaves the distinct-voxel floor: ≈1.6× on a heavily
+duplicated scattered region, ≈2.7× clustered, and nothing at all at one or two writes per voxel.
+Timings are this host's own (they drift more than the ratios suggest between runs); the digest counts
+are integers and CI runs the same probe on three architectures.
+
+**What compaction unconditionally buys** is capacity, which is the larger and more reliable result: 16×
+fewer records in the arena (256 KiB back to 16 KiB at the table's largest row), 16× fewer leaf scratch
+entries for a commit to hold, a feed 16× shorter, same root. The refusal is tested in both directions —
+scratch sized for the compacted region rejects the uncompacted set rather than committing to a partial
+region.
+
+**What this does *not* do:** it does not rescue gate P1.3. [OQ-49](13-risks-open-questions.md) lists
+compaction frequency as one of four candidate levers, and for the workload the gate was actually quoted
+at — a full dirty slab of *distinct* scattered edits, where `live == records` and the transform is the
+identity — that option is empty: the pass there costs the floor and compaction has nothing to remove.
+Where duplication is high it is a partial time lever, but the floor it exposes (18,489 digests for
+2,048 scattered voxels) is still ~13 ms, two orders of magnitude from `< 1 ms`. The live candidates
+remain the target, the per-epoch budget, and the gate's scope.
 
 ## The commit pipeline
 

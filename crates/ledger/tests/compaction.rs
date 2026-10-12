@@ -223,10 +223,13 @@ fn compaction_shrinks_the_records_without_shrinking_the_digest_work_and_that_is_
     // by comparison - which is exactly the fix spike S2 made when it moved last-write-wins out of a 46 ms
     // pre-pass and into the walk.
     //
-    // So compaction is not a lever on the Merkle pass. It is a lever on storage and on capacity: half the
+    // So compaction is not a lever on the *hashing*. It is a lever on storage and on capacity: half the
     // records to keep in an arena, half the scratch a commit needs (SPEC-06's question), and the same
-    // root. That distinction is load-bearing for OQ-49, which asks whether compaction frequency could be
-    // the thing that moves gate P1.3 - on this evidence, it cannot.
+    // root. `examples/compaction_ratio.rs` later found the qualification — the same digest count does
+    // cost less wall time once duplication is high, because the walk partitions per entry rather than
+    // per digest — but not at this fixture's scale, and not at all for the distinct-edit workload gate
+    // P1.3 was quoted at. That distinction is load-bearing for OQ-49, which asks whether compaction
+    // frequency could be the thing that moves gate P1.3; on the case the gate names, it cannot.
     let ladder = EmptyLadder::compute();
     let records = dirty();
     let (root_before, digests_before) = counted(&records, &ladder);

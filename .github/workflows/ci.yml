@@ -100,6 +100,12 @@ jobs:
       - name: Re-entry cost of a cold region (informational)
         run: cargo run --release --example re_entry_cost -p ledger
 
+      # OQ-49's fourth candidate, measured at S2's scale. The example asserts root equality and digest-count
+      # equality on every row, so what repeats across these runners is hashed state, not a timing; the
+      # milliseconds it prints are the runner's own and are never compared.
+      - name: Compaction ratio at slab scale (informational)
+        run: cargo run --release --example compaction_ratio -p ledger
+
       # Spike S1's CPU half: evaluations per ray on a four-node scene. Informational for the same
       # reason as S2's numbers - a runner cannot measure a GPU frame budget, so nothing here gates.
       - name: Spike S1 march steps (informational)
