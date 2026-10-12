@@ -136,6 +136,12 @@ impl Interpreter {
         })
     }
 
+    /// Which adapter this ran on, so a deviation can be attributed to a vendor rather than to
+    /// "the CI".
+    pub fn adapter(&self) -> &str {
+        &self.adapter
+    }
+
     /// Evaluate `tree` at `points` on the device and compare with the reference.
     pub fn compare_with_reference(
         &self,

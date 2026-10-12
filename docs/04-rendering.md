@@ -147,12 +147,33 @@ constraint on the real renderer, not on a test. And a storage buffer cannot be m
 results are copied into a `COPY_DST | MAP_READ` staging buffer before the CPU can look at them;
 reading back is a two-buffer operation on every path that wants to check itself.
 
-What is still missing here, stated so the agreement above is not over-read: the shader implements
-sphere, rounded box, plane, union, smooth union, subtract and intersect — seven of A-07's fifteen
-kinds, and the CPU reference's other six (cylinder, torus, repeat, mirror, twist, bend) have no WGSL
-counterpart yet, while `Noise` is refused on both sides. There is no GPU march, no BVH and no
-culling, so gate R1 and R2 are untouched by any of this, and none of these distances is hashed —
-presentation agreeing with presentation is a contract check, not gate P1.5 or R4 evidence (ADR-017).
+One scene is a demo, so the check became a gate: `examples/agreement.rs` builds **one tree per
+implemented kind** — five leaves, four binaries, four space-folding unaries — and compares 729 fixed
+sample points for each. A single union-of-three exercises three arms and hides ten, and the arms that
+hide are the ones worth checking: the unaries fold space, so they need their own point per stack frame
+in a walker that has no recursion.
+
+| Kind | Max deviation, GPU vs CPU |
+|---|---|
+| sphere, rounded box, cylinder, torus, plane | 0.000000 |
+| union, smooth union, subtract, intersect | 0.000000 |
+| repeat, mirror, bend | 0.000000 |
+| **twist** | **0.000001** |
+
+Twelve of thirteen agree to the last bit, and the thirteenth is the interesting one: `twist` is the
+only arm that calls `sin`/`cos`, and it is the only arm with any deviation at all — 1e-6 world units,
+the GPU's transcendental and libm's disagreeing by about a millionth. That is docs/02's float
+discipline measured rather than asserted: a transcendental is fine in the renderer precisely because a
+root never sees it, and the same property is why this comparison needs a tolerance instead of an
+`==`. The other twelve agreeing exactly is the same fact pointing the other way — add, multiply and
+`sqrt` are IEEE-determined, so a march's step counts can be and are reproducible across machines.
+
+What is still missing, stated so none of the above is over-read: the shader covers thirteen kinds —
+the whole implemented set — but `Noise` is refused on both sides (it needs docs/02's lattice hash and
+OQ-45's payload meaning) and a material node has no WGSL arm, which is A-07's shape/material split
+holding rather than a gap in it. There is no GPU march, no BVH and no culling, so gates R1 and R2 are
+untouched by any of this, and none of these distances is hashed: presentation agreeing with
+presentation is a contract check, not gate P1.5 or R4 evidence (ADR-017).
 
 ### The raster probe: the first frame-cost shape, on a CPU (2026-10-12)
 
