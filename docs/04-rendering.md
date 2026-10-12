@@ -158,11 +158,18 @@ spheres spread along x:
 because a step is a property of the field along the ray, not of the tree: a bigger union makes each step
 *more expensive*, not the march *longer*. So the frame law is `steps x nodes`, and the two levers a
 compile-time budget can bind are the step budget and the node count. That is the measured reason
-`MAX_TREE_DEPTH` exists rather than being a tidy number, and the shape AS5 would enforce. The marginal cost
-settles near 1.6 ns per extra node per step on this machine - but treat the nanoseconds as the noisy half:
-the same binary measured the one-node grid at 1.9 ms and at 3.5 ms on different runs, a 2x spread, while the
-step counts repeated exactly every run. A budget written in node-steps is portable; one written in
-milliseconds is a claim about a laptop.
+`MAX_TREE_DEPTH` exists rather than being a tidy number, and the shape AS5 would enforce. The marginal cost came out near
+1.6 ns per extra node per step on the laptop that ran it first - and then the sweep went into CI, where it
+proved the part that matters. Run `38254332031` prints **659,801 steps** for the one-node tree and
+**627,890** for the 31-node tree on x86-64 Linux, x86-64 Windows and ARM64 macOS alike, digit for digit on
+three machines: **the step count is a property of the field along the ray, not of the tree and not of the
+hardware.** The timings moved as expected between machines instead - the one-node grid took 1.04-1.07 ms on
+the runners against 1.9-3.5 ms on the laptop, and `ns per node-step` at 31 nodes ranged 0.43 to 0.78.
+
+So the practical conclusion for a compile-time budget (AS5) is: **bind node-steps, not milliseconds.**
+`cost = steps x nodes` is portable across the architectures this project promises; the per-node constant
+is not, varying by about 2x between the very runners that agree exactly on the work. A budget quoted in
+nanoseconds would be a claim about a machine, and this project ships to several.
 
 The boot prints the same shape at a smaller scale, and a sparser frame makes the point harder: its
 64x48 grid reports 590 of 3,072 rays finding surface, and the 2,482 that missed are charged 238,272 of
