@@ -281,12 +281,22 @@ if (evidence) {
         continue;
       }
       const stale = past.value.slice(0, 16);
-      for (const [f, t] of text) {
-        t.split(/\r?\n/).forEach((line, i) => {
-          if (!line.includes(stale)) return;
-          if (line.includes(prefix)) return;
-          fail(f, i + 1, `${name}: this line cites the superseded digest ${stale}… without the current ${prefix}… beside it`);
-        });
+      // Per *file*, not per line. The line rule was written to stop a doc dropping the live number while
+      // quoting a dead one, and it did - five times over, by appending "(current digest: …)" to every line
+      // that narrates history, until the prose was unreadable and the next supersession would have produced
+      // thirty-odd findings that anyone would be tempted to switch off. A file that cites a recorded value
+      // at all must (a) contain the live value somewhere in itself and (b) be declared in cited_in, which is
+      // the same protection at the granularity prose actually has: history is told once per file, not once
+      // per sentence. CI's half is untouched - it fails when the measured bytes differ from the manifest.
+      for (const [file, body] of text) {
+        if (!body.includes(stale)) continue;
+        if (!body.includes(prefix)) {
+          fail(file, 1, `${name}: this file cites the superseded digest ${stale}… but nowhere contains the current ${prefix}…`);
+        }
+        const relative = file.slice(repoRoot.length + 1).split("\\").join("/");
+        if (!claim.cited_in.includes(relative)) {
+          fail(file, 1, `${name}: this file cites a recorded evidence value but is not listed in the claim's cited_in (${claim.cited_in.join(", ")})`);
+        }
       }
     }
   }
