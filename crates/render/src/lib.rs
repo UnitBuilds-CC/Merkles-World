@@ -14,11 +14,15 @@
 //! informational by policy. That is the argument for `sqrt` and `hypot` appearing below without the
 //! ceremony they would need on the state side.
 //!
-//! Still owed in this workstream, named rather than implied: the FlatBuffer envelope that carries a
-//! tree (doc 09, A-07's unwritten half, so `assetc` has nothing to emit), the WGSL interpreter, and
-//! spike S6's headless shader check (OQ-41, which is additionally blocked on the export-lint decision
-//! recorded against OQ-41's own row). R1's frame budget cannot be measured here at all: steps per ray
-//! are not nanoseconds per frame on a GPU.
+//! Still owed in this workstream, named rather than implied: the WGSL interpreter, and spike S6's
+//! headless shader check (OQ-41, which is additionally blocked on the export-lint decision recorded
+//! against OQ-41's own row). R1's frame budget cannot be measured here at all: steps per ray are not
+//! nanoseconds per frame on a GPU. What landed since the first draft of this file: the envelope doc 09
+//! needed (`contracts/sdf.fbs`, written by and read back through `crates/assetc`), and
+//! [`raster`] - a CPU probe that turns a tree into a pixel grid, which is geometry evidence and not a
+//! frame.
+
+pub mod raster;
 
 use contracts::sdf::{
     NodeRecord, MAX_TREE_DEPTH, NODE_CYLINDER, NODE_INTERSECT, NODE_MIRROR, NODE_PLANE,

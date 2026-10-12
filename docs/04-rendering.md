@@ -113,6 +113,46 @@ Steps per ray on a CPU are not nanoseconds per frame on a GPU, and there is no W
 BVH, and no `assetc` to emit an asset yet - so those stay targets, and this file says so instead of
 quoting the reference implementation's speed as if it were the renderer's.
 
+### The raster probe: the first frame-cost shape, on a CPU (2026-10-12)
+
+`crates/render::raster` turns a tree into a pixel grid: a pinhole camera with an explicit image-plane
+half-height (so ray generation needs no trigonometry at all), one `march` per pixel, and colour from the
+surface normal. The colour is deliberately **not** a material model - `material_eval` and lighting are
+[OQ-10](13-risks-open-questions.md)'s open question, so inventing shading here would answer a question the
+project has not answered. `cargo run --release -p render --example raster_probe` prints the numbers and
+writes a PPM into the temp directory, so there is a picture to look at as well as counts to argue with.
+
+Measured on one machine, one 3-node tree (a ball on a ground plane), `surface = 1e-3`, 96-step budget,
+release profile:
+
+| Grid | Rays | Evaluations | Per pixel | Hit fraction |
+|------|------|-------------|-----------|--------------|
+| 96×72 | 6,912 | 314,554 | 45.5 | 67.0% |
+| 192×144 | 27,648 | 1,258,840 | 45.5 | 67.0% |
+| 320×240 | 76,800 | 3,495,846 | 45.5 | 67.0% |
+
+Two things in that table matter more than the milliseconds:
+
+- **Per-pixel cost is flat with resolution** - 45.5 evaluations at every grid size on a fixed tree, which
+  is the expectation a frame-cost model needs before it can extrapolate to 1080p (2.07M pixels × 45.5 is
+  the naive shape this doc's budget table has been deriving from guesses).
+- **The rays that find nothing pay most of the bill.** Hits average 20.6 steps; the 33.0% of rays that
+  miss are charged the full 96-step budget and account for **69.6% of all evaluations**. That is the
+  BVH's target stated as a measured share rather than as ADR-024's promise, and it is the number the
+  culling workstream has to move. The charge for a miss is an upper bound - `march` can also exit on
+  range - so the true share is somewhat lower and the direction of the argument is unaffected.
+
+The counts repeated identically run to run; the wall times did not (the 320×240 grid measured 53 ms and
+86 ms in the same session on the same binary). That is the whole reason this section reports evaluations
+and `crates/render/tests/raster.rs` pins coverage against the analytic projection -
+`tan(asin(r / d))` of a unit sphere at six units should cover about 368 of 4,096 pixels, and the test
+asserts it within 8% - instead of trusting a millisecond.
+
+**Still not claimed, in this section's own words: this is not R1.** No GPU, no WGSL interpreter, no BVH,
+no culling, no region streaming, and a normal-to-rgb colour that is geometry evidence rather than
+rendering. What landed is that the field can become an image inside this repository, with a measured cost
+shape, so the renderer workstream now has an on-CPU anchor to beat rather than only arithmetic.
+
 ## Culling and the frame budget
 
 **Measured on the CPU first (`cargo run --release --example scene_steps -p render`),
