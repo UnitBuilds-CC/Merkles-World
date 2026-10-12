@@ -94,6 +94,12 @@ jobs:
       - name: Spike S2 pass budget sweep (informational)
         run: cargo run --release --example pass_budget -p ledger
 
+      # Gate P1.4's cost half, on the same reasoning as the two rows above: the digest counts repeat
+      # across runners and the milliseconds do not, so this is the number the pop-in decision argues
+      # about - never a pass/fail.
+      - name: Re-entry cost of a cold region (informational)
+        run: cargo run --release --example re_entry_cost -p ledger
+
       # Spike S1's CPU half: evaluations per ray on a four-node scene. Informational for the same
       # reason as S2's numbers - a runner cannot measure a GPU frame budget, so nothing here gates.
       - name: Spike S1 march steps (informational)

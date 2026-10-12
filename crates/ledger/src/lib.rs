@@ -32,6 +32,9 @@ pub mod repair;
 /// The read side: what a voxel commits to at the end of an epoch.
 pub mod read;
 
+/// Region residency: the `M_active` / `M_cold` LRU bookkeeping gate P1.4 rests on.
+pub mod tier;
+
 use contracts::coords::RegionKey;
 use contracts::delta::{DeltaRecord, EpochHeader, PAYLOAD_BITS};
 use contracts::errors::ROOT_BYTES;

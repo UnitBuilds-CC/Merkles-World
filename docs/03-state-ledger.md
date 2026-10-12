@@ -458,6 +458,48 @@ LRU eviction moves regions out of `M_active` as the player travels. Re-entering 
 **always** restores its edits — `M_cold` plus committed epochs make it reconstructible — but
 restoration must not stutter, which is the pop-in acceptance test in gate P1.4.
 
+**The bookkeeping exists (2026-10-12):** `crates/ledger::tier` is the directory that half of that
+paragraph assumed. It is `no_std` and allocation-free like the rest of the crate — a caller-supplied
+`[Slot]` slice plus a `hot_capacity`, no clock of its own (`store.tick()` is driven by the caller,
+because `TickId` is a consensus-relevant quantity and this module must not invent one). `admit` returns
+`Admission::{AlreadyHot, Restored, Evicted { evicted }, NoRoom}`, and the distinction it exists to
+make is the one the table above implies: **cold is reachability, not loss.** `edits_of` answers for a
+demoted region exactly as it does for a hot one, and the only case that is genuinely a failed restore
+is a region the directory never knew — which `re_enter` reports as `None` rather than as an empty
+range, because "nobody edited here" and "I could not find it" must not look the same to a player.
+`tests/residency.rs` pins all of it by **root equality**: the property tested is not that the same
+records come back in some order but that the region re-roots to the digest it had before eviction,
+since that digest is what a peer compares and what a save replays against. Eviction ties break to the
+lower cell index, so a replayed walk evicts the same regions twice.
+
+**And the cost half says something the policy above does not (2026-10-12).** `cargo run --release
+--example re_entry_cost -p ledger` prices re-entry as the operation the paragraph describes: for a
+full 64 KB slab's worth of scattered edits it computes **68,524 digests** — spike S2's own count for
+the same edit total, through the same counted entry point — at **716–747 ns per digest**, i.e. S2's
+rate, so the directory lookup and the arena copy are noise and re-entry is *the hashing pass moved to
+a different moment*: triggered by the player walking back instead of by the epoch closing. About
+**49 ms** for **one** region on that machine, close to three 16.7 ms frames.
+
+That reframes P1.4. A camera does not re-enter one region, it re-enters the ring around it, so a
+recompute-on-re-entry costs that number times the interaction radius — and no choice of radius fixes
+a per-region cost that already exceeds the frame. Two consequences, neither of which this section
+will decide silently:
+
+- The cheap restore is the one that **does not re-root**: if `M_cold` stored each region's root
+  alongside its records, re-entry would be a copy and a lookup, and the pop-in test would be about
+  bandwidth instead of hash rate. The table above does not say whether cold rows carry roots, and
+  storing them is redundant state a compaction can invalidate — so it needs a sentence and an
+  invalidation rule, not an assumption. This is [OQ-49](13-risks-open-questions.md)'s "which lever
+  moves" question reached from the read side rather than the commit side.
+- Splitting a large restore into several small ones **does not help**: the measured `ns per digest`
+  is flat across region sizes (8 to 8,192 edits), while `ns per edit` only falls because a wider tree
+  shares upper paths — 11.4 digests per edit at the top of the table against 8.4 at the bottom, i.e.
+  94% then 69% of the `12N` bound. Per-edit time is a function of *arrangement*, exactly as S2
+  concluded, and a scheduler that batches re-entries by region will not find work to shave.
+
+The pop-in half of P1.4 stays open for the reason it has been open all along: "visible" is a
+frame-time word and there is no renderer yet — see doc 11's Phase 1 exit table.
+
 ## Compaction (the sleep path)
 
 ```
