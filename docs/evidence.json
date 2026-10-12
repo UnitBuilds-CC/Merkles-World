@@ -3,10 +3,10 @@
   "_updated": "2026-10-12",
   "claims": {
     "boot_output_sha256": {
-      "value": "c5ca867b681e89712cb8de31fba5f4b1ca9a97d82f0f8bbed93faaf0b99ba470",
+      "value": "c6c4ec046bec12607e6693238957f49fe3cd34fa17366bd27ce4b3ffebf0f8f8",
       "what": "SHA-256 of the whole fourteen-line output of `cargo run -p engine`, which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
-      "first_measured_at": "38317810944",
+      "first_measured_at": "pending its own green run (the previous value was measured by 38317810944)",
       "superseded": [
         {
           "value": "15c1e8af1b523d7382f705a6ffe6a19e7d3ef4dbfc4c585fd4ead8931c139cf3",
@@ -19,13 +19,17 @@
         {
           "value": "d80711e5fbdff94bfab194c454c7bee79af02a42a0d1877c91a0bbd21ad84cd0",
           "why": "the boot marches its grid a third way, through the bound hierarchy, and prints the descent's counts next to the scene cull's plus the scene's own licence bit. The demo's scene blends at its root, so the descent is refused there and both culled paths report the same 179072 evaluations and 666 of 3072 rays - the added clause is a measured refusal, not a new number. No hashed value moved."
+        },
+        {
+          "value": "c5ca867b681e89712cb8de31fba5f4b1ca9a97d82f0f8bbed93faaf0b99ba470",
+          "why": "the smooth-union licence was granted on derivation and measurement, so the boot's raster line prints `root licence granted` where it printed `refused`. The two culled counts are identical (179072 evaluations, 666 of 3072 rays proved empty) - the grant changes what a parent union may skip below a blend, not this scene's skipping. No hashed value moved."
         }
       ],
       "cited_in": [
         "docs/11-roadmap.md",
         "docs/04-rendering.md"
       ],
-      "_note_value_change": "measured by 38317810944 (green on all ten definitions: native, the V8 shim, Chromium x3 and Safari/JSC all print this digest)"
+      "_note_value_change": "printed by the boot on this trunk"
     }
   }
 }

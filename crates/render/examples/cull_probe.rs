@@ -338,12 +338,21 @@ fn main() {
     println!("//   the same licence bit. Nothing was broken getting there: the blended frames still match");
     println!("//   the unculled render byte for byte, which is what makes the number a cost rather than a");
     println!("//   bug.");
-    println!("// - why: a skip needs field >= distance to the node's own bound, and smin returns below min");
-    println!("//   by up to k/4, so a blend poisons its parent for as far up as it reaches - one blended");
-    println!("//   branch at the root is enough, which is exactly what the boot's own five-node scene is.");
-    println!("//   Whether the grown-by-k enclosure satisfies the inequality anyway is OQ-54: a proof hands");
-    println!("//   most of this back and a guess deletes geometry, so the row is published as a cost, not");
-    println!("//   as a TODO.");
+    println!("// - the reason is NOT the skip licence, and correcting that is this run's finding. A blend's");
+    println!("//   grown-by-k enclosure does satisfy field >= distance-to-bound with 3k/4 to spare - the");
+    println!(
+        "//   margin measures at exactly +k on a lattice and dense sweeps, and the licence has"
+    );
+    println!("//   therefore been granted. These rows do not move, because a smooth union's zero set lies");
+    println!("//   BETWEEN its children, outside both child spheres, so no descent may decompose a blend:");
+    println!("//   the grown cover sphere is the tightest statement a blend can make, and in an all-blend");
+    println!("//   tree there is no plain-union arm above the blends to take the per-step skip either. The");
+    println!(
+        "//   lever that would pay is a k-aware arm inside the smooth-union evaluator itself (smin"
+    );
+    println!(
+        "//   equals min whenever |b - a| >= k), which is OQ-54's remaining half, not this line."
+    );
     println!(
         "// - `evals plain` and `rays skipped` are the step-level story. One tight bound proves"
     );

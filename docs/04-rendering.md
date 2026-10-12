@@ -1,4 +1,4 @@
-# 04 — Rendering
+# 04 — Rendering (current boot digest: `c6c4ec046bec1260…`)
 
 **Status:** design locked; feasibility unproven (spikes S1, S9).
 **Depends on:** docs 02, 03. **Implements:** ADR-011, 012, 024.
@@ -193,8 +193,8 @@ proved empty, because a 2.1-unit sphere around a scene fills a camera that close
 quoted above print `178880 … 668 of 3072`: two rays moved back across the line when a skip began testing
 the bound grown by the marcher's hit tolerance (see the third-layer section below), and they are the boot's
 own grazing cases. The shape of the line is unchanged, the numbers in it are measured, and the whole
-fourteen-line output hashes to `c5ca867b681e897…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`)
-`8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`)
+fourteen-line output hashes to `c5ca867b681e897…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current boot digest: `c6c4ec046bec1260…`)
+`8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`) (current boot digest: `c6c4ec046bec1260…`)
 value), which both the docs gate and CI check rather than believe.
 
 The counts repeated identically run to run; the wall times did not (the 320×240 grid measured 53 ms and
@@ -311,15 +311,27 @@ Whether the licence is *too* conservative is [OQ-53](13-risks-open-questions.md)
 **OQ-54**: a smooth union's enclosure is grown by `k`, while the dip `smin` can produce is bounded by
 `k/4`, which suggests the grown bound may satisfy `field >= distance to bound` after all. The reasoning is
 sketched and deliberately not acted on - the failure mode of being wrong is deleted geometry, and the
-current refusal is what the tests assert. The lattice question has now been measured
+current refusal is what the tests assert. The lattice question was measured, then derived, then acted on:
 (`tests/cull.rs::the_smooth_union_licence_is_measured_and_not_yet_relaxed`): four scenes on a 41-cubed grid
 at 0.25 spacing plus dense 0.005 sweeps along the blend axis and both waist lines, and every blended scene
 keeps `field >= distance to its grown enclosure` with a margin of **exactly +k** at the worst sample, zero
-violations bigger than the render tolerance and zero hit-band points outside the bound. The licensed plain
-union, by contrast, reaches -0.000000 at the far corner - its own bound is tight to `f32` rounding - which is
+violations bigger than the render tolerance and zero hit-band points outside the bound - the growth pays for
+the dip with `3k/4` to spare, and the licence bit has been **granted** (`first_ok && second_ok`), which is
+sound by derivation and not merely by sampling: outside the grown sphere
+`field >= min(a,b) - k/4 >= D_cover - k/4 = D_grown + 3k/4`. The licensed plain union, by contrast, reaches
+-0.000000 at the far corner - its own bound is tight to `f32` rounding - which is
 why the test measures violations relative to `surface` rather than against zero. Evidence, still not a
 proof: a lattice cannot speak for every point in space, so OQ-54 stays open and the refusal stays in place
-until the inequality is derived from the `smin` formula actually implemented.
+the inequality is now derived, and **the 443x did not move - which is the claim this section got wrong and
+now retracts**. Granting the licence makes a blend prunable by a plain union above it (the boot's own shape);
+it does nothing to the blended rows, because a smooth union's zero set lies *between* its children - outside
+both child spheres - so no descent and no skip may decompose a blend, and in an all-blend tree there is no
+plain-union arm above the blends to take the per-step skip either. The grown cover sphere is the tightest
+statement a blend can make. Where the saving actually lives is a **k-aware arm in the smooth-union
+evaluator**: `smin(a,b,k)` equals `min(a,b)` whenever the two children are at least `k` apart, so a second
+child whose licensed bound reaches `a + k` cannot change the result and may be skipped - provable from the
+same formula, checkable with the same frame-equality belt. That is
+[OQ-54](13-risks-open-questions.md)'s remaining half.
 
 ### The third layer: a descent through the bounds, and the tolerance bug it found (2026-10-12)
 

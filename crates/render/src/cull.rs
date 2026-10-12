@@ -175,7 +175,38 @@ fn collect(tree: &Tree, pruning: bool) -> SceneBounds {
             // smin returns *less* than min - by up to k/4 - so the field can dip below the distance to
             // its own bound, which is exactly the inequality a skip needs. It is therefore not a node this
             // pass may prune below, whatever its enclosure says about coverage.
-            NODE_SMOOTH_UNION => (first_enc.cover(second_enc).grown(params[0]), false),
+            // The refusal this arm used to carry was over-cautious, and the derivation is short enough to
+            // write down rather than sample: outside the *grown* sphere the bound reads
+            // `D_grown = D_cover - k`, while the field reads `smin >= min(a,b) - k/4`, and each respecting
+            // child contributes `a >= D_first`, `b >= D_second` with `min(D_first, D_second) >= D_cover`
+            // because a cover sphere contains both children. So `field >= D_grown + 3k/4` outside the grown
+            // sphere - the dip is `k/4` and the growth spends `k`, which is why the growth is what licenses
+            // the arm. Inside it the bound is zero and behaves like any other node's: the skip compares the
+            // bound against the sibling's already-evaluated value and only fires when that bound is at
+            // least as far, so a zero can never outrank a positive field, and where the sibling is itself
+            // non-positive the march clamps the step to `surface` either way.
+            // What the grant does NOT buy, measured in the same run (cull_probe's blend rows are unchanged:
+            // 59.7% / 0.0% of rays proved empty and 0.0% node work avoided). The only skip site in this
+            // evaluator is the plain-union arm, and in a scene whose branches are all blends there is no
+            // plain union above them to take it. Nor may a descent continue *through* a blend into its
+            // children: a smooth union's zero set lies between them, outside both child spheres, so the
+            // grown cover sphere is the tightest claim a blend can make. The lever that would actually pay
+            // is a k-aware arm in the smooth-union evaluator - smin equals min whenever |b - a| >= k, so a
+            // second child bounded at a + k or beyond cannot change the answer. That is a separate change
+            // with its own test, and OQ-54's remaining half; this line is a precondition, not the saving.
+            // What the grant does NOT buy, measured in the same run (cull_probe's blend rows are unchanged:
+            // 59.7% / 0.0% of rays proved empty and 0.0% node work avoided). The only skip site in this
+            // evaluator is the plain-union arm, and in a scene whose branches are all blends there is no
+            // plain union above them to take it. Nor may a descent continue *through* a blend into its
+            // children: a smooth union's zero set lies between them, outside both child spheres, so the
+            // grown cover sphere is the tightest claim a blend can make. The lever that would actually pay
+            // is a k-aware arm in the smooth-union evaluator - smin equals min whenever |b - a| >= k, so a
+            // second child bounded at a + k or beyond cannot change the answer. That is a separate change
+            // with its own test, and OQ-54's remaining half; this line is a precondition, not the saving.
+            NODE_SMOOTH_UNION => (
+                first_enc.cover(second_enc).grown(params[0]),
+                first_ok && second_ok,
+            ),
             // Both combinators take a `max` that contains the first operand's distance, so the field is
             // at least the first child's, which bounds the whole node by induction.
             NODE_SUBTRACT | NODE_INTERSECT => (first_enc, first_ok),

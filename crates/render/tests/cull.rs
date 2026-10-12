@@ -332,36 +332,77 @@ fn the_two_bound_forms_agree_and_the_hierarchy_leaves_the_frame_untouched() {
 }
 
 #[test]
-fn a_smooth_union_is_the_one_combinator_that_may_not_be_skipped() {
-    // The bound rule a skip needs is not "the sphere covers the surface" but "the field is at least the
-    // distance to the sphere". A `min` keeps that; `smin` deliberately returns *less* than `min`, by up to
-    // k/4, so a node below a smooth union cannot be skipped however far its sphere is. This test pins the
-    // refusal on the tree where it matters, because the wrong answer here is a missing surface.
+fn a_smooth_union_is_prunable_only_because_its_bound_is_grown_by_k() {
+    // The bound rule a skip needs is not "the sphere covers the surface" but "outside the sphere, the field
+    // is at least the distance to it". A `min` keeps that; `smin` returns less than `min` by up to `k/4`.
+    // The arm is licensable anyway because the sphere the table stores for a blend is grown by `k`, which
+    // pays for the dip with `3k/4` to spare - see the derivation in `collect`. What still is *not* licensable
+    // is a blend sitting on a child that does not respect its own bound: the growth is on the outer sphere
+    // and cannot repair an inner one.
     let blended = smooth_union(0.4, 2.0);
     let bounds = scene_bounds(&blended);
     assert!(
-        !bounds.respects(ROOT as usize),
-        "a smooth union's root must not offer skips"
+        bounds.respects(ROOT as usize),
+        "a blend of two respecting children is licensed by its own k-growth"
     );
     assert!(
         bounds.respects(1),
-        "the sphere leaf below it is still a true distance"
+        "the sphere leaf below it is still exact"
+    );
+
+    let blend_over_plane = Tree {
+        nodes: vec![
+            node(NODE_SMOOTH_UNION, 2, 3, 0, 1, true),
+            node(NODE_SPHERE, 0, 1, 1, 4, false),
+            node(NODE_PLANE, 0, 1, 5, 4, false),
+        ],
+        params: vec![
+            0.5, //
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0,
+        ],
+    };
+    validate(&blend_over_plane).expect("a blend over a plane is a legal tree");
+    let mixed = scene_bounds(&blend_over_plane);
+    assert!(
+        !mixed.respects(ROOT as usize),
+        "a blend cannot out-license a child that refuses its own bound"
+    );
+    assert_eq!(
+        mixed.enclosure_of(ROOT as usize),
+        Enclosure::Unbounded,
+        "and the refusal is also the bound's own: a plane has no sphere to grow"
     );
 
     let hard = union(2.0);
-    let hard_bounds = scene_bounds(&hard);
     assert!(
-        hard_bounds.respects(ROOT as usize),
+        scene_bounds(&hard).respects(ROOT as usize),
         "the same pair under a plain union is prunable"
     );
 
-    // And the refusal is not cosmetic: the blended scene renders identically either way.
+    // The belt is the frame, not the argument: with the licence granted the descent and the per-step skip
+    // both fire on a blended scene, so this is the case where a wrong derivation would delete geometry.
     let camera = camera_at([0.0, 0.0, -6.0]);
-    let (plain, _) = render(&blended, &camera);
+    let (plain, plain_stats) = render(&blended, &camera);
+    let (culled, culled_stats) = render_culled(&blended, &camera);
     let (bnb, bnb_stats) = render_bnb(&blended, &camera);
-    assert_eq!(plain.pixels, bnb.pixels);
-    assert_eq!(plain.depth, bnb.depth);
+    assert_eq!(
+        plain.pixels, bnb.pixels,
+        "the blend's descent changed pixels"
+    );
+    assert_eq!(
+        plain.depth, bnb.depth,
+        "the blend's descent moved a surface"
+    );
+    assert_eq!(plain.pixels, culled.pixels);
+    assert_eq!(plain_stats.hits, bnb_stats.hits);
     assert!(bnb_stats.hits > 0, "the blend should still be visible");
+    assert!(
+        bnb_stats.skipped >= culled_stats.skipped,
+        "the licensed descent may prove more rays empty, never fewer: {} vs {}",
+        bnb_stats.skipped,
+        culled_stats.skipped
+    );
 }
 
 #[test]
@@ -538,9 +579,11 @@ fn the_descent_adds_rejections_where_children_are_licensed_and_none_where_they_a
     let blended = smooth_union(0.4, 2.0);
     let (_, blended_root) = render_culled(&blended, &camera);
     let (blended_frame, blended_descent) = render_bnb(&blended, &camera);
-    assert_eq!(
-        blended_descent.skipped, blended_root.skipped,
-        "a smooth union may not be descended into"
+    assert!(
+        blended_descent.skipped >= blended_root.skipped,
+        "a licensed blend may prove more rays empty than its cover sphere, never fewer: {} vs {}",
+        blended_descent.skipped,
+        blended_root.skipped
     );
     let (plain_blend, _) = render(&blended, &camera);
     assert_eq!(plain_blend.pixels, blended_frame.pixels);
@@ -590,7 +633,7 @@ fn union_over_blend(k: f32) -> Tree {
 }
 
 #[test]
-fn the_smooth_union_licence_is_measured_and_not_yet_relaxed() {
+fn the_smooth_union_bound_holds_the_field_with_k_to_spare() {
     // `respects[node]` is the precondition a skip - per ray or per step - reads, and it is withheld from
     // every smooth union because `smin` returns below `min` by up to `k/4`. cull_probe priced what that
     // costs (a 128-sphere scene written with blended branches loses the hierarchy outright: 648 evaluations
@@ -602,10 +645,10 @@ fn the_smooth_union_licence_is_measured_and_not_yet_relaxed() {
     // ignored - and a non-negative one is evidence, still not proof, that the licence could be relaxed.
     let surface = 1e-3f32;
     for (label, tree, expect_respected) in [
-        ("blend k 0.4, offset 2.0", smooth_union(0.4, 2.0), false),
-        ("blend k 1.5, offset 3.0", smooth_union(1.5, 3.0), false),
+        ("blend k 0.4, offset 2.0", smooth_union(0.4, 2.0), true),
+        ("blend k 1.5, offset 3.0", smooth_union(1.5, 3.0), true),
         ("plain union, offset 3.0", union(3.0), true),
-        ("union over blend k 0.5", union_over_blend(0.5), false),
+        ("union over blend k 0.5", union_over_blend(0.5), true),
     ] {
         validate(&tree).unwrap_or_else(|error| panic!("{label} must validate: {error:?}"));
         let bounds = scene_bounds(&tree);
