@@ -14,6 +14,9 @@
 //!    scene clause describes an asset rather than a tree this binary built in memory. It is still a CPU
 //!    evaluation, and the line that prints it says so.
 //!
+//! Usage: `engine` compiles its own scene and loads those bytes back; `engine <asset.bin>` boots from
+//! a file an `assetc` run wrote, which is the shape doc 09's dev profile ends in.
+//!
 //! What is NOT here, because docs/11's gate table says so and a demo must not quietly disagree with
 //! its own status page: no GPU, no window, no culling, no BVH, no macro simulation, no compaction, no
 //! mod loading. The first clause of the pitch demo is now true in the narrow sense that something
@@ -143,14 +146,23 @@ fn main() {
     assert_eq!(never, Committed::Unedited);
 
     // ---- 5. the scene half: marched, not drawn ----
-    let (t, steps) = scene_probe();
-    // The same ray marched through the hand-assembled tree must land in the same place: this is the
-    // seam where assetc's records meet render's reader, and neither crate's own suite can see it.
-    let hand = scene_t_probe(&scene_tree_by_hand());
-    assert!(
-        (hand.0 - t).abs() < 1e-6 && hand.1 == steps,
-        "lowered and hand-assembled scenes must be one surface: {t}/{steps} vs {hand:?}"
-    );
+    // `engine [asset.bin]` boots from a file the compiler wrote; with no argument it compiles its own
+    // scene and loads those bytes back, which keeps the default demo self-contained.
+    let asset_path = std::env::args().nth(1);
+    let tree = match &asset_path {
+        Some(path) => scene_from_disk(path),
+        None => scene_tree(),
+    };
+    let (t, steps) = scene_t_probe(&tree);
+    if asset_path.is_none() {
+        // The same ray marched through the hand-assembled tree must land in the same place: this is
+        // the seam where assetc's records meet render's reader, and neither crate's own suite sees it.
+        let hand = scene_t_probe(&scene_tree_by_hand());
+        assert!(
+            (hand.0 - t).abs() < 1e-6 && hand.1 == steps,
+            "lowered and hand-assembled scenes must be one surface: {t}/{steps} vs {hand:?}"
+        );
+    }
     println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU, no culling)");
 
     // ---- 6. the commit's cheap half: recycling the slab ----
@@ -247,9 +259,34 @@ fn scene_tree_by_hand() -> render::Tree {
     tree
 }
 
-fn scene_probe() -> (f32, u32) {
-    let lowered = scene_tree();
-    scene_t_probe(&lowered)
+/// Boot from an asset file on disk, which is the path docs/09's whole argument is about: the compiler
+/// ran on save, the runtime reads bytes.
+///
+/// Reading a file here does not breach the hot-path bans (AGENTS.md section 3) - a boot-time read is
+/// not a per-frame parse, and there is nothing to parse beyond one header walk: root offset, `MLWS`
+/// identifier, vtable. What the file *cannot* do is make the engine evaluate a shape it was not given,
+/// because the same `render::validate` gate the in-memory path passes sits between the bytes and the
+/// march.
+fn scene_from_disk(path: &str) -> render::Tree {
+    let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{path}: cannot read: {error}"));
+    let loaded = assetc::reader::from_bytes(&bytes)
+        .unwrap_or_else(|error| panic!("{path}: not a ShapeAsset this engine will run: {error:?}"));
+    let tree = render::Tree {
+        nodes: loaded.nodes,
+        params: loaded.params,
+    };
+    render::validate(&tree)
+        .unwrap_or_else(|error| panic!("{path}: refused by the validator: {error:?}"));
+    println!(
+        "scene source     : {} bytes read from {path} ({} nodes, {} parameters, depth {}, grammar version {}, stamped {:?})",
+        bytes.len(),
+        tree.nodes.len(),
+        tree.params.len(),
+        loaded.depth,
+        loaded.grammar_version,
+        loaded.label
+    );
+    tree
 }
 
 fn scene_t_probe(tree: &render::Tree) -> (f32, u32) {
