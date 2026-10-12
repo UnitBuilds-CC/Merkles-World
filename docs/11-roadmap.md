@@ -130,11 +130,26 @@ epoch pipeline, and `crates/memory` is A3's half: the slab that holds the record
   that does not exist: a `watch` mode that reruns the first when the file changes and hot-swaps the
   second's tree. `assetc` compiles RON to a loadable asset and refuses broken input; the engine loads
   whatever file it is pointed at.
-- **WASM execution** of the C2 vectors: CI compiles for `wasm32-unknown-unknown` but runs nothing
-  there, so C2 is gated on x86-64/ARM64 execution + WASM compilation, not on three executions.
-  Attempted 2026-10-12 and blocked by the workspace's own `unsafe_code = "forbid"`: an exported
-  symbol is an unsafe attribute to rustc, so the runner has to be `wit-bindgen` output, which needs
-  A-02. Recorded against [OQ-41](13-risks-open-questions.md) rather than worked around by hand.
+- **WASM execution: unblocked, and the block was a misreading.** CI now builds the whole engine as a
+  `wasm32-wasip1` command, runs it under a WASM engine, and diffs its output against the native
+  build's - identical, epoch root included.
+
+  What went wrong in the earlier reasoning: it assumed the only way to execute ledger code in WASM
+  was to *export* a function for a host to call, and exports do hit
+  `unsafe_code = "forbid"` (a hand-written `#[no_mangle]` is an unsafe attribute to rustc, and so is
+  what `wit-bindgen` generates). A WASI **command** never touches that: `_start` comes from the Rust
+  runtime, the repository writes no unsafe and no export, and the ban holds exactly as intended. So
+  the sentence "the runner has to be `wit-bindgen` output" was false, and it cost this gate a week
+  of being called blocked. The export-lint decision in [OQ-41](13-risks-open-questions.md) is still
+  real and still open - it governs *mods* calling into the ledger - it just was never what stood in
+  the way of running the roots in WASM.
+
+  What the parity check is and is not. It is a statement about hashed state, because the lines it
+  compares carry the epoch root, the region list and the slot table, computed inside a WASM engine by
+  the same `no_std` + BLAKE3 code and matching the host digit for digit. It is not spike S3's fourth
+  *device*: the runner is V8's WebAssembly on the CI machine, and M1-browser still means a browser on
+  an M1. Gate P1.5 moves from "three targets" to "three plus a WASM engine", which is the honest
+  description of the same fact.
 - **A-04, A-05 and A-06 have no file at all**, and of the seven that do, only **A-01 and A-10 are
   frozen**: A-02 (`ledger-api.wit`), A-03, A-07 (`sdf.rs` plus `sdf.fbs`), A-08 and A-09 are written and
   parse- or schema-checked but stay **DRAFT**, so the exit clause "every contract is frozen enough" is
@@ -187,7 +202,7 @@ exist is a renderer** - no GPU, no window, no BVH - **nor gate P1.5's fourth tar
 | P1.2 slab write throughput | **met on one machine** | `crates/memory/examples/slab_throughput.rs`: 57.2 M appends/sec, p99 200 ns, x86-64 Windows. The four named P1.5 devices have not run it |
 | P1.3 Merkle pass under 1 ms | **not met, decision pending - and the packet is now measured** | `merkle_pass`: 52 ms scattered and 7 ms clustered per full 64 KB slab, ~508 ns of each digest being BLAKE3 itself. `pass_budget` (S2 part three) maps where the line actually falls: between **128 and 512 edits per region per epoch** - 128 scattered 895 µs, 512 clustered 496 µs, 512 scattered 3.38 ms; batching across regions computes *more* digests (548,192 vs 483,285 for the same 65,536 edits - counts run `38251942742` prints identically on all three runners, while the timings around them disagree and even flip which case is faster on ARM64 macOS), so it is a parallelism lever, not a work lever; and 1 to 16 slot rows commit in 4.10-4.43 ms, so region count is not the cost driver. Which of target, budget, compaction frequency or scope moves is [OQ-49](13-risks-open-questions.md) |
 | P1.4 eviction and re-entry | **no code** | Nothing tiers or evicts; `TierRestoreIncomplete` exists in A-09 with no producer |
-| P1.5 roots identical on four targets | **three architectures, not four devices** | CI run `38232526797` prints `EPOCH_0 91b97a52…` and the six C2 vectors byte-identically on x86-64 Linux, x86-64 Windows, ARM64 macOS. A second axis, measured 2026-10-12 and re-measured after the asset load and the raster grid joined the loop: `cargo run -p engine` and `cargo run --release -p engine` print all thirteen lines byte-identical - epoch root, region list, slot table, the read-back, the 204-byte `ShapeAsset` the boot compiles, loads and marches, and the 64x48 grid marched from it - so the digest survives the two codegen profiles (different inlining and float handling paths, same result) - the cheapest cross-build determinism check available and the one a release-vs-debug regression would slip past. The browser half is blocked behind [OQ-41](13-risks-open-questions.md) and the export-lint decision in task 14 |
+| P1.5 roots identical on four targets | **three architectures, not four devices** | CI run `38232526797` prints `EPOCH_0 91b97a52…` and the six C2 vectors byte-identically on x86-64 Linux, x86-64 Windows, ARM64 macOS. A second axis, measured 2026-10-12 and re-measured after the asset load and the raster grid joined the loop: `cargo run -p engine` and `cargo run --release -p engine` print all thirteen lines byte-identical - epoch root, region list, slot table, the read-back, the 204-byte `ShapeAsset` the boot compiles, loads and marches, and the 64x48 grid marched from it - so the digest survives the two codegen profiles (different inlining and float handling paths, same result) - the cheapest cross-build determinism check available and the one a release-vs-debug regression would slip past. A WASM engine is now in the comparison - the engine builds for `wasm32-wasip1`, runs under Node's WASI in CI, and prints roots identical to the native build, with no export and no unsafe written by this repository - so what is left is the named hardware, not the runner: an actual browser on an M1, and the three devices spike S3 lists. The export-lint decision in task 14 still governs *mods calling in*, which is where it always belonged |
 | P1.6 divergent voxel detected | **detection met, repair deferred** | `crates/ledger/tests/bisection.rs`, including `divergence_and_root_equality_never_disagree`. Choosing a winner is [OQ-46](13-risks-open-questions.md), deferred with multiplayer by ADR-004 |
 | P1.7 persistence is readable | **proposed gate, tested** | `crates/ledger/tests/read_path.rs`. The frame-visibility half of [OQ-47](13-risks-open-questions.md) has no code, and the reason it cannot start yet is named: turning an edited voxel into geometry needs to know which world span the integer names, which no doc states - [OQ-50](13-risks-open-questions.md) |
 | A rendered procedural scene, R1, R2 | **pixels exist on a CPU; there is no renderer** | `crates/render::raster` turns a tree into a pixel grid (2026-10-12): 45.5 evaluations per pixel, flat across 96×72, 192×144 and 320×240 on one fixed tree, with the 33.0% of rays that find nothing paying **69.6%** of all evaluations - the culling target as a measured share rather than a derivation (docs/04 § The raster probe). Per-ray numbers still stand: `scene_steps` gives ~15 evaluations per hit ray and ~53 per ray. Still unmet: no GPU, no WGSL, no BVH, so neither R1's frame budget nor R2's edit loop has a number attached, and the colour is a normal map, not a material model (OQ-10) |
@@ -204,7 +219,7 @@ text for each stays in the doc named in the last column, and this table adds no 
 
 | Part | What it proves | Where it runs |
 |------|----------------|---------------|
-| C2 | identical hashes for the same `(seed, pos)` on x86-64 / ARM64 / WASM | doc 02, Phase 0 |
+| C2 | identical hashes for the same `(seed, pos)` on x86-64 / ARM64 / WASM | doc 02, Phase 0. The WASM column is now executed rather than only compiled: the engine built for `wasm32-wasip1` runs under a WASM engine in CI and its printed roots diff clean against the native build |
 | C3 | no precision jitter at `x = 10⁹` (Far Lands regression) | doc 02, Phase 0 |
 | C4 | camera-space error ≤ 1 f32 ulp at the declared render radius | doc 02, Phase 0 demo |
 | P1.5 | byte-identical epoch roots for one seed + transaction sequence on **N2600 / RTX 3060 / Linux-Mesa / M1-browser** | doc 03, produced by spike S3. **Partly evidenced 2026-10-12:** `crates/ledger`'s `EPOCH_0` is byte-identical across CI's three architectures (x86-64 Linux, x86-64 Windows, ARM64 macOS) at run `38181630859`, and the hasher compiles for `wasm32-unknown-unknown`. That is not this row yet: S3 names four specific machines, none of them a GitHub runner, and the browser half needs a WASM *runner* (OQ-41), not just a compile |
