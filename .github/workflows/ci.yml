@@ -156,6 +156,50 @@ jobs:
           echo "parity: $(wc -l < host.txt) lines identical, including:"
           grep -E 'epoch root|region list|slot table' wasm.txt
 
+  # Gate P1.5's WASM target, executed rather than compiled, on all three architectures - and the reason
+  # it is a separate job rather than a step in `wasm` is the point: the browser target spike S3 names is
+  # an *ARM* one, and a wasm32 module built and run only on x86-64 Linux proves less than the same module
+  # run under ARM64 V8. Node's WASI is the host here, not a browser, so this is a fourth kind of target
+  # rather than S3's fourth device; the distinction is recorded in docs/11 and docs/03, not hidden by a
+  # green tick.
+  wasm-execute:
+    name: roots executed in WASM on ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86-64 Linux
+            os: ubuntu-latest
+          - label: x86-64 Windows
+            os: windows-latest
+          - label: ARM64 macOS
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Architecture and Node version of this runner
+        run: |
+          uname -m
+          node --version
+      - name: Install the WASI target
+        run: rustup target add wasm32-wasip1
+      - name: Build the engine as a WASI command module
+        run: cargo build --release --target wasm32-wasip1 -p engine
+      - name: Run it under a WASM engine and diff against the native build
+        run: |
+          set -euo pipefail
+          cargo run --release -q -p engine > host.txt
+          node --experimental-wasi-unstable-preview1 tools/wasm_parity.mjs \
+            target/wasm32-wasip1/release/engine.wasm > wasm.txt 2> wasm.err
+          test -s wasm.txt || { echo "the WASM run printed nothing"; exit 1; }
+          grep -v 'ExperimentalWarning\|trace-warnings' wasm.err >&2 || true
+          if ! diff -u host.txt wasm.txt; then
+            echo "^^^ roots differ between the host build and WASM on this architecture" >&2
+            exit 1
+          fi
+          echo "parity ok on $(uname -m): $(wc -l < host.txt) lines identical"
+          grep -E 'epoch root|region list|slot table' wasm.txt
+
   schema:
     name: asset schema (flatc)
     runs-on: ubuntu-latest
