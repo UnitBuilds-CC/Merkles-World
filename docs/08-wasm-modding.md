@@ -38,7 +38,7 @@ package game:modding@0.1.0;
 interface ledger-api {
   /// Read committed macro state. No chunk loading, no disk access.
   get-region-macro-state: func(region: region-key) -> option<macro-state>;
-  get-field: func(region: region-key, field: field-id) -> option<i64>;
+  get-field: func(region: region-key, field: field-id) -> option<s64>;
 
   /// Read the player's own pending edits (this client's M_active).
   get-delta: func(pos: global-voxel-pos) -> option<u64>;
@@ -77,9 +77,15 @@ world mod-plugin {
 
   /// Macro-field update contribution for one region (doc 05 rule library).
   export step-macro-field: func(region: region-key, field: field-id, dt: u64,
-                                 current: i64) -> i64;
+                                 current: s64) -> s64;
 }
 ```
+
+**This block is now an excerpt of a checked file, and being an excerpt it had slipped.** Completing A-02
+as `contracts/ledger-api.wit` added a parse test (`contracts/tests/wit_surface.rs`), which found that
+WIT spells signed 64-bit integers `s64` - the `i64` above is corrected, and the types are declared
+inside `interface ledger-api`, because package scope admits none. Read the file as the surface and this
+block as its summary; the test fails if the two drift.
 
 The two lines that carry the architecture: **mutations are proposals, not side effects**
 (`on-action` returns transactions; the ledger commits them, and only the ledger emits

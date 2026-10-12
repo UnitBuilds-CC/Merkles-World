@@ -1,0 +1,139 @@
+// contracts/ledger-api.wit — artifact A-02, DRAFT 2026-10-12: the v1 host surface.
+//
+// doc 08 publishes this interface as an excerpt; this file is the whole thing, so `wit-bindgen` has
+// something to generate from. That matters more than it looks: the workspace forbids a hand-written
+// `#[no_mangle]` (`unsafe_code = "forbid"`, and rustc counts the attribute as unsafe), so an export
+// cannot exist in this project except as output generated from an interface. While A-02 was only an
+// excerpt in prose, "compute the ledger's roots in a browser" - OQ-41, and gate P1.5's fourth target -
+// had no path to being true at all.
+//
+// Status, stated precisely. DRAFT, machine-checked for two things and neither is semantics: the file
+// parses as WIT, and its declarations still match doc 08's excerpt (`contracts/tests/wit_surface.rs`).
+// The parser paid for itself on the first run: types cannot be declared at package scope in this
+// language, and doc 08's excerpt spells signed 64-bit `i64`, which is not a WIT type (`s64` is) - so
+// the excerpt carried a slip that only a real file could be checked against.
+//
+// What neither check verifies: the semantics - fuel metering (OQ-20), the permission/escalation story
+// (OQ-34), and the signing scheme behind these ids (OQ-46) are open questions this surface is written
+// around, not answers to. Sign-off needs its own ADR.
+//
+// The rule that shaped it: a contract is the narrowest surface that lets two agents work apart, so
+// anything whose shape is still owned elsewhere is either mirrored from that owner or left opaque with
+// the question named beside it. Inventing a second schema in a WIT file is how a draft quietly turns
+// into a decision - which is why `entity-id` is `u32` here rather than the `u64` a first pass guessed:
+// A-08 already fixed `EntityId(pub u32)`, and A-08 wins.
+
+package game:modding@0.1.0;
+
+interface ledger-api {
+  /// Identical in shape to A-01's newtypes (`contracts/coords.rs`): three signed 64-bit coordinates,
+  /// because the mod boundary and the engine's own addressing must not become two coordinate systems -
+  /// the special-case-one-subsystem failure AGENTS.md §9 lists as an escalation.
+  record region-key {
+    x: s64,
+    y: s64,
+    z: s64,
+  }
+
+  record global-voxel-pos {
+    x: s64,
+    y: s64,
+    z: s64,
+  }
+
+  /// Mirrors A-08's `TxKind`'s stable tags (A-08). Order matters as much as naming: the tags
+  /// are 1, 2, 3 on the wire and the variant list below is what a generated binding will encode.
+  enum action-kind {
+    /// Block breaks, placements, terraforming - one A-03 record. Ordered channel.
+    slab-delta-mutate,
+    /// Player and mob movement - transient, never hashed. Unordered channel.
+    entity-kinematics,
+    /// Switches, inventories, spells, circuit inputs. Ordered channel.
+    wasm-signal-trigger,
+  }
+
+  /// A-05's registry index plus an opaque body: OQ-08 owns what a tag *is*, so nothing here pretends to.
+  /// An unregistered kind is A-09's band-3 error, not a silent zero.
+  record event-tag {
+    kind: u16,
+    body: list<u8>,
+  }
+
+    /// A-08 fixes `ActorId(pub u32)`; mirroring it, not re-deciding it. Who issues one and how a
+    /// transaction is signed remains OQ-46.
+    type actor-id = u32;
+    /// Same caveat, same width, from `contracts::delta`/A-08's `EntityId(pub u32)`.
+    type entity-id = u32;
+    /// The handle `emit-transaction` returns so a mod can correlate its own proposal later. OQ-46 owns
+    /// what identifies a transaction and which scheme signs it; this is a handle, not a decision.
+    type tx-id = u64;
+    /// A-08's `ActionTx` envelope, serialized. The byte format is OQ-30 and OQ-23, so the ABI carries
+    /// bytes rather than a second schema nobody has frozen.
+    type proposed-tx = list<u8>;
+    /// A-04's field identity. The `i64` value type is settled by the determinism rules; which fields
+    /// exist is OQ-01, so this is a key and nothing more.
+    type field-id = u32;
+    /// One committed macro sample. `epoch` is the epoch the values belong to, because a macro state is
+    /// meaningless without one (doc 05). The value list is positional, and A-04 will own the ordering.
+    record macro-state {
+      epoch: u64,
+      values: list<s64>,
+    }
+
+    /// Read committed macro state. No chunk loading, no disk access.
+    get-region-macro-state: func(region: region-key) -> option<macro-state>;
+    get-field: func(region: region-key, field: field-id) -> option<s64>;
+
+    /// Read the player's own pending edits (this client's M_active). The value is A-03's packed record,
+    /// `|16 region slot|36 intra-region|12 payload|`, so a mod reads exactly what the ledger hashes -
+    /// and the 12 payload bits mean whatever OQ-45 says they mean, nothing more.
+    get-delta: func(pos: global-voxel-pos) -> option<u64>;
+
+    /// Submit a mutation. Never applied synchronously: a mutation is a proposal, and only the ledger
+    /// commits it (ADR-021, doc 08).
+    emit-transaction: func(kind: action-kind, region: region-key, payload: list<u8>) -> tx-id;
+    emit-event-tag: func(event: event-tag);
+  }
+
+interface query-api {
+  use ledger-api.{ region-key };
+
+  /// Serialized filter, byte-capped by the host. A mod enumerating world state is a
+  /// memory-exhaustion vector, so the cap is part of the surface rather than a runtime courtesy.
+  find-regions: func(predicate: list<u8>) -> list<region-key>;
+  /// Quota introspection, so a mod can see the budget it is being held to (OQ-34).
+  count-bytes-read: func() -> u64;
+}
+
+world mod-plugin {
+  import ledger-api;
+  import query-api;
+
+  use ledger-api.{
+    action-kind, actor-id, event-tag, field-id, global-voxel-pos, macro-state,
+    proposed-tx, region-key,
+  };
+
+  /// Called on the client when the mod is loaded.
+  export on-load: func(manifest: list<u8>);
+
+  /// Deterministic per-action handler. May only *propose* transactions.
+  export on-action: func(actor: actor-id, kind: action-kind, pos: global-voxel-pos,
+                         tick: u64) -> list<proposed-tx>;
+
+  /// Authority only: validate a proposed transaction. Rejecting costs the proposer a fee measured in
+  /// the in-world resource the exploit would have gained (OQ-31: priced, not merely checked).
+  export validate-tx: func(tx: proposed-tx) -> result;
+
+  /// Epoch hooks run on the authority during compaction (doc 05 stage 3).
+  export on-epoch-start: func(current-epoch: u64);
+  export on-epoch-commit: func(current-epoch: u64, dt: u64) -> list<event-tag>;
+
+  /// Circuit node evaluation (doc 06), for mod-defined gate types.
+  export evaluate-circuit-node: func(inputs: list<bool>) -> list<bool>;
+
+  /// One region's macro-field contribution for `dt`. Integer in, integer out, always: this value
+  /// feeds epoch roots, so a float here would split replays across platforms (AGENTS.md §4, ADR-017).
+  export step-macro-field: func(region: region-key, field: field-id, dt: u64,
+                                 current: s64) -> s64;
+}

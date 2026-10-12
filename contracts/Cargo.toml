@@ -9,3 +9,6 @@ description = "Artifact A-01..A-09: the only surface subsystem crates may share 
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+wit-parser = "0.261.0"
