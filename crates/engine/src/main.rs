@@ -141,6 +141,13 @@ fn main() {
 
     // ---- 5. the scene half: marched, not drawn ----
     let (t, steps) = scene_probe();
+    // The same ray marched through the hand-assembled tree must land in the same place: this is the
+    // seam where assetc's records meet render's reader, and neither crate's own suite can see it.
+    let hand = scene_t_probe(&scene_tree_by_hand());
+    assert!(
+        (hand.0 - t).abs() < 1e-6 && hand.1 == steps,
+        "lowered and hand-assembled scenes must be one surface: {t}/{steps} vs {hand:?}"
+    );
     println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU, no culling)");
 
     // ---- 6. the commit's cheap half: recycling the slab ----
@@ -153,10 +160,46 @@ fn main() {
     println!("// boot complete. Not met: a drawn scene, macro sim, compaction, mod loading, four devices.");
 }
 
-/// The four-node scene from `crates/render`'s example: two spheres blended with `k = 0.5`, sharply
-/// unioned with a rounded box. Built here rather than shared because the engine must prove it can
-/// assemble a tree the way `assetc` eventually will.
+/// The engine's scene, assembled the way content will arrive: authored `Shape` -> `assetc::lower` ->
+/// validated records -> `render::Tree`. This is the composition seam no crate's own suite covers -
+/// assetc validates its own output and render validates its own input, but nothing until now proved
+/// the two agree on what a node's fields mean, which is the kind of gap that shows up as a wrong
+/// picture rather than a failed test.
 fn scene_tree() -> render::Tree {
+    use assetc::{lower, Shape};
+    let authored = Shape::Union {
+        a: Box::new(Shape::RoundedBox {
+            half: [0.35, 0.35, 0.9],
+            r: 0.12,
+        }),
+        b: Box::new(Shape::SmoothUnion {
+            a: Box::new(Shape::Sphere {
+                r: 0.7,
+                centre: [-0.9, 0.0, 0.0],
+            }),
+            b: Box::new(Shape::Sphere {
+                r: 0.7,
+                centre: [0.9, 0.0, 0.0],
+            }),
+            k: 0.5,
+        }),
+    };
+    match lower(&authored) {
+        Ok(asset) => {
+            println!(
+                "scene source     : authored shape lowered by assetc ({} nodes, depth {})",
+                asset.tree.nodes.len(),
+                asset.depth
+            );
+            asset.tree
+        }
+        Err(error) => panic!("the engine's own scene must lower: {error:?}"),
+    }
+}
+
+/// The hand-assembled form of the same scene, kept as a cross-check that the lowered tree and the
+/// by-hand tree describe one surface rather than two that happen to march to the same answer today.
+fn scene_tree_by_hand() -> render::Tree {
     let mut params: Vec<f32> = Vec::new();
     let mut push = |kind: u16, arity: u16, subtree: u32, p: &[f32], flags: u16| -> NodeRecord {
         let first = params.len() as u16;
@@ -177,19 +220,23 @@ fn scene_tree() -> render::Tree {
         nodes: vec![whole, block, blended, left, right],
         params,
     };
-    render::validate(&tree).expect("the engine's own scene must validate");
+    render::validate(&tree).expect("the hand-assembled scene must validate");
     tree
 }
 
 fn scene_probe() -> (f32, u32) {
-    let tree = scene_tree();
+    let lowered = scene_tree();
+    scene_t_probe(&lowered)
+}
+
+fn scene_t_probe(tree: &render::Tree) -> (f32, u32) {
     let origin = [3.4f32, 1.1, 2.2];
     // Aimed at the scene's centre, so a miss means the field is wrong rather than the aim being
     // unlucky: the first version of this line guessed a direction and panicked on a clean evaluator.
     let raw = [-origin[0], -origin[1], -origin[2]];
     let len = (raw[0] * raw[0] + raw[1] * raw[1] + raw[2] * raw[2]).sqrt();
     let dir = [raw[0] / len, raw[1] / len, raw[2] / len];
-    match render::march(&tree, render::ROOT, origin, dir, 24.0, 1e-4, 96) {
+    match render::march(tree, render::ROOT, origin, dir, 24.0, 1e-4, 96) {
         Some(hit) => (hit.t, hit.steps),
         None => panic!("the probe ray must meet the scene"),
     }
