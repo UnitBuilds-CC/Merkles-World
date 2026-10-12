@@ -158,7 +158,8 @@ zero knowledge of pigs or wood.
 
 **P1 exit — the completion test, which is also the pitch demo:** a booting engine, a rendered
 procedural scene, an edit that persists, and one deterministic hash that matches across all four
-determinism targets (gate P1.5).
+determinism targets (gate P1.5). **One of the four clauses is now true, one is true at the ledger
+level, and two are not started** - the table below is the accurate reading, not this sentence.
 
 ### Phase 1 exit, gate by gate — measured 2026-10-12
 
@@ -178,7 +179,7 @@ that the ledger half of the demo exists and the engine half does not.**
 | A rendered procedural scene, R1, R2 | **no renderer** | `crates/render` evaluates and marches on a CPU; `scene_steps` gives ~15 evaluations per hit ray and ~53 per ray overall. That is the cost shape culling must fix, not a frame time |
 | R5 no polygonation at 1e-6 | **met in part** | `scale_changes_little_but_precision` in `crates/render/tests/scene.rs`, including its own limit: an epsilon finer than `f32` at that scale cannot be satisfied |
 | Mod loading, W1 to W3, AS1 to AS5 | **no compiler, no bindings** | A-07 is whole (grammar and envelope, flatc-checked in CI) but nothing emits an asset until task 15; A-02 exists and is parse-checked, and its `wit-bindgen` binding is the blocked step |
-| A booting engine | **does not exist** | There is no binary in the workspace: every crate is a library or an example. The dev profile (edit RON, see a change) needs `assetc` for the same reason |
+| A booting engine | **exists, and it runs the whole ledger loop** | `cargo run -p engine` (2026-10-12): appends three edits to a 64 KB slab, commits them into `EPOCH_0 91b97a52…`, asserts the region list, slot table and region root against docs/03's published literals, reads the edited voxel back as payload `0x0abc` from append 2 while an untouched voxel reads absence, marches a four-node scene to `t = 3.007` in 8 evaluations, then resets the slab in O(1). Narrow claim on purpose: it boots and verifies, it does not display anything, and the dev profile (edit RON, see a change) still needs `assetc` |
 
 ## The Bitwise Determinism Suite
 

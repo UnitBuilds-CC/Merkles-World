@@ -94,6 +94,11 @@ jobs:
       - name: Spike S1 march steps (informational)
         run: cargo run --release --example scene_steps -p render
 
+      # The engine asserts docs/03's published vectors itself, so running it is a gate check rather
+      # than a smoke test: a wrong digest anywhere in slab -> commit -> read -> march exits non-zero.
+      - name: Engine boots and reproduces the published vectors
+        run: cargo run -p engine
+
       - name: Gate C4 camera-relative demo
         run: cargo run --release --example camera_f32_demo
 

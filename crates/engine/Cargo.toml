@@ -1,0 +1,17 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "The booting engine: slab, epoch commit, read path and the marcher in one process (docs/01, docs/11 Phase 1 exit)"
+
+[dependencies]
+contracts = { path = "../../contracts" }
+ledger = { path = "../ledger" }
+memory = { path = "../memory" }
+render = { path = "../render" }
+
+[lints]
+workspace = true
