@@ -146,11 +146,16 @@ fn a_cut_budget_leaves_the_whole_frame_undrawn_and_costs_nothing() {
         frame.depth.iter().all(|&d| d == Frame::NOT_DRAWN_DEPTH),
         "every pixel must report that it was never drawn"
     );
+    let sentinel = Frame::NOT_DRAWN_RGB;
+    let mut sentinel_only = true;
+    for index in (0..frame.pixels.len()).step_by(3) {
+        if frame.pixels[index..index + 3] != sentinel {
+            sentinel_only = false;
+            break;
+        }
+    }
     assert!(
-        frame
-            .pixels
-            .chunks_exact(3)
-            .all(|rgb| rgb == Frame::NOT_DRAWN_RGB),
+        sentinel_only,
         "the sentinel colour must be the only thing in the buffer"
     );
 }

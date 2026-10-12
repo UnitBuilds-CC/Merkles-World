@@ -138,13 +138,10 @@ fn main() {
         let (tile_drawn, tile_hits) = rows[0];
         let (centre_drawn, centre_hits) = rows[1];
         let _ = (tile_drawn, tile_hits, centre_drawn, centre_hits);
-        let percent = |hits: u32| {
-            if full.hits == 0 {
-                100.0
-            } else {
-                100.0 * f64::from(hits) / f64::from(full.hits)
-            }
-        };
+        // `max(1)` rather than a zero test in front of the division: an empty scene keeps 100% of nothing,
+        // which is what this formula gives when the denominator is clamped, and it keeps the expression one
+        // line instead of a guard that a reader has to check for the else branch.
+        let percent = |hits: u32| 100.0 * f64::from(hits) / f64::from(full.hits.max(1));
         println!(
             " {label:>12} | {:>7} | {:>12} | {:>11.1}% | {:>14} | {:>13.1}% | {:>7.1}% -> {:>7.1}%",
             if ceiling == u64::MAX {
