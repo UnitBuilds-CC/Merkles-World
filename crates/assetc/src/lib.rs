@@ -20,6 +20,9 @@ use contracts::sdf::{
 };
 pub mod order;
 
+/// The dev-profile reload loop: recompile on change, replace atomically, keep the last good asset on failure.
+pub mod watch;
+
 use render::Tree;
 
 /// A shape in the authoring sense: what a content file declares, before any buffer exists.

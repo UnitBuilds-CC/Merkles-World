@@ -170,6 +170,21 @@ column, schema path violated, and a pointer to the doc section. `assetc` also ru
 **budget pass** (doc 04's SDF complexity/step count) so an over-complex entity is rejected as a
 budget violation rather than discovered as a frame drop.
 
+'`assetc watch`' exists ('crates/assetc/src/watch.rs'), and its two rules are the ones that make a reload
+loop safe to run while the engine is reading the asset. Change detection is a fingerprint over the
+authoring bytes rather than an mtime, because a mtime is coarse enough to miss a save and loose enough to
+fire on one that changed nothing. Replacement is atomic - bytes go to '<output>.tmp' and are renamed only
+after a successful compile - and a failed compile leaves the previous asset on disk, untouched and
+*unmarked*: the fingerprint does not advance, so repairing the file rebuilds. That last part is the whole
+reason the module exists. A watch loop that reports success over a stale asset is how an author ends up
+deleting a shape twice, and the test for it (`crates/assetc/tests/watch.rs`) asserts the bytes of the old
+asset, the un-advanced fingerprint, and that no '.tmp' file survives a refusal. '--once' gives the same
+state machine a deterministic, assertable shape for tests and CI.
+
+What it does not settle: AS1's own words end at "→ GPU buffer", and the buffer needs a device, so AS1
+stays unmet with **OQ-51** and **OQ-48** - the second has no gate for this path at all, which is said in
+that question rather than papered over by a passing test suite.
+
 ## Validation gates
 
 | Gate | Test | Source |
