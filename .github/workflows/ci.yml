@@ -146,6 +146,21 @@ jobs:
           flatc -o /tmp/packed --binary --raw-binary --strict-json             contracts/sdf.fbs contracts/tests/fixtures/probe_shape.json
           ls -l /tmp/packed/probe_shape.bin
 
+      # Read the packed bytes back with the compiler's own parser and check the fields survived. Two
+      # claims worth a CI check: the format is decodable by an implementation that is not ours, and a
+      # fixed-layout struct's four words arrive intact instead of being reinterpreted. Note what is
+      # absent from the dump - grammar_version, because FlatBuffers omits a field equal to its schema
+      # default - so the assertions name the fields that must appear rather than every field there is.
+      - name: Read the packed asset back with flatc
+        run: |
+          set -euo pipefail
+          flatc -o /tmp/dump --json --raw-binary contracts/sdf.fbs -- /tmp/packed/probe_shape.bin
+          cat /tmp/dump/probe_shape.json
+          grep -q "depth: 1" /tmp/dump/probe_shape.json
+          grep -q "kind_and_arity: 1" /tmp/dump/probe_shape.json
+          grep -q "params_len_reserved: 4" /tmp/dump/probe_shape.json
+          grep -q "unit sphere at the origin" /tmp/dump/probe_shape.json
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
