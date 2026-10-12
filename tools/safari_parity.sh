@@ -80,7 +80,7 @@ if [ "$up" != 1 ]; then
   cat safari-server.log 2>/dev/null || true
   exit 1
 fi
-echo "node: $(node --version 2>/dev/null || echo 'not found'); server up on $BASE"
+echo "arch $(uname -m), node $(node --version 2>/dev/null || echo 'not found'); server up on $BASE"
 
 session_json=$(curl -sS --max-time 60 -X POST -H 'Content-Type: application/json' \
   -d '{"capabilities":{"alwaysMatch":{"browserName":"safari"}}}' "$DRIVER/session" 2>&1)
