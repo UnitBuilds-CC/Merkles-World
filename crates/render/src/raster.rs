@@ -375,7 +375,14 @@ fn ray_is_reachable(
 /// ceiling cuts blocks rather than a ragged edge - and two copies of the pinhole arithmetic is precisely the
 /// fork that would show up as "the budgeted frame disagrees with the full one", which would then be blamed
 /// on the budget instead of on the duplicate.
-fn ray_for(camera: &Camera, px: u32, py: u32, forward: Vec3, right: Vec3, up: Vec3) -> Vec3 {
+pub(crate) fn ray_for(
+    camera: &Camera,
+    px: u32,
+    py: u32,
+    forward: Vec3,
+    right: Vec3,
+    up: Vec3,
+) -> Vec3 {
     let aspect = camera.width as f32 / camera.height as f32;
     let u = (px as f32 + 0.5) / camera.width as f32;
     let v = (py as f32 + 0.5) / camera.height as f32;
@@ -573,7 +580,7 @@ pub fn render_bnb_budget_in(
     }
 }
 
-fn unit(v: Vec3) -> Vec3 {
+pub(crate) fn unit(v: Vec3) -> Vec3 {
     let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     if length == 0.0 {
         return [0.0, 0.0, 0.0];
@@ -589,7 +596,7 @@ fn push_rgb(out: &mut Vec<u8>, rgb: [u8; 3]) {
 
 /// Surface orientation as colour, and nothing more: the material half of A-07's interpreter signature is
 /// OQ-10's unsettled question, so this maps each normal component from `[-1, 1]` into `0..=255` and stops.
-fn normal_to_rgb(n: Vec3) -> [u8; 3] {
+pub(crate) fn normal_to_rgb(n: Vec3) -> [u8; 3] {
     [quantise(n[0]), quantise(n[1]), quantise(n[2])]
 }
 
@@ -601,7 +608,7 @@ fn quantise(component: f32) -> u8 {
 
 /// The placeholder background: darker toward the bottom of the frame, a function of the ray direction
 /// only, so a miss depends on nothing that could disagree with another machine.
-fn sky(dir: Vec3) -> [u8; 3] {
+pub(crate) fn sky(dir: Vec3) -> [u8; 3] {
     let upness = (dir[2] + 1.0) * 0.5;
     let band = (20.0 + 90.0 * upness) as u8;
     [band / 3, band / 2, band]

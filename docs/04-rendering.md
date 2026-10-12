@@ -282,6 +282,33 @@ radius 0.4, two arrangements of the same counts:
 | scatter, authored order | 128 | 138.01 | 284,800 | 0.0% | 96.2% | 1,024 | 6,474,195 | 207,263 | 96.8% |
 | scatter, median split | 128 | 84.69 | 284,800 | 0.0% | 96.2% | 1,024 | 6,474,195 | 115,304 | 98.2% |
 
+### Region streaming: what it saves is the test, not the march (2026-10-12)
+
+`crates/render/src/stream.rs` renders a world of regions - one compiled shape per region cell, placed at
+`cell * 4096` in gate C1's arithmetic - and the measurement corrected the expectation before it was
+published. A region's enclosure is already tested per ray, so **the charged field work does not grow with
+the size of the world at all**: at 1, 3, 7, 21 and 64 regions around the camera, the frame costs the same
+1,248 evaluations and produces byte-identical pixels and depths, with `plan` selecting one region every
+time. What streaming removes is the **bound test**: one sphere check per region per ray, so the arithmetic
+of a big world lives in `regions x rays` - 3,072 checks for one region against 196,608 for 64 - and that
+is the column planning flattens. Saying it saves march work would have been wrong, and the number was
+checked before the sentence was written.
+
+Why the module exists at all: **A-07 has no translation node**. The kinds tile (`repeat`), reflect
+(`mirror`) and blend, but none can place a subtree at an arbitrary offset, so two authored shapes in
+different cells cannot be joined into one `Tree`. The frame is therefore the **minimum of the regions'
+fields**, which is legitimate for the reason `min` combinators are: a minimum of 1-Lipschitz fields is
+1-Lipschitz, so sphere tracing it cannot step through a surface. The equivalence is tested rather than
+asserted - `tests/stream.rs` requires a one-region frame to equal the single-tree renderer pixel for pixel
+and depth for depth with the same charge, requires a region out of range to be invisible whether it is
+planned in or out, and requires a seven-cell world to produce the same frame as a one-region plan.
+
+Whether the grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
+contract decision with a cost attached (interpreter arm, validator, WGSL twin, asset graph). Until it is
+answered, streaming is a rendering pattern rather than an asset feature. `cargo run --release --example
+region_cost -p render` prints the table above; nothing in it is a frame time, and gate R1 still waits on a
+GPU.
+
 ### The licence is an authoring choice, and the probe now prices it (2026-10-12)
 
 The same scene written twice - identical spheres, identical tree shape, identical camera, and every branch

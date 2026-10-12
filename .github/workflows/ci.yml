@@ -122,6 +122,12 @@ jobs:
       - name: Frame work budget curve (informational)
         run: cargo run --release --example budget_probe -p render
 
+      # Region streaming's claim is that the frame does not change and the bound-test count scales with the
+      # world instead of the screen. Both are integers, and the example asserts its own equalities, so this
+      # is a check rather than a printout.
+      - name: Region streaming cost (informational)
+        run: cargo run --release --example region_cost -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.

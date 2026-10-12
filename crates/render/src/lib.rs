@@ -25,6 +25,7 @@
 /// Conservative subtree bounds, and the ray early-out that spends zero evaluations on empty space.
 pub mod cull;
 pub mod raster;
+pub mod stream;
 
 use contracts::sdf::{
     NodeRecord, MAX_TREE_DEPTH, NODE_CYLINDER, NODE_INTERSECT, NODE_MIRROR, NODE_PLANE,
