@@ -188,3 +188,71 @@ fn streaming_costs_the_neighbourhood_rather_than_the_world() {
     );
     assert!(partial.hits > 0, "the near region should be visible");
 }
+
+#[test]
+fn a_distant_region_shows_up_at_the_angular_size_it_actually_has() {
+    // What the demo attempt really ran into (OQ-56, resolved by this test rather than by a theory): nothing
+    // was broken. A 1.6-unit sphere four cells away subtends about 0.0004 radians, and this camera's
+    // half-height is 0.5 - a quarter of the frame's height spans 26 degrees - so the sphere covers some
+    // 6 parts in a million of the pixels, and with 768 of them the honest expectation is **zero**. The
+    // march and the bound are not the limit at 4,096 units; `examples/far_scale_probe.rs` walks a ray out
+    // to 12,288 and hits in one step at a 1e-3 tolerance. What decides whether a region reads is its
+    // angular size, so the second half of this test puts an object there at the scale a region's content
+    // really is, and requires it to be seen at the depth it should have.
+    let long = Camera {
+        origin: [0.0, 0.0, 0.0],
+        forward: [1.0, 0.0, 0.0],
+        right: [0.0, 1.0, 0.0],
+        up: [0.0, 0.0, 1.0],
+        half_height: 0.5,
+        width: 32,
+        height: 24,
+        max_t: 16_384.0,
+        surface: 1e-2,
+        max_steps: 96,
+    };
+
+    let pebble = [Region {
+        cell: [1, 0, 0],
+        tree: sphere(1.6, [0.0, 0.0, 0.0]),
+    }];
+    let selected = plan(&long, &pebble);
+    assert_eq!(
+        selected,
+        vec![0],
+        "the plan works in range, not in angular size - it must not be the thing that dropped the cell"
+    );
+    let (_, pebble_stats) = render_regions(&long, &pebble, &selected);
+    assert_eq!(
+        pebble_stats.hits, 0,
+        "a sub-pixel object at this distance must not be invented out of rounding"
+    );
+
+    let hill = [Region {
+        cell: [1, 0, 0],
+        tree: sphere(400.0, [0.0, 0.0, 0.0]),
+    }];
+    let selected = plan(&long, &hill);
+    let (frame, hill_stats) = render_regions(&long, &hill, &selected);
+    // The arithmetic the expectation comes from, rather than a vibe: a 400-unit radius at 4,096 subtends
+    // 0.0977 radians, and one pixel of this 32x24 grid spans 1.0 / 24 = 0.0417 in the vertical, so the
+    // disc is about 4.7 pixels across and pi * 2.35^2 ~= 17 pixels. Anything in that neighbourhood is the
+    // frame behaving; zero would be the bug the demo run looked like.
+    assert!(
+        hill_stats.hits >= 9 && hill_stats.hits <= 30,
+        "a 400-unit feature four cells away should cover roughly 17 of these pixels, got {} of {}",
+        hill_stats.hits,
+        hill_stats.rays
+    );
+    // The depth band is the geometry, stated rather than tuned: a pixel at the frame's centre is not the
+    // view axis exactly - the grid samples pixel centres, so this one is ~0.03 radians off it and meets the
+    // sphere on a chord. A chord meets the surface *beyond* the near point (4,096 - 400) and *before* the
+    // centre (4,096), so anything in that band is the hill being where a hill is; the exact figure at this
+    // offset is 4,096 - sqrt(400^2 - 121^2) = 3,715, and the frame reports 3,712.8.
+    let centre = ((long.height / 2) * long.width + long.width / 2) as usize;
+    let depth = frame.depth[centre];
+    assert!(
+        depth > 4096.0 - 400.0 && depth < 4096.0,
+        "the centre pixel should meet the hill on a chord, between its near point and its centre, saw {depth}"
+    );
+}
