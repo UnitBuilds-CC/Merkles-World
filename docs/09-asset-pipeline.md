@@ -44,9 +44,33 @@ parsed document:
   A-03, A-10 own what a peer must agree on); the field exists so a mismatched asset is one comparison
   rather than a silently misinterpreted kind table.
 
-`assetc` exists in two stages: `crates/assetc::lower` turns an authored `Shape` into the pre-order `NodeRecord` array and `f32` pool the envelope carries, `crates/assetc::writer::to_bytes` serialises that into real `ShapeAsset` bytes, and the `assetc` command ties the two together - `assetc <in.ron> <out.bin>` reads RON (ADR-014's authoring format), lowers it, and writes the asset, refusing loudly on unparseable input rather than emitting a plausible file. CI compiles the fixture through that path and hands the result to `flatc`, which reads it back, so the format is vouched for by a parser outside this repo - `flatc`, reading them with its own parser, reports the same asset, which is the only verdict on the format that does not come from the code that wrote it, deriving `subtree_len` from the children instead of asserting it, refusing a bad axis, a non-finite parameter and a tree past `MAX_TREE_DEPTH`, and running `render::validate` on its own output. Four tests in `crates/assetc/tests/lowering.rs` prove the lowered tree answers distance questions identically to `crates/render`'s hand-built scene. It does not write bytes yet, and the authoring file format (RON, ADR-014) is still unbound to it, so AS1-AS5 stay open - the missing piece is the compiler, not
-the format. Its gates (AS1-AS5) stay open, and the headless WGSL check (S6, OQ-41) is still what stands
-between an authored tree and a drawn one.
+`assetc` exists in three stages. `crates/assetc::lower` turns an authored `Shape` into the pre-order
+`NodeRecord` array and `f32` pool the envelope carries, deriving `subtree_len` from the children
+instead of asserting it and refusing a bad axis, a non-finite parameter and a tree past
+`MAX_TREE_DEPTH`. Four tests in `crates/assetc/tests/lowering.rs` check the lowered tree against
+`crates/render`'s hand-built scene, so a compiled tree answers the same distance questions as the
+tree an author would have written by hand. `crates/assetc::writer::to_bytes` serialises that into real `ShapeAsset` bytes.
+`crates/assetc::reader::from_bytes` is the load side doc 09 has always asked for: walk the root
+offset, check the `MLWS` identifier, resolve each field through the vtable rather than by position
+(a field equal to its schema default is absent from the table, so positional reading would return the
+wrong number instead of an error), and hand back nodes, parameters and label. The `assetc` command
+ties the first two together - `assetc <in.ron> <out.bin>` reads RON (ADR-014's authoring format),
+lowers it, runs `render::validate` on its own output, and writes the asset, refusing loudly on
+unparseable input rather than emitting a plausible file.
+
+Two external checks, in both directions. CI compiles the fixture through the writing path and hands
+the bytes to `flatc`, which reads them back with its own parser - the only verdict on the format that
+does not come from the code that wrote it. And `crates/assetc/tests/asset_round_trip.rs` feeds the
+reader a file `flatc` packed, committed as a fixture because a test cannot run a compiler it does not
+have: a reader validated only against its own writer can share a mistake, one validated against
+`flatc`'s output cannot. Refusals are tested too - short buffer, wrong identifier, an offset past the
+end, a vtable wider than this schema - because a loader that guesses at a malformed asset shows the
+player a wrong world instead of an error.
+
+What still keeps AS1-AS5 open: nothing at runtime calls the reader yet (`crates/engine` builds its
+scene through `lower`, not from a `.bin`), there is no GPU upload, no hot reload or watch mode, the
+authoring file schema is not bound to a named format version, and no budget rejection at compile time.
+The headless WGSL check (S6, OQ-41) is still what stands between an authored tree and a drawn one.
 
 ## Formats
 

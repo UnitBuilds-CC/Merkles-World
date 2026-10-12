@@ -1,16 +1,17 @@
-//! `assetc`'s first stage: authoring tree -> A-07 node records.
+//! `assetc`: authoring tree -> A-07 node records -> `ShapeAsset` bytes -> a loaded tree again.
 //!
-//! docs/09's gates (AS1-AS5) need a compiler, and the compiler's real work is this step: child order,
-//! `subtree_len`, the parameter pool, and refusing what the grammar or the evaluator cannot honour.
-//! Emitting FlatBuffer **bytes** is a separate stage and is not claimed here - `lower` returns exactly
-//! the pre-order `NodeRecord` array and `f32` pool that `contracts/sdf.fbs` carries, so the writer's
-//! job is now to serialise a layout already pinned by `contracts/tests/sdf_schema.rs` and CI's flatc
-//! job.
+//! docs/09's gates (AS1-AS5) need a compiler, and the compiler's real work is the first step: child
+//! order, `subtree_len`, the parameter pool, and refusing what the grammar or the evaluator cannot
+//! honour. `writer::to_bytes` serialises that layout into the envelope `contracts/sdf.fbs` declares,
+//! already pinned by `contracts/tests/sdf_schema.rs` and checked against `flatc` in CI, and
+//! `reader::from_bytes` is the load side an engine needs - the one that has to accept the bytes
+//! *another* implementation wrote.
 //!
 //! The Rust model rather than RON first, deliberately: parsing is the cheap half and its schema story
 //! is OQ-10's; the semantics below are where a wrong choice silently authors a different shape, and
 //! they are testable today against `crates/render`'s hand-built trees.
 
+pub mod reader;
 pub mod writer;
 
 use contracts::sdf::{

@@ -1,15 +1,18 @@
 //! The compiler command, end to end: a RON file on disk in, a `ShapeAsset` out.
 //!
 //! Two things are worth pinning here rather than in unit tests, because they only exist at this seam.
-//! First, the file the CLI writes has to be a real asset - a reader must be able to follow the root
-//! offset and find the identifier, which is the contract the engine's loader will rely on. Second, the
-//! CLI has to *fail*: an unparseable authoring file or an uncompilable shape must exit non-zero with a
-//! message, because a compiler that prints a plausible file for broken input is worse than one that
-//! refuses, and `assetc watch` would otherwise keep a stale asset looking current.
+//! First, the file the CLI writes has to be a real asset: this test loads it back through
+//! `assetc::reader::from_bytes` and hands the result to `crates/render`, so the whole
+//! RON-in / distance-field-out path is walked at the seam where it actually exists rather than being
+//! asserted piecewise. Second, the CLI has to *fail*: an unparseable authoring file or an
+//! uncompilable shape must exit non-zero with a message, because a compiler that prints a plausible
+//! file for broken input is worse than one that refuses, and `assetc watch` would otherwise keep a
+//! stale asset looking current.
 //!
 //! The independent verdict on the bytes is CI's, not here: the `asset schema (flatc)` job feeds a
 //! written file to the pinned `flatc` parser and asserts what comes back.
 
+use assetc::reader::from_bytes;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -67,6 +70,34 @@ fn a_ron_file_becomes_a_loadable_asset() {
         soffset > 0 && soffset <= root,
         "the vtable sits below the table it describes"
     );
+
+    // The test's name says *loadable*, so the last word goes to the loader rather than to arithmetic
+    // done here: the file the CLI writes must read back and be a tree `crates/render` evaluates. That
+    // is the seam the engine will use - RON on disk in, a signed distance field out, nothing parsed at
+    // runtime (AGENTS.md §3).
+    let loaded =
+        from_bytes(&bytes).expect("the CLI's output must load the way the engine loads it");
+    assert_eq!(
+        loaded.label, "sphere.ron",
+        "the label carries the authoring file's name"
+    );
+    let tree = render::Tree {
+        nodes: loaded.nodes,
+        params: loaded.params,
+    };
+    render::validate(&tree).expect("a compiled asset is a valid A-07 tree");
+    assert_eq!(tree.nodes.len(), 1);
+    // A unit sphere at the origin: one unit inside at the centre, one unit outside at `x = 2`.
+    assert_eq!(render::sdf_eval(&tree, 0, [0.0, 0.0, 0.0]), -1.0);
+    assert_eq!(render::sdf_eval(&tree, 0, [2.0, 0.0, 0.0]), 1.0);
+    let hit = render::march(&tree, 0, [4.0, 0.0, 0.0], [-1.0, 0.0, 0.0], 8.0, 0.001, 64)
+        .expect("a ray from x = 4 heading inwards reaches the surface");
+    assert!(
+        (hit.t - 3.0).abs() < 1e-5,
+        "the surface is one unit out, so t = 3; got {}",
+        hit.t
+    );
+
     let _ = std::fs::remove_file(&output);
 }
 
