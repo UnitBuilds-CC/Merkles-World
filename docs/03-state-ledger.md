@@ -470,15 +470,22 @@ range, because "nobody edited here" and "I could not find it" must not look the 
 `tests/residency.rs` pins all of it by **root equality**: the property tested is not that the same
 records come back in some order but that the region re-roots to the digest it had before eviction,
 since that digest is what a peer compares and what a save replays against. Eviction ties break to the
-lower cell index, so a replayed walk evicts the same regions twice.
+lower cell index, so a replayed walk evicts the same regions twice. `crates/engine`'s boot performs
+the round trip too — demote, re-enter, re-root — and prints the restored digest, which
+`boot_is_reproducible.rs` compares against `REGION_0` from outside the process, so the directory has
+a caller and the claim has a check that does not trust the binary's own asserts.
 
 **And the cost half says something the policy above does not (2026-10-12).** `cargo run --release
 --example re_entry_cost -p ledger` prices re-entry as the operation the paragraph describes: for a
 full 64 KB slab's worth of scattered edits it computes **68,524 digests** — spike S2's own count for
-the same edit total, through the same counted entry point — at **716–747 ns per digest**, i.e. S2's
-rate, so the directory lookup and the arena copy are noise and re-entry is *the hashing pass moved to
-a different moment*: triggered by the player walking back instead of by the epoch closing. About
-**49 ms** for **one** region on that machine, close to three 16.7 ms frames.
+the same edit total, through the same counted entry point — at the same digest rate S2 measures *on
+that host*, so the directory lookup and the arena copy are noise and re-entry is *the hashing pass
+moved to a different moment*: triggered by the player walking back instead of by the epoch closing.
+CI now runs the step on all three architectures, and the shape of the answer is the point
+(`38279591441`): the digest count is identical everywhere — 68,524, 69% of the `12N` bound — while
+the price per digest is the runner's own (757 ns on ARM64 macOS, 486 on x86-64 Windows, 302 on
+x86-64 Linux), so the same restore costs 51.9 ms, 33.3 ms and 20.7 ms. **On all three, one region's
+re-entry is at least one 16.7 ms frame.**
 
 That reframes P1.4. A camera does not re-enter one region, it re-enters the ring around it, so a
 recompute-on-re-entry costs that number times the interaction radius — and no choice of radius fixes
@@ -491,8 +498,8 @@ will decide silently:
   storing them is redundant state a compaction can invalidate — so it needs a sentence and an
   invalidation rule, not an assumption. This is [OQ-49](13-risks-open-questions.md)'s "which lever
   moves" question reached from the read side rather than the commit side.
-- Splitting a large restore into several small ones **does not help**: the measured `ns per digest`
-  is flat across region sizes (8 to 8,192 edits), while `ns per edit` only falls because a wider tree
+- Splitting a large restore into several small ones **does not help**: on one host the measured
+  `ns per digest` is flat across region sizes (8 to 8,192 edits), while `ns per edit` only falls because a wider tree
   shares upper paths — 11.4 digests per edit at the top of the table against 8.4 at the bottom, i.e.
   94% then 69% of the `12N` bound. Per-edit time is a function of *arrangement*, exactly as S2
   concluded, and a scheduler that batches re-entries by region will not find work to shave.

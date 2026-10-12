@@ -118,32 +118,49 @@ fn main() {
 
     println!();
     println!("// What this does and does not settle:");
-    println!("// - the directory lookup is not the cost. ns per digest lands on spike S2's measured rate");
-    println!("//   (~700 ns each - same generator, same counted entry point as merkle_pass.rs), so almost");
-    println!("//   all of the time is hashing. Re-entry is not a new problem: it is S2's pass moved to a");
-    println!("//   different moment, triggered by the player walking back instead of by the epoch closing.");
     println!(
-        "// - per-edit time falls as the region fills (8.5 us to 6.0 us here) but ns per digest is"
+        "// - the directory lookup is not the cost. The comparison that means anything is against"
     );
-    println!("//   flat. Scattered leaves share upper paths, so digests per edit drop from 11.4 to 8.4 and");
-    println!("//   the spend against docs/03's 12N bound goes from 94% to 69%. That is the bound behaving");
-    println!("//   as a bound, and it is the only structural saving a recompute has.");
+    println!("//   spike S2 on the SAME host - CI prints merkle_pass and this step per runner, so their ns");
+    println!("//   per digest are read side by side - and they agree. Re-entry is not a new problem: it is");
+    println!("//   S2's pass moved to a different moment, triggered by walking back rather than by closing");
+    println!("//   an epoch.");
+    println!(
+        "// - per-edit time falls as the region fills (8.5 us to 6.0 us on this host) while ns per"
+    );
+    println!(
+        "//   digest stays flat. Scattered leaves share upper paths, so digests per edit drop from"
+    );
+    println!("//   11.4 to 8.4 and the spend against docs/03's 12N bound goes from 94% to 69%. That is the");
+    println!(
+        "//   bound behaving as a bound, and it is the only structural saving a recompute has."
+    );
     println!(
         "// - so the finding is the size, not the shape. One full slab-sized region re-roots in"
     );
-    println!("//   68,524 digests - S2's published count for exactly that many edits - which is 49 ms on");
-    println!("//   this machine, close to three of docs/04's 16.7 ms frames, for ONE region. P1.4 is about");
-    println!("//   the ring of them around the camera, so re-rooting from scratch on re-entry does not fit");
-    println!("//   the frame however the ring is tuned. The cost half of P1.4 points at a choice the cold");
-    println!("//   tier has not made in docs/03: store a region's root beside its records and re-entry is a");
-    println!("//   copy; recompute it and re-entry is a pass. That is OQ-49's 'which lever moves' question");
-    println!("//   arriving from a second direction.");
-    println!("// - arriving somewhere new re-enters a ring of regions, not one, so the per-frame number is");
-    println!("//   this times the interaction radius - and the radius is content policy, not something this");
-    println!("//   module gets to decide.");
+    println!("//   68,524 digests - S2's published count for exactly that many edits, and the number CI's");
+    println!("//   three runners print identically (run 38279591441: 757 ns per digest on ARM64 macOS, 486");
+    println!("//   on x86-64 Windows, 302 on x86-64 Linux). The milliseconds belong to the runner - 51.9,");
+    println!("//   33.3 and 20.7 ms for identical work - but on all three a single region's restore is at");
+    println!(
+        "//   least one of docs/04's 16.7 ms frames. P1.4 is about the ring of regions around the"
+    );
+    println!("//   camera, so re-rooting from scratch on re-entry does not fit the frame however the ring");
+    println!(
+        "//   is tuned. The cost half of P1.4 points at a choice docs/03's cold tier has not made:"
+    );
+    println!(
+        "//   store a region's root beside its records and re-entry is a copy; recompute it and"
+    );
+    println!(
+        "//   re-entry is a pass. That is OQ-49's 'which lever moves' question from a second side."
+    );
     println!("// - P1.4 stays open. Its restore-correctness half is enforced in tests/residency.rs by digest");
     println!(
-        "//   equality; its pop-in half needs a renderer to be visible in; its cost half now has a"
+        "//   equality and now also in the engine boot, which prints the restored root; its pop-in"
     );
-    println!("//   measured number to argue about.");
+    println!(
+        "//   half needs a renderer to be visible in; its cost half has a measured number to argue"
+    );
+    println!("//   about, on every architecture the harness has.");
 }

@@ -13,6 +13,9 @@
 //! 3. **The scene can come from a file.** doc 09's runtime path is bytes in, field out, so a boot
 //!    pointed at an asset `assetc` wrote must report that file's own header, march the surface the
 //!    file describes rather than one it was told about, and be as repeatable as the default boot.
+//! 4. **A demotion and a restore are visible in the output.** Gate P1.4's correctness half runs inside
+//!    the boot, and the digest it prints is the one docs/03 publishes for that region — so the claim is
+//!    checkable by someone who does not trust the binary's own asserts.
 //!
 //! What this deliberately does not claim: it is one machine per row, not gate P1.5's four named
 //! devices, and the debug-versus-release comparison is measured by hand (`cargo run` and
@@ -71,8 +74,13 @@ fn what_the_engine_prints_is_what_the_docs_publish() {
             "{name} {digest} is published in docs/03 but missing from the engine's output:\n{output}"
         );
     }
-    // The engine derives the single-region root rather than printing it, so it is checked through the
-    // assertion inside the binary - which fails the run above if it stops holding.
+    // The single-region root is both derived and printed by the binary now: derived by the commit path,
+    // printed by the residency step that re-roots it after eviction. The assertion inside the binary
+    // still fails the run if the two ever disagree, and the test below catches the printed form.
+    assert!(
+        output.contains(REGION_0),
+        "region root {REGION_0} is published in docs/03 but missing from the engine's output:\n{output}"
+    );
     assert!(
         !output.contains("0000000000000000000000000000000000000000000000000000000000000000"),
         "an all-zero digest means a scratch-length refusal was silently reported as a root"
@@ -80,6 +88,25 @@ fn what_the_engine_prints_is_what_the_docs_publish() {
     assert!(
         REGION_0.len() == 64,
         "the published literal itself is malformed"
+    );
+}
+
+/// Gate P1.4's correctness half, checked from outside the process that performs it.
+///
+/// The distinction this test is built to hold onto: `crates/ledger/tests/residency.rs` proves the
+/// directory restores the right range and root *within the crate*, and the boot asserts the same thing
+/// in-binary. Neither of those would notice a composition bug in which the residency step quietly
+/// re-rooted the records it was handed *before* demotion (so nothing was actually restored), or read a
+/// range off by one and still printed a digest because a neighbour's records happened to be adjacent.
+/// Pinning the printed digest to docs/03's published literal, in a line that says it came after a
+/// demotion, is the version of the claim a reader who does not trust the binary can check.
+#[test]
+fn the_boot_brings_a_cold_region_back_as_the_root_it_left() {
+    let output = boot();
+    assert!(
+        output.contains("demoted to M_cold, re-entered, and re-rooted to")
+            && output.contains(&format!("re-rooted to {REGION_0}")),
+        "the residency line must restore region 0 to docs/03's published REGION_0:\n{output}"
     );
 }
 

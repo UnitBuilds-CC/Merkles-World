@@ -9,11 +9,14 @@
 //! 3. that root is compared with the published vector in docs/03 - the same bytes a peer would check,
 //!    reached from records rather than from a hand-fed fixture;
 //! 4. the read path answers what a voxel holds, which is gate P1.7's persistence claim;
-//! 5. a procedural scene is marched and its nearest surface reported. The scene arrives as compiled
+//! 5. the residency directory demotes a region to `M_cold` and brings it back, re-rooting it to docs/03's
+//!    published `REGION_0` — gate P1.4's correctness half, run through the same hashing path the commit
+//!    used, and printed rather than only asserted inside the binary;
+//! 6. a procedural scene is marched and its nearest surface reported. The scene arrives as compiled
 //!    `ShapeAsset` bytes that `assetc::reader` loads back and `crates/render` evaluates, so the demo's
 //!    scene clause describes an asset rather than a tree this binary built in memory. It is still a CPU
 //!    evaluation, and the line that prints it says so.
-//! 6. the same field is marched as a grid of rays - a small frame, shaded on a CPU - and reported as
+//! 7. the same field is marched as a grid of rays - a small frame, shaded on a CPU - and reported as
 //!    counts, not shown. Nothing displays it; that half is still the renderer workstream's.
 //!
 //! Usage: `engine` compiles its own scene and loads those bytes back; `engine <asset.bin>` boots from
@@ -33,6 +36,7 @@ use contracts::sdf::{
 };
 use ledger::commit::{commit_epoch, region_root_for, CommitRequest, CommitScratch, RegionEdits};
 use ledger::read::{committed_at, Committed};
+use ledger::tier;
 use ledger::{event_leaf, genesis_root, EmptyLadder, Leaf, Root};
 use memory::{Slab, SLAB_64KB_RECORDS};
 
@@ -147,7 +151,55 @@ fn main() {
     assert_eq!(payload, 0x0ABC);
     assert_eq!(never, Committed::Unedited);
 
-    // ---- 5. the scene half: marched, not drawn ----
+    // ---- 5. residency: the region the player walked away from comes back as the same root ----
+    // Gate P1.4's correctness half, run in the binary rather than only in `crates/ledger`'s own tests,
+    // because the gate is about a composition: the directory, the arena the caller owns, and the same
+    // hashing path `commit_epoch` used. One hot slot is the tightest budget that still demonstrates
+    // eviction, and the printed digest is docs/03's `REGION_0` - so the restore is checked against the
+    // published literal from outside this process, not merely against a value this run derived.
+    let mut cells = [tier::Slot::EMPTY; 2];
+    let mut residency = tier::Store::new(&mut cells, 1);
+    assert!(
+        residency.register(SLOTS[0], 0, read_back.len()),
+        "region 0 owns the arena's three records"
+    );
+    assert!(
+        residency.register(SLOTS[1], read_back.len(), 0),
+        "the neighbour has no edits, which is normal and still occupies the camera"
+    );
+    residency.admit(&SLOTS[0]);
+    residency.tick();
+    assert_eq!(
+        residency.admit(&SLOTS[1]),
+        tier::Admission::Evicted { evicted: SLOTS[0] },
+        "a one-region hot budget must demote region 0 to M_cold"
+    );
+    residency.tick();
+    let restored = residency
+        .re_enter(&SLOTS[0])
+        .expect("cold is unreachability, not loss - the directory still knows the range");
+    assert_eq!(restored, (0, read_back.len()));
+    let mut restore_scratch = [Leaf::DEFAULT; 3];
+    let restored_root = region_root_for(
+        &read_back[restored.0..restored.0 + restored.1],
+        &mut restore_scratch,
+        &ladder,
+    )
+    .expect("three records");
+    assert_eq!(
+        hex(&restored_root),
+        PUBLISHED_REGION_0,
+        "re-entry restored a different world than the one that was left"
+    );
+    println!(
+        "residency      : region ({}, {}, {}) demoted to M_cold, re-entered, and re-rooted to {}",
+        SLOTS[0].x,
+        SLOTS[0].y,
+        SLOTS[0].z,
+        hex(&restored_root)
+    );
+
+    // ---- 6. the scene half: marched, not drawn ----
     // `engine [asset.bin]` boots from a file the compiler wrote; with no argument it compiles its own
     // scene and loads those bytes back, which keeps the default demo self-contained.
     let asset_path = std::env::args().nth(1);
@@ -167,14 +219,14 @@ fn main() {
     }
     println!("scene march      : first surface at t = {t:.4} after {steps} evaluations (CPU, no GPU, no culling)");
 
-    // ---- 6. the same field as a frame: a grid of rays, still on the CPU ----
+    // ---- 7. the same field as a frame: a grid of rays, still on the CPU ----
     let (frame, raster) = render::raster::render(&tree, &probe_camera());
     println!(
         "scene raster     : {}x{} grid marched on a CPU - {} of {} rays found surface, {} evaluations (informational; gate R1 is a GPU frame and stays unmet)",
         frame.width, frame.height, raster.hits, raster.rays, raster.evaluations
     );
 
-    // ---- 7. the commit's cheap half: recycling the slab ----
+    // ---- 8. the commit's cheap half: recycling the slab ----
     slab.reset();
     println!(
         "after commit     : slab reset to {} records in O(1), capacity unchanged at {}",
