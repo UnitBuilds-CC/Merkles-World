@@ -68,10 +68,15 @@ the bytes to `flatc`, which reads them back with its own parser - the only verdi
 does not come from the code that wrote it. And `crates/assetc/tests/asset_round_trip.rs` feeds the
 reader a file `flatc` packed, committed as a fixture because a test cannot run a compiler it does not
 have: a reader validated only against its own writer can share a mistake, one validated against
-`flatc`'s output cannot. Six refusals are tested too - a buffer too short for a header, a wrong
+`flatc`'s output cannot. Seven refusals are tested too - a buffer too short for a header, a wrong
 identifier, a root offset past the end, a vtable that does not fit below its table, a vtable from a
-wider schema, and a container declaring another grammar version - because a loader that guesses at a
-malformed asset shows the player a wrong world instead of an error.
+wider schema, a container declaring another grammar version, and a header declaring a tree deeper than
+A-07's `MAX_TREE_DEPTH` - because a loader that guesses at a malformed asset shows the player a wrong
+world instead of an error. The last two are the envelope's own stated purpose: `grammar_version` and
+`depth` are carried *to be compared before anything is walked*, and both are, in that order - the kind
+table decides what every later byte means, and the depth decides whether the marcher can budget the
+tree at all. Note what the depth check is not: AS5's gate is `assetc` rejecting an over-budget tree at
+*compile* time, which needs a per-tree budget the docs do not yet define.
 
 What still keeps AS1-AS5 open: `engine <asset.bin>` boots from a file the compiler wrote - the test
 writes one with `assetc::writer` and checks the boot reports that file's own header and marches the

@@ -15,7 +15,7 @@
 //! vector of the 16-byte node struct, vector of f32, string), and it refuses anything else, because a
 //! shape loader that guesses at an unfamiliar buffer produces a wrong picture instead of an error.
 
-use contracts::sdf::{NodeRecord, GRAMMAR_VERSION};
+use contracts::sdf::{NodeRecord, GRAMMAR_VERSION, MAX_TREE_DEPTH};
 
 /// The schema's `file_identifier`.
 pub const FILE_IDENTIFIER: [u8; 4] = *b"MLWS";
@@ -46,6 +46,15 @@ pub enum ReadError {
         found: u32,
         /// Version this reader implements - `contracts::sdf::GRAMMAR_VERSION`.
         expected: u32,
+    },
+    /// The header declares a tree deeper than A-07's `MAX_TREE_DEPTH`, so the marcher has no budget
+    /// for it. Refusing on the declared number is the envelope's stated purpose for carrying it:
+    /// one comparison instead of walking a node array.
+    DepthExceeded {
+        /// Depth the asset declares.
+        declared: u32,
+        /// The cap the grammar defines - a draft number pending spike S1.
+        cap: u32,
     },
 }
 
@@ -142,6 +151,16 @@ pub fn from_bytes(buf: &[u8]) -> Result<CompiledAsset, ReadError> {
         Some(at) => u32_at(buf, at)?,
         None => 0,
     };
+    // The envelope's own comment says depth is carried "so the loader can refuse before it walks
+    // anything" - one comparison against the grammar's cap, rather than parsing a node array whose
+    // march cost the renderer has no budget for. `render::validate` still checks the depth the tree
+    // actually has; a header that admits being too deep should not get that far.
+    if depth > MAX_TREE_DEPTH {
+        return Err(ReadError::DepthExceeded {
+            declared: depth,
+            cap: MAX_TREE_DEPTH,
+        });
+    }
 
     let mut nodes = Vec::new();
     if let Some(at) = field(2)? {

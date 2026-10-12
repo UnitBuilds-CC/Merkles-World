@@ -13,7 +13,7 @@
 use assetc::reader::{from_bytes, ReadError, FILE_IDENTIFIER};
 use assetc::writer::to_bytes;
 use assetc::{lower, Shape};
-use contracts::sdf::{FLAG_IS_ROOT, GRAMMAR_VERSION, NODE_ROUNDED_BOX};
+use contracts::sdf::{FLAG_IS_ROOT, GRAMMAR_VERSION, MAX_TREE_DEPTH, NODE_ROUNDED_BOX};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -146,6 +146,25 @@ fn a_container_from_another_grammar_is_refused_before_anything_is_parsed() {
     );
     // The same buffer declaring the version this reader implements is an ordinary, if empty, asset.
     buf[28..32].copy_from_slice(&GRAMMAR_VERSION.to_le_bytes());
+    assert!(from_bytes(&buf).is_ok());
+}
+
+/// The envelope says `depth` is carried "so the loader can refuse before it walks anything", and a
+/// header that admits exceeding A-07's cap should not get as far as a node array. `render::validate`
+/// still measures the depth the tree actually has - this is the cheap comparison in front of it.
+#[test]
+fn a_header_admitting_a_deeper_tree_than_the_cap_is_refused() {
+    let mut buf = hand_built_table(14, 20, &[0, 8, 0, 0, 0]);
+    buf[32..36].copy_from_slice(&(MAX_TREE_DEPTH + 1).to_le_bytes());
+    assert_eq!(
+        from_bytes(&buf),
+        Err(ReadError::DepthExceeded {
+            declared: MAX_TREE_DEPTH + 1,
+            cap: MAX_TREE_DEPTH,
+        })
+    );
+    // The cap itself is allowed, so the comparison is a bound and not an accident of the fixture.
+    buf[32..36].copy_from_slice(&MAX_TREE_DEPTH.to_le_bytes());
     assert!(from_bytes(&buf).is_ok());
 }
 
