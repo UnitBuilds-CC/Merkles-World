@@ -146,8 +146,11 @@ The boot prints the same shape at a smaller scale, and a sparser frame makes the
 64x48 grid reports 590 of 3,072 rays finding surface, and the 2,482 that missed are charged 238,272 of
 the 243,008 evaluations - **98.1% of that frame's cost spent finding nothing at all**. The counts are
 integers on purpose: the march and the normal use only add, multiply and `sqrt`, all exact under IEEE-754,
-so the same numbers can be read off three different architectures in CI. That comparison is a diagnostic
-- nothing here feeds a digest, and a frame hash stays informational by policy (ADR-017, gate R4).
+so the same numbers can be read off three different architectures in CI - and were: run `38250242415`
+prints `590 of 3072 rays found surface, 243008 evaluations` identically on x86-64 Linux, x86-64 Windows and
+ARM64 macOS, which is the first time this repository has compared a whole pixel grid's results between
+machines. That comparison is a diagnostic, not a gate: nothing here feeds a digest, and a frame hash stays
+informational by policy (ADR-017, gate R4).
 
 The counts repeated identically run to run; the wall times did not (the 320×240 grid measured 53 ms and
 86 ms in the same session on the same binary). That is the whole reason this section reports evaluations
