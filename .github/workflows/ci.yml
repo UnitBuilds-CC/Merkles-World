@@ -174,7 +174,10 @@ jobs:
           grep -q "depth: 1" /tmp/assetc_dump/assetc_written.json
           grep -q "kind_and_arity: 0" /tmp/assetc_dump/assetc_written.json
           grep -q "params_len_reserved: 4" /tmp/assetc_dump/assetc_written.json
-          grep -q "unit sphere at the origin" /tmp/assetc_dump/assetc_written.json
+          # The CLI labels an asset with its source file, which is the point of the field: a hot-reload
+          # log has to name what failed. Asserting the label the writer actually produces is also what
+          # caught a stale assertion here - the fixture's prose label is a different file's value.
+          grep -q 'label: "sphere.ron"' /tmp/assetc_dump/assetc_written.json
 
   deny:
     name: cargo-deny

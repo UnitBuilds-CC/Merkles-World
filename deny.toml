@@ -55,6 +55,12 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "Unicode-DFS-2016",
+    # unicode-ident 1.0.13 moved to "(MIT OR Apache-2.0) AND Unicode-3.0", and both wit-parser (the
+    # A-02 parse check) and serde_derive (the assetc RON path) require it, so pinning is not
+    # available. Allowed because the Unicode Terms of Use is a data/character-database licence, not a
+    # copyleft one - but this is OQ-43 territory, so it is flagged for ratification rather than
+    # treated as settled: revert this line and the trunk goes back to a policy question.
+    "Unicode-3.0",
 ]
 
 [licenses.private]
