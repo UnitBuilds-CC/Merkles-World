@@ -59,14 +59,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The server binds asynchronously; give both processes a moment rather than racing them.
-sleep 2
-
-if ! curl -sS --max-time 5 "$BASE/" -o /dev/null; then
-  echo "FAIL the parity server is not answering on $BASE"
-  tail -20 safari-server.log || true
+# The server binds asynchronously, so wait for it rather than guessing a sleep - and if it died, say so
+# with its own log, because the first run of this step failed trunk by curling a fixed two seconds after
+# a `node` start and reporting "not answering" with no reason attached.
+up=0
+for _ in $(seq 1 40); do
+  if curl -sS --max-time 2 "$BASE/" -o /dev/null 2>/dev/null; then
+    up=1
+    break
+  fi
+  if ! kill -0 "$server" 2>/dev/null; then
+    echo "FAIL the parity server exited before answering"
+    cat safari-server.log 2>/dev/null || true
+    exit 1
+  fi
+  sleep 0.5
+done
+if [ "$up" != 1 ]; then
+  echo "FAIL the parity server never answered on $BASE"
+  cat safari-server.log 2>/dev/null || true
   exit 1
 fi
+echo "node: $(node --version 2>/dev/null || echo 'not found'); server up on $BASE"
 
 session_json=$(curl -sS --max-time 60 -X POST -H 'Content-Type: application/json' \
   -d '{"capabilities":{"alwaysMatch":{"browserName":"safari"}}}' "$DRIVER/session" 2>&1)
