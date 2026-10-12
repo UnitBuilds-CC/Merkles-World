@@ -67,10 +67,11 @@ have: a reader validated only against its own writer can share a mistake, one va
 end, a vtable wider than this schema - because a loader that guesses at a malformed asset shows the
 player a wrong world instead of an error.
 
-What still keeps AS1-AS5 open: nothing at runtime calls the reader yet (`crates/engine` builds its
-scene through `lower`, not from a `.bin`), there is no GPU upload, no hot reload or watch mode, the
-authoring file schema is not bound to a named format version, and no budget rejection at compile time.
-The headless WGSL check (S6, OQ-41) is still what stands between an authored tree and a drawn one.
+What still keeps AS1-AS5 open: `crates/engine` compiles its scene and loads the bytes back inside one
+process, so the load path runs, but nothing reads a `.bin` off disk at boot, there is no GPU upload, no
+watch or hot-reload mode, the authoring file schema is not bound to a named format version, and no
+budget rejection at compile time. The headless WGSL check (S6, OQ-41) is still what stands between an
+authored tree and a drawn one.
 
 ## Formats
 

@@ -9,13 +9,16 @@
 //! 3. that root is compared with the published vector in docs/03 - the same bytes a peer would check,
 //!    reached from records rather than from a hand-fed fixture;
 //! 4. the read path answers what a voxel holds, which is gate P1.7's persistence claim;
-//! 5. a procedural scene is marched and its nearest surface reported: the scene half, evaluated on a
-//!    CPU, and the line that prints it says so.
+//! 5. a procedural scene is marched and its nearest surface reported. The scene arrives as compiled
+//!    `ShapeAsset` bytes that `assetc::reader` loads back and `crates/render` evaluates, so the demo's
+//!    scene clause describes an asset rather than a tree this binary built in memory. It is still a CPU
+//!    evaluation, and the line that prints it says so.
 //!
 //! What is NOT here, because docs/11's gate table says so and a demo must not quietly disagree with
 //! its own status page: no GPU, no window, no culling, no BVH, no macro simulation, no compaction, no
 //! mod loading. The first clause of the pitch demo is now true in the narrow sense that something
-//! boots and completes the loop end to end.
+//! boots and completes the loop end to end, and the asset it boots with goes through the file format
+//! an author's tool would write.
 
 use contracts::coords::{GlobalVoxelPos, LocalOffset, RegionKey};
 use contracts::delta::{DeltaRecord, RegionSlot};
@@ -160,13 +163,20 @@ fn main() {
     println!("// boot complete. Not met: a drawn scene, macro sim, compaction, mod loading, four devices.");
 }
 
-/// The engine's scene, assembled the way content will arrive: authored `Shape` -> `assetc::lower` ->
-/// validated records -> `render::Tree`. This is the composition seam no crate's own suite covers -
-/// assetc validates its own output and render validates its own input, but nothing until now proved
-/// the two agree on what a node's fields mean, which is the kind of gap that shows up as a wrong
+/// The engine's scene, arriving the way content will arrive: authored `Shape` -> `assetc::lower` ->
+/// `ShapeAsset` **bytes** -> `assetc::reader::from_bytes` -> `render::Tree`.
+///
+/// The round trip through the file format is the point. docs/09 promises the runtime loads
+/// pre-compiled binaries and parses nothing, so the boot's own scene has to survive the envelope
+/// rather than be handed to the renderer in memory - and the demo's "renders a procedural scene"
+/// clause should describe the bytes an asset compiler emits, not a tree the binary built itself.
+///
+/// This is also the composition seam no crate's own suite covers: assetc validates its own output and
+/// render validates its own input, but nothing until now proved the two agree on what a node's fields
+/// mean *after they have been through the wire*, which is the kind of gap that shows up as a wrong
 /// picture rather than a failed test.
 fn scene_tree() -> render::Tree {
-    use assetc::{lower, Shape};
+    use assetc::{lower, reader, writer, Shape};
     let authored = Shape::Union {
         a: Box::new(Shape::RoundedBox {
             half: [0.35, 0.35, 0.9],
@@ -186,12 +196,25 @@ fn scene_tree() -> render::Tree {
     };
     match lower(&authored) {
         Ok(asset) => {
-            println!(
-                "scene source     : authored shape lowered by assetc ({} nodes, depth {})",
-                asset.tree.nodes.len(),
-                asset.depth
+            let node_count = asset.tree.nodes.len();
+            let depth = asset.depth;
+            let bytes = writer::to_bytes(&asset, "engine boot scene");
+            let loaded =
+                reader::from_bytes(&bytes).expect("the engine's own compiled asset must load back");
+            assert_eq!(
+                loaded.nodes, asset.tree.nodes,
+                "loading must not reinterpret a node"
             );
-            asset.tree
+            assert_eq!(loaded.params, asset.tree.params, "nor the pool");
+            assert_eq!(loaded.depth, depth);
+            println!(
+                "scene source     : authored shape lowered by assetc ({node_count} nodes, depth {depth}), compiled to {} bytes and loaded by assetc::reader",
+                bytes.len()
+            );
+            render::Tree {
+                nodes: loaded.nodes,
+                params: loaded.params,
+            }
         }
         Err(error) => panic!("the engine's own scene must lower: {error:?}"),
     }

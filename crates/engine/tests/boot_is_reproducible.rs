@@ -76,7 +76,8 @@ fn what_the_engine_prints_is_what_the_docs_publish() {
 
 #[test]
 fn the_lowered_scene_and_the_hand_assembled_one_agree() {
-    // The seam this guards: assetc writes node records and render reads them. Each side validates,
+    // The seam this guards: assetc writes node records and render reads them, and the boot's scene
+    // reaches the renderer only after a trip through the `ShapeAsset` envelope. Each side validates,
     // so a disagreement about field meaning - which half of a pair is the kept solid, what axis a
     // transform's second parameter is - would produce a plausible scene on one side and a different
     // one on the other, invisible to both suites. The engine binary prints which path it used, so a
@@ -85,6 +86,13 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
     assert!(
         output.contains("authored shape lowered by assetc (5 nodes, depth 3)"),
         "the engine is expected to build its scene through assetc:
+{output}"
+    );
+    // Not merely lowered: compiled to bytes and loaded, which is what makes the scene an asset rather
+    // than a data structure this binary happens to hold.
+    assert!(
+        output.contains("compiled to") && output.contains("loaded by assetc::reader"),
+        "the boot's scene must arrive through the compiled format, not in memory:
 {output}"
     );
 }
