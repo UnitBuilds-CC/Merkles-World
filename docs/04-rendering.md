@@ -350,6 +350,45 @@ avoid **nothing** - so a blanket skip and a dead skip both fail. The ray-level h
 stays unbuyable, and doc 09 can now say precisely what an author gets: a proved skip inside each blend, and
 no hierarchy through one.
 
+### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
+
+`render::raster::render_bnb_budget` draws as much of a grid as a stated number of **charged evaluations**
+pays for, and the unit is deliberately the same one `Stats::evaluations` reports - so a budget and the
+number it produced are comparable with no translation step. The decision is made against `max_steps + 1`,
+the worst a single ray can cost, *before the ray starts*, which is what turns "about this much work" into
+a bound that needs no measurement to believe. Pixels past the cut carry
+`Frame::NOT_DRAWN_DEPTH`/`NOT_DRAWN_RGB` and `Stats::not_drawn` counts them: "never marched" and "marched
+and found nothing" stay different facts, because the whole point of a budget pass is knowing what it
+sacrificed.
+
+`cargo run --release --example budget_probe -p render` prices the curve on a 64x48 grid (blend at the
+centre, two distant spheres under a plain union; the unbounded hierarchy render costs 182,144 charged
+evaluations and finds surface on 1,000 of 3,072 rays):
+
+| Budget | Charged | Ceiling | Pixels drawn | Undrawn | Surface kept |
+|---|---|---|---|---|---|
+| 1/16 | 11,328 | 11,384 | 203 | 2,869 | 0.0% |
+| 1/8 | 22,752 | 22,768 | 322 | 2,750 | 0.0% |
+| 1/4 | 45,504 | 45,536 | 673 | 2,399 | 0.0% |
+| 1/2 | 91,030 | 91,072 | 1,511 | 1,561 | 36.4% |
+| 3/4 | 136,544 | 136,608 | 2,573 | 499 | **100.0%** |
+| 7/8 | 159,296 | 159,376 | 2,822 | 250 | 100.0% |
+| full | 182,048 | 182,144 | 3,068 | 4 | 100.0% |
+| 2x | 182,144 | - | 3,072 | 0 | 100.0% |
+
+Two readings matter. **The shape of the loss is not linear in pixels**: at a quarter of the work nothing
+visible survives, because the walk is tile-major from the top left and the top-left tiles are sky; at
+three quarters the frame loses 499 pixels and **every hit**, which is a 25% cut in charged work for no
+visible change. So a budget is a statement about the frame's composition, not only about its cost, and
+that is why the *order* is policy: the walk a real renderer would want is centre-out, keeping the subject
+and sacrificing the corners. **The `full` row is not clean**, and the reason is the conservative charge:
+a ceiling equal to the measured total still leaves four pixels undrawn, because the last rays reserved
+`max_steps + 1` and spent less. `tests/budget.rs` pins the useful half of that - an unlimited budget is
+the unbudgeted frame byte for byte, every drawn pixel is the pixel the hierarchy render drew, a larger
+budget never draws fewer pixels, the cut falls on tile boundaries so the drawn set is a prefix - and none
+of it is a frame time: charged evaluations have never been calibrated to nanoseconds here, and gate R1
+still needs a GPU to be answered at all.
+
 ### The third layer: a descent through the bounds, and the tolerance bug it found (2026-10-12)
 
 The middle columns above did not exist an hour before it did. `SceneBounds::may_reach_subtree` asks the

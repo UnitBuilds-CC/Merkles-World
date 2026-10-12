@@ -60,6 +60,16 @@ impl Frame {
     /// The depth written for a pixel that found no surface.
     pub const NO_HIT: f32 = f32::MAX;
 
+    /// The depth written for a pixel a [`render_bnb_budget`] ceiling never reached. Deliberately not
+    /// [`Frame::NO_HIT`]: "marched and found nothing" and "never marched" are different facts, and a frame
+    /// that conflates them cannot be audited — the whole value of a budget pass is knowing which pixels it
+    /// sacrificed. `f32::MIN` because no ray parameter can be that.
+    pub const NOT_DRAWN_DEPTH: f32 = f32::MIN;
+
+    /// The colour sent alongside [`Frame::NOT_DRAWN_DEPTH`]: three small distinct values, so a frame that
+    /// forgot to draw is unmistakable in a dump and in a diff rather than a shade of black.
+    pub const NOT_DRAWN_RGB: [u8; 3] = [1, 2, 3];
+
     /// An empty frame with room for `width * height` pixels.
     pub fn new(width: u32, height: u32) -> Frame {
         let rays = (width * height) as usize;
@@ -136,6 +146,10 @@ pub struct Stats {
     /// March-step field walks only. The four gradient taps per hit go through the public evaluator and are
     /// not counted, which is why the number is "nodes entered per frame" and not "cost of the frame".
     pub visits: u64,
+    /// Pixels a [`render_bnb_budget`] ceiling never reached, left at [`Frame::NOT_DRAWN_DEPTH`]. Zero from
+    /// every unbudgeted path, which is the point: `rays == drawn + not_drawn` is the check that a budget cut
+    /// pixels rather than blurred the accounting.
+    pub not_drawn: u32,
 }
 
 /// March every pixel with no culling. This is the reference: whatever a culled path produces has to
@@ -233,7 +247,6 @@ fn march_into(
     let forward = unit(camera.forward);
     let right = unit(camera.right);
     let up = unit(camera.up);
-    let aspect = camera.width as f32 / camera.height as f32;
     // The gradient taps need to be far enough apart that the four `f32` distances differ; gate R5's own
     // measurement is the reason this is a multiple of the surface epsilon rather than the epsilon itself.
     let normal_eps = camera.surface * 16.0;
@@ -247,52 +260,15 @@ fn march_into(
 
     for py in 0..camera.height {
         // Top row first: pixel (0, 0) is the upper-left, which is what a PPM expects.
-        let v = (py as f32 + 0.5) / camera.height as f32;
-        let ndc_y = (1.0 - 2.0 * v) * camera.half_height;
         for px in 0..camera.width {
-            let u = (px as f32 + 0.5) / camera.width as f32;
-            let ndc_x = (2.0 * u - 1.0) * camera.half_height * aspect;
-            let dir = unit([
-                forward[0] + right[0] * ndc_x + up[0] * ndc_y,
-                forward[1] + right[1] * ndc_x + up[1] * ndc_y,
-                forward[2] + right[2] * ndc_x + up[2] * ndc_y,
-            ]);
+            let dir = ray_for(camera, px, py, forward, right, up);
             // Two ways to prove a ray is empty, and the table decides which is available. A pruning table
             // gets the hierarchy's answer, which *contains* the single-sphere test: the descent's first
             // question is the root's own enclosure, so every ray the root rejects is rejected here too, and
             // what the children add is the ray that passes between two spheres inside a loose cover - the
             // case cull_probe measured at 0.0% for a spread scene. A counting table gets the root test and
             // nothing else, so the baseline stays a baseline.
-            let reachable = match bounds {
-                Some(scene) if scene.prunes() => {
-                    // Both proofs, composed: the root sphere within the ray's own range, then the descent
-                    // into the children the root's cover cannot judge. Neither subsumes the other - the
-                    // descent asks about an unbounded distance, and it refuses outright below a node whose
-                    // bound is not licensed (a smooth union, a plane) - so skipping the first would quietly
-                    // lose rejections the single-sphere path already had.
-                    ray_may_hit(
-                        scene.enclosure_of(ROOT as usize).grown(camera.surface),
-                        camera.origin,
-                        dir,
-                        camera.max_t,
-                    ) && scene.may_reach_subtree(
-                        tree,
-                        ROOT as usize,
-                        camera.origin,
-                        dir,
-                        camera.surface,
-                    )
-                }
-                _ => match cull {
-                    Some(enclosure) => ray_may_hit(
-                        enclosure.grown(camera.surface),
-                        camera.origin,
-                        dir,
-                        camera.max_t,
-                    ),
-                    None => true,
-                },
-            };
+            let reachable = ray_is_reachable(tree, camera, cull, bounds, dir);
             if !reachable {
                 skipped += 1;
                 push_rgb(pixels, sky(dir));
@@ -345,6 +321,202 @@ fn march_into(
         evaluations,
         skipped,
         visits: bounds.map_or(0, |scene| scene.visits()),
+        not_drawn: 0,
+    }
+}
+
+/// Whether one ray may be skipped outright, given the table and the cull the caller supplied.
+///
+/// Both rasterising paths ask this through one function on purpose. A budget pass that reached a different
+/// verdict than the unbudgeted one would produce a frame whose *drawn* pixels disagree, and the prefix
+/// property that makes a partial frame meaningful would then be false by construction rather than by
+/// measurement. A pruning table gets the hierarchy's answer, which contains the single-sphere test - the
+/// descent's first question is the root's own enclosure - and adds the children a cover sphere cannot judge.
+/// Every enclosure consulted here is grown by the marcher's hit tolerance, because a ray passing within
+/// `surface` of a sphere but outside it is a hit as far as the marcher is concerned; `cull.rs` carries the
+/// argument for why that growth is not a courtesy.
+fn ray_is_reachable(
+    tree: &Tree,
+    camera: &Camera,
+    cull: Option<Enclosure>,
+    bounds: Option<&crate::cull::SceneBounds>,
+    dir: Vec3,
+) -> bool {
+    match bounds {
+        Some(scene) if scene.prunes() => {
+            let root = match cull {
+                Some(enclosure) => enclosure,
+                None => scene.enclosure_of(crate::ROOT as usize),
+            };
+            ray_may_hit(root.grown(camera.surface), camera.origin, dir, camera.max_t)
+                && scene.may_reach_subtree(
+                    tree,
+                    crate::ROOT as usize,
+                    camera.origin,
+                    dir,
+                    camera.surface,
+                )
+        }
+        _ => match cull {
+            Some(enclosure) => ray_may_hit(
+                enclosure.grown(camera.surface),
+                camera.origin,
+                dir,
+                camera.max_t,
+            ),
+            None => true,
+        },
+    }
+}
+
+/// The ray for one pixel, in the camera's own basis: the single place a pixel becomes a ray.
+///
+/// The raster loop and [`render_bnb_budget`] walk pixels in different orders - the second walks tiles, so a
+/// ceiling cuts blocks rather than a ragged edge - and two copies of the pinhole arithmetic is precisely the
+/// fork that would show up as "the budgeted frame disagrees with the full one", which would then be blamed
+/// on the budget instead of on the duplicate.
+fn ray_for(camera: &Camera, px: u32, py: u32, forward: Vec3, right: Vec3, up: Vec3) -> Vec3 {
+    let aspect = camera.width as f32 / camera.height as f32;
+    let u = (px as f32 + 0.5) / camera.width as f32;
+    let v = (py as f32 + 0.5) / camera.height as f32;
+    let ndc_x = (2.0 * u - 1.0) * camera.half_height * aspect;
+    let ndc_y = (1.0 - 2.0 * v) * camera.half_height;
+    unit([
+        forward[0] + right[0] * ndc_x + up[0] * ndc_y,
+        forward[1] + right[1] * ndc_x + up[1] * ndc_y,
+        forward[2] + right[2] * ndc_x + up[2] * ndc_y,
+    ])
+}
+
+/// The most a single ray can be charged under this file's accounting: `max_steps + 1`, because a hit costs
+/// `steps + 1` and a miss costs the full step budget. It is also the unit a [`Budget`] is spent in, which is
+/// what turns a ceiling into a bound: refusing to *start* a ray whose worst-case charge does not fit is
+/// enough, and no measured quantity is needed mid-frame.
+fn ray_charge(camera: &Camera) -> u64 {
+    u64::from(camera.max_steps) + 1
+}
+
+/// A ceiling on the work one frame may do, in charged evaluations - the same unit
+/// [`Stats::evaluations`] reports, so a budget and the number it produced are comparable with no
+/// translation step. `usize::MAX` means "no ceiling".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget(pub u64);
+
+/// Pixels per tile side, for [`render_bnb_budget`]. Eight is a choice rather than a law - it is the
+/// smallest block that still amortises a bound test - and `tests/budget.rs` pins the *behaviour* (whole
+/// tiles cut, prefixes identical) instead of the number, so a different tile on a GPU is not a failure.
+const TILE: u32 = 8;
+
+/// Write one already-computed colour into a sized frame at `index`.
+fn write_pixel(frame: &mut Frame, index: usize, rgb: &[u8; 3]) {
+    frame.pixels[index * 3..index * 3 + 3].copy_from_slice(rgb);
+}
+
+/// Draw as much of `camera`'s grid as `budget` pays for, through the bound hierarchy, into a caller-owned
+/// frame.
+///
+/// Three properties, each one tested in `tests/budget.rs`, and the third is what makes the first two mean
+/// something:
+///
+/// 1. **The ceiling holds.** `Stats::evaluations <= budget.0`, always, and not by measuring: the check is
+///    made against [`ray_charge`], the worst case a ray can cost, before the ray starts.
+/// 2. **What is drawn is exactly what the unbudgeted frame draws.** Same bytes, same depths, same buffer
+///    layout, because the ray math lives in [`ray_for`] and the march is the same [`crate::march_bnb`].
+///    A budget decides *how much*, never *what*.
+/// 3. **The order is deterministic and tile-major.** Blocks of eight, top-left first, so a cut removes
+///    whole tiles and the sequence of prefixes is identical on every machine. That is what lets a partial
+///    frame be compared across architectures at all - gate R4's hash is informational, and this is the
+///    version of it that a budget pass can actually produce.
+///
+/// Pixels past the cut keep [`Frame::NOT_DRAWN_DEPTH`] and [`Frame::NOT_DRAWN_RGB`], and
+/// `Stats::not_drawn` counts them: the shortfall is a reported number, not a black pixel someone has to
+/// notice. The bound table is built per call here; the unbudgeted path has `render_bnb_with` for callers
+/// that hoist it, and a budget pass is expected to want the ceiling more than the allocation.
+pub fn render_bnb_budget(tree: &Tree, camera: &Camera, budget: Budget, frame: &mut Frame) -> Stats {
+    let bounds = crate::cull::scene_bounds(tree);
+    let enclosure = bounds.enclosure_of(crate::ROOT as usize);
+    let forward = unit(camera.forward);
+    let right = unit(camera.right);
+    let up = unit(camera.up);
+    let rays = (camera.width * camera.height) as usize;
+
+    frame.width = camera.width;
+    frame.height = camera.height;
+    frame.pixels.clear();
+    frame.pixels.resize(rays * 3, 0);
+    for chunk in frame.pixels.chunks_exact_mut(3) {
+        chunk.copy_from_slice(&Frame::NOT_DRAWN_RGB);
+    }
+    frame.depth.clear();
+    frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
+
+    let charge = ray_charge(camera);
+    let mut spent = 0u64;
+    let mut hits = 0u32;
+    let mut skipped = 0u32;
+    let mut decided = 0u32;
+    let mut not_drawn = 0u32;
+
+    let tiles_x = camera.width.div_ceil(TILE);
+    let tiles_y = camera.height.div_ceil(TILE);
+    'tiles: for ty in 0..tiles_y {
+        for tx in 0..tiles_x {
+            for py in ty * TILE..((ty + 1) * TILE).min(camera.height) {
+                for px in tx * TILE..((tx + 1) * TILE).min(camera.width) {
+                    if spent + charge > budget.0 {
+                        not_drawn = rays as u32 - decided;
+                        break 'tiles;
+                    }
+                    let dir = ray_for(camera, px, py, forward, right, up);
+                    let at = (py * camera.width + px) as usize;
+                    if !ray_is_reachable(tree, camera, Some(enclosure), Some(&bounds), dir) {
+                        write_pixel(frame, at, &sky(dir));
+                        frame.depth[at] = Frame::NO_HIT;
+                        skipped += 1;
+                        decided += 1;
+                        continue;
+                    }
+                    let hit = crate::march_bnb(
+                        tree,
+                        &bounds,
+                        crate::ROOT,
+                        crate::Ray {
+                            origin: camera.origin,
+                            dir,
+                            max_t: camera.max_t,
+                            surface: camera.surface,
+                            max_steps: camera.max_steps,
+                        },
+                    );
+                    match hit {
+                        Some(hit) => {
+                            let n =
+                                crate::normal(tree, crate::ROOT, hit.point, camera.surface * 16.0);
+                            write_pixel(frame, at, &normal_to_rgb(n));
+                            frame.depth[at] = hit.t;
+                            hits += 1;
+                            spent += u64::from(hit.steps) + 1;
+                            decided += 1;
+                        }
+                        None => {
+                            write_pixel(frame, at, &sky(dir));
+                            frame.depth[at] = Frame::NO_HIT;
+                            spent += u64::from(camera.max_steps);
+                            decided += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Stats {
+        rays: rays as u32,
+        hits,
+        evaluations: spent,
+        skipped,
+        visits: bounds.visits(),
+        not_drawn,
     }
 }
 
