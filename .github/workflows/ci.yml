@@ -291,8 +291,17 @@ jobs:
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
           sleep 1
-          "$browser" --headless=new --disable-gpu --no-sandbox --no-first-run \
-            --virtual-time-budget=30000 --dump-dom http://127.0.0.1:8137/ > dom.html
+          # Chrome's own exit code is not the claim - on a container runner it writes DBus noise and can
+          # return non-zero after a perfectly good dump (run 38287747974 failed trunk that way, with the
+          # page digest never even reached). So tolerate the status, and gate on the artifact instead: no
+          # DOM is a failure, a DOM whose digest disagrees is a failure, and a DOM that matches is the
+          # measurement.
+          chrome_status=0
+          "$browser" --headless=new --disable-gpu --no-sandbox --disable-dev-shm-usage --no-first-run \
+            --virtual-time-budget=30000 --dump-dom http://127.0.0.1:8137/ > dom.html 2>chrome.log \
+            || chrome_status=$?
+          test -s dom.html || { echo "chrome produced no DOM (status $chrome_status)"; tail -20 chrome.log; exit 1; }
+          echo "chrome status $chrome_status, DOM $(wc -c < dom.html) bytes"
           page=$(grep -o 'mlws-sha256=[0-9a-f]\{64\}' dom.html | head -1 | cut -d= -f2)
           test -n "$page" || { echo "the page printed no digest"; sed -n '1,40p' dom.html; exit 1; }
           # Which imported functions the shim had to refuse rather than implement. Informational, and
