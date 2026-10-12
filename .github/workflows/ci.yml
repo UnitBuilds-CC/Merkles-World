@@ -161,13 +161,14 @@ jobs:
           grep -q "params_len_reserved: 4" /tmp/dump/probe_shape.json
           grep -q "unit sphere at the origin" /tmp/dump/probe_shape.json
 
-      # The writer's own acceptance test, by the same outside parser. A hand-built FlatBuffer that
-      # only our reader accepts is not a format - the first version of it crashed flatc with an
-      # inconsistent vtable - so what is checked here is that flatc agrees.
+      # The compiler's own acceptance test, by the same outside parser: the RON fixture goes in through
+      # the CLI and the bytes that come out must be readable by a parser that is not ours. A
+      # hand-built FlatBuffer only our own reader accepts is not a format - an earlier draft crashed
+      # flatc with an inconsistent vtable.
       - name: Read assetc's written asset back with flatc
         run: |
           set -euo pipefail
-          cargo run -q -p assetc --example write_probe -- /tmp/assetc_written.bin
+          cargo run -q -p assetc -- crates/assetc/tests/fixtures/sphere.ron /tmp/assetc_written.bin
           flatc -o /tmp/assetc_dump --json --raw-binary contracts/sdf.fbs -- /tmp/assetc_written.bin
           cat /tmp/assetc_dump/assetc_written.json
           grep -q "depth: 1" /tmp/assetc_dump/assetc_written.json

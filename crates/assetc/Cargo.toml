@@ -7,9 +7,15 @@ license.workspace = true
 publish.workspace = true
 description = "docs/09 stage one: an authored shape lowered to A-07 node records (AS1, AS2)"
 
+[[bin]]
+name = "assetc"
+path = "src/main.rs"
+
 [dependencies]
 contracts = { path = "../../contracts" }
 render = { path = "../render" }
+ron = "0.12.2"
+serde = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true

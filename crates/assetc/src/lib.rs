@@ -20,7 +20,12 @@ use contracts::sdf::{
 use render::Tree;
 
 /// A shape in the authoring sense: what a content file declares, before any buffer exists.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Deserialize` makes a RON file on disk this type, which is doc 09's authoring format and ADR-014's
+/// canonical choice with JSON as an alias. Parsing text here is not a hot-path sin: AGENTS.md §3 bans
+/// string parsing during gameplay frames and explicitly exempts tools, and this crate is a tool - the
+/// engine at runtime only ever sees the compiled bytes this crate writes.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Shape {
     /// Radius then centre. A sphere carries its own centre because the grammar has no translate node,
     /// which is also why `RoundedBox` has no position: it is centred by definition.
@@ -63,6 +68,32 @@ pub enum Shape {
         axis: u8,
         child: Box<Shape>,
     },
+}
+
+impl Shape {
+    /// Nodes in the subtree, so the CLI can refuse a shape whose parameter pool would not fit the
+    /// 16-bit index the record format allows - a limit that has to be checked before encoding, not
+    /// discovered as truncated offsets afterwards.
+    pub fn node_count(&self) -> usize {
+        1 + self
+            .children()
+            .iter()
+            .map(|child| child.node_count())
+            .sum::<usize>()
+    }
+
+    fn children(&self) -> Vec<&Shape> {
+        match self {
+            Shape::Union { a, b } | Shape::SmoothUnion { a, b, .. } | Shape::Intersect { a, b } => {
+                vec![a.as_ref(), b.as_ref()]
+            }
+            // Named fields here, not `a`/`b`: the kept solid and the cutter are different arguments and
+            // a pattern that swaps them would compile happily and cut the wrong half.
+            Shape::Subtract { kept, cutter } => vec![kept.as_ref(), cutter.as_ref()],
+            Shape::Repeat { child, .. } | Shape::Mirror { child, .. } => vec![child.as_ref()],
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Every way a shape can fail to become an asset, before a byte is written.
