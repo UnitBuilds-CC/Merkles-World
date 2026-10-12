@@ -99,6 +99,12 @@ jobs:
       - name: Spike S1 march steps (informational)
         run: cargo run --release --example scene_steps -p render
 
+      # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
+      # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
+      # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
+      - name: Spike S7 macro propagation (informational)
+        run: cargo run --release --example s7_propagation -p engine
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.

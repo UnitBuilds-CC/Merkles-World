@@ -122,6 +122,20 @@ one-ring propagation at commit is our answer, and its failure mode is the multi-
 effects arrive late; too large, and commit cost explodes. **Spike S7 and gate SM1 are exactly this
 question.**
 
+**S7 first run (2026-10-12, `cargo run --release --example s7_propagation -p engine`).** The question was
+answered as a measurement: a 512-region river of `i32` water tables, a dam at the source, and a frontier
+that simulates only the disturbed width per commit before advancing by the ring. **Latency is distance
+over ring:** the mouth goes dry after 501 / 251 / 126 / 64 commits at ring 1 / 2 / 4 / 8, so the
+multi-epoch chain named above is exactly what the proposal produces — not a bug in it, a property of it.
+**Cost is a curve, not the cliff warned about:** measured against simulating the whole river every
+commit, ring 1 spends 57% of that work and ring 8 spends 95%, so widening the ring buys latency with
+work pulled forward rather than multiplying work. The claim that does survive is the one the gate leans
+on: no region is loaded, simulated or written before the frontier reaches it, so a commit's cost is
+bounded by the disturbed area rather than by the world or by the single edit. What the run could not
+touch is SM1's other half — *identically for two clients* — because that needs a hashed macro field, and
+A-04's schema and A-05's tag registry do not exist yet. The field here is the spike's own stand-in, and
+nothing in it is hashed.
+
 ## Rule library (what content can express)
 
 | Family | Example | Form | Jump method |
@@ -175,7 +189,7 @@ upgrades are invisible (silent world corruption).
 
 | Gate | Test | Status |
 |------|------|--------|
-| SM1 | Dam built in region A; region B (far, never loaded) evaluates to a dry lake bed at the next epoch, identically for two clients | **spike S7 — the project's key unknown** |
+| SM1 | Dam built in region A; region B (far, never loaded) evaluates to a dry lake bed at the next epoch, identically for two clients | **spike S7 — the project's key unknown.** Latency and cost measured (S7 first run above): distance over ring, 57% → 95% of whole-river work across ring 1 → 8, and the no-far-region-touched property holding. Consensus untested and untestable until A-04 and A-05 exist. |
 | SM2 | Fast-forward 100,000 ticks of macro state in `< 50 ms` | invented target |
 | SM3 | Two runs of the same seed + transaction sequence produce identical epoch roots | ADR-017 |
 | SM4 | A rule upgraded mid-world does not teleport existing fields | § Determinism across versions |
