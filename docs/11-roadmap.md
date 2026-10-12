@@ -37,7 +37,7 @@ writing them is how the questions get answered.
 
 | ID | Question | Success looks like | Feeds |
 |----|----------|--------------------|-------|
-| **S1** | Can SDF raymarching hold 60 FPS on a mid-range dGPU at our content budgets? | a marching WGSL compute pass with N entities + a real frame-time curve | doc 04 budget, ADR-026 |
+| **S1** | Can SDF raymarching hold 60 FPS on a mid-range dGPU at our content budgets? | a marching WGSL compute pass with N entities + a real frame-time curve | doc 04 budget, ADR-026  **CPU part measured 2026-10-12** (`crates/render/examples/scene_steps.rs`): ~15 evaluations per hit ray on a 4-node scene, ~53 per ray overall because missed rays spend the whole 96-step budget - the numeric case for bounding volumes, and no substitute for a GPU curve, which still does not exist |
 | **S2** | Is slab-allocator throughput real? | 10⁶ writes/sec, `p99 < 1 µs`, and a measured sub-ms Merkle pass (P1.2/P1.3) | doc 03. **First numbers 2026-10-12** (x86-64 Windows, release): P1.2 **met** — 57.2 M appends/sec, p99 200 ns. P1.3 **not met** — **52 ms** for one full 64 KB slab (68,524 digests at 759 ns, 508 ns of that being BLAKE3 itself), 7 ms for the same count clustered; the pass follows digests computed, so `12N` is a bound and not a cost. Still owed: P1.5's other machines, the 64 KB vs 1 MB choice, and the re-scope question itself — [OQ-49](13-risks-open-questions.md) |
 | **S3** | Are BLAKE3 roots bit-identical across targets? | N2600 / RTX 3060 / Linux-Mesa / M1-browser agree (P1.5) | ADR-017/028 |
 | **S4** | FlatBuffers → GPU: zero-copy upload actually work? | RON→`.bin`→storage buffer, no allocation churn (AS1/AS4) | doc 09 |

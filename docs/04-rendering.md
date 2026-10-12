@@ -115,6 +115,30 @@ quoting the reference implementation's speed as if it were the renderer's.
 
 ## Culling and the frame budget
 
+**Measured on the CPU first (`cargo run --release --example scene_steps -p render`),
+2026-10-12, spike S1 part one.** One small scene - `smoothunion(sphere, sphere; k = 0.5)` unioned with a
+rounded box - marched over square grids, step budget 96:
+
+| Grid | Surface epsilon | Hit rate | Evaluations per ray | Sky (missed) rays |
+|------|-----------------|----------|---------------------|-------------------|
+| 32² | 1e-3 | 50.4% | 52.3 | 508 |
+| 64² | 1e-4 | 49.8% | 54.3 | 2056 |
+| 128² | 1e-5 | 49.7% | 55.9 | 8239 |
+
+Three readings, in order of usefulness:
+
+- **Misses dominate the cost.** About half the rays hit, and every missed ray spends the whole budget
+  proving emptiness. Subtracting that, a *hit* pixel averages roughly 15 evaluations; the missed half is
+  what drags the mean to ~53. This is the quantitative reason the pipeline pairs the march with
+  bounding volumes and culling instead of trusting the field - an early-out on a scene like this is
+  worth up to about 3x, and R1 without one is not a frame budget but a hope.
+- **Convergence is not the sharp end.** Going two decades finer on the epsilon costs 6% more work
+  (52.3 to 55.9), which is what a logarithmic approach looks like; the step count barely moves with
+  resolution either (52.6 at 32² vs 52.6 at 128²), as it should for a per-ray property.
+- **What this is not.** R1's number is 1080p/60 with 500 *culled* entities on a mid-range GPU. None of
+  that is measured here: one thread, a CPU, four nodes, no BVH, no culling, no shader. The example
+  exists to give spike S1 a curve to compare the WGSL marcher against, not to substitute for it.
+
 | Mechanism | Notes |
 |-----------|-------|
 | Frustum culling | region-level and entity-level boxes |

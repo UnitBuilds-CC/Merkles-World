@@ -89,6 +89,11 @@ jobs:
       - name: Spike S2 Merkle pass (informational)
         run: cargo run --release --example merkle_pass -p ledger
 
+      # Spike S1's CPU half: evaluations per ray on a four-node scene. Informational for the same
+      # reason as S2's numbers - a runner cannot measure a GPU frame budget, so nothing here gates.
+      - name: Spike S1 march steps (informational)
+        run: cargo run --release --example scene_steps -p render
+
       - name: Gate C4 camera-relative demo
         run: cargo run --release --example camera_f32_demo
 
