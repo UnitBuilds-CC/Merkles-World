@@ -42,7 +42,7 @@ writing them is how the questions get answered.
 | **S3** | Are BLAKE3 roots bit-identical across targets? | N2600 / RTX 3060 / Linux-Mesa / M1-browser agree (P1.5) | ADR-017/028 |
 | **S4** | FlatBuffers → GPU: zero-copy upload actually work? | RON→`.bin`→storage buffer, no allocation churn (AS1/AS4) | doc 09 |
 | **S5** | wasmtime + WIT determinism across languages | Rust/TS/Python mods agree bit-for-bit (W1–W3) | doc 08 |
-| **S6** | Headless WGSL validation harness | shader compiles, renders offscreen, hashes output in CI | doc 12, ADR-003 |
+| **S6** | Headless WGSL validation harness | shader compiles, renders offscreen, hashes output in CI | doc 12, ADR-003  **harness half measured 2026-10-12** (PR #1, run `38258220750`): a device is reachable on the Windows and macOS runners and not on Linux, so the check is two-thirds buildable today and must announce its Linux skip. The missing third is WGSL, not hardware. Offscreen output is never a state gate (gate R4 is informational, ADR-017) |
 | **S7** | Can macro causality actually propagate? | dam in region A dries region B (**gate SM1**) | doc 05 — **the highest-risk spike** |
 | **S8** | Do the jump methods actually work — closed forms and matrix exponentiation over Δt? | a linear field advanced 10⁶ ticks in `O(log Δt)`, and an honest list of rules that can't (SM2) | ADR-005, [OQ-09](13-risks-open-questions.md) |
 | **S9** | What does `wgpu` cost versus raw WebGPU on our pipeline? | measured overhead of the abstraction against the doc 04 frame budget | ADR-003, ADR-026, [OQ-26](13-risks-open-questions.md) |
@@ -116,8 +116,15 @@ epoch pipeline, and `crates/memory` is A3's half: the slab that holds the record
 
 **Not yet met (the rest of Phase 0's exit criteria):**
 
-- The **S6 headless shader check** has no CI job, because no WGSL exists to compile
-  ([OQ-41](13-risks-open-questions.md) is the runner half of that).
+- The **S6 headless shader check** has no CI job, because no WGSL exists to compile.
+  The other half of the excuse was wrong, and PR #1 measured it: the runners are not device-free.
+  `cargo run -p gpu` on run `38258220750` opened a device on the x86-64 Windows runner (Dx12, no GPU
+  present, so a software adapter) and on ARM64 macOS (Metal, `Apple Paravirtual device`), and found
+  **nothing** on x86-64 Linux. So a WGSL-versus-CPU agreement gate is buildable today on two of the
+  three architectures - which means the remaining work is the shader, not the harness, and it means an
+  agreement check must **skip on Linux out loud** rather than let a quiet absence read as a pass.
+  [OQ-41](13-risks-open-questions.md) is the runner half of that and now has an answer; the licence
+  half of landing `wgpu` is [OQ-51](13-risks-open-questions.md).
 - The **dev profile** (edit a RON file, see the change) is now two commands that work by hand -
   `cargo run -p assetc -- shape.ron shape.bin && cargo run -p engine -- shape.bin` — and one command
   that does not exist: a `watch` mode that reruns the first when the file changes and hot-swaps the

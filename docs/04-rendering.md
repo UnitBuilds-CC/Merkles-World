@@ -187,6 +187,13 @@ and `crates/render/tests/raster.rs` pins coverage against the analytic projectio
 `tan(asin(r / d))` of a unit sphere at six units should cover about 368 of 4,096 pixels, and the test
 asserts it within 8% - instead of trusting a millisecond.
 
+What the same probe learned about the harness is in [OQ-41](13-risks-open-questions.md) and
+[OQ-51](13-risks-open-questions.md): PR #1 ran a `wgpu` adapter probe on the three gate runners and
+found a device on two of them (Dx12 software on Windows, Metal paravirtual on ARM64 macOS) and none on
+Linux. So "the WGSL interpreter must agree with this reference" is gateable in CI as soon as the
+interpreter exists, on two architectures, with the third skipping out loud - and a software device
+validating a shader is still not a machine on which gate R1's frame budget can be measured.
+
 **Still not claimed, in this section's own words: this is not R1.** No GPU, no WGSL interpreter, no BVH,
 no culling, no region streaming, and a normal-to-rgb colour that is geometry evidence rather than
 rendering. What landed is that the field can become an image inside this repository, with a measured cost
