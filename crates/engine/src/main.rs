@@ -271,7 +271,58 @@ fn main() {
         if licensed { "granted" } else { "refused" },
     );
 
-    // ---- 8. the commit's cheap half: recycling the slab ----
+    // ---- 8. the same frame under a ceiling: the budget pass, in the demo ----
+    // Half the hierarchy render's charged work, spent centre-out. Two things are asserted rather than
+    // printed: the ceiling held, and every pixel it did pay for is the pixel the unbudgeted render drew -
+    // a budget that changed a colour would not be a budget, it would be a different renderer. This is the
+    // shape gate R1 will eventually be priced against, and the shape AS5 will reject an asset by, which is
+    // why it is measured here rather than left in an example. The per-call bound table and the tile index
+    // list are allocations; a compiler and a demo are not the gameplay hot path AGENTS.md §3 protects.
+    let ceiling = bnb_raster.evaluations / 2;
+    let mut budgeted = render::raster::Frame::new(64, 48);
+    let budget_stats = render::raster::render_bnb_budget_in(
+        &tree,
+        &probe_camera(),
+        render::raster::Budget(ceiling),
+        render::raster::Scan::CentreOut,
+        &mut budgeted,
+    );
+    assert!(
+        budget_stats.evaluations <= ceiling,
+        "the demo's frame overran its own ceiling: {} > {ceiling}",
+        budget_stats.evaluations
+    );
+    assert_eq!(
+        budget_stats.rays,
+        (budget_stats.rays - budget_stats.not_drawn) + budget_stats.not_drawn,
+        "the pixel bookkeeping must close"
+    );
+    let mut mismatched = 0usize;
+    for index in 0..frame.depth.len() {
+        if budgeted.depth[index] == render::raster::Frame::NOT_DRAWN_DEPTH {
+            continue;
+        }
+        if budgeted.pixels[index * 3..index * 3 + 3] != bnb_frame.pixels[index * 3..index * 3 + 3]
+            || budgeted.depth[index] != bnb_frame.depth[index]
+        {
+            mismatched += 1;
+        }
+    }
+    assert_eq!(
+        mismatched, 0,
+        "a ceiling drew {} pixels differently from the unbudgeted render",
+        mismatched
+    );
+    println!(
+        "scene budget     : ceiling {ceiling} of {} charged evaluations - {} pixels drawn, {} left undrawn, {} of {} hits kept, centre-out (a ceiling spends on the frame's composition, so the walk order is content; R1 stays a GPU claim)",
+        bnb_raster.evaluations,
+        budget_stats.rays - budget_stats.not_drawn,
+        budget_stats.not_drawn,
+        budget_stats.hits,
+        bnb_raster.hits,
+    );
+
+    // ---- 9. the commit's cheap half: recycling the slab ----
     slab.reset();
     println!(
         "after commit     : slab reset to {} records in O(1), capacity unchanged at {}",

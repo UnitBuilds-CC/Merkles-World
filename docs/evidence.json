@@ -3,10 +3,10 @@
   "_updated": "2026-10-12",
   "claims": {
     "boot_output_sha256": {
-      "value": "649eff38a5529b1bd01616e029d10e13b0654f08c5d193a7d76b8962b1c25a79",
-      "what": "SHA-256 of the whole fourteen-line output of `cargo run -p engine`, which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
+      "value": "167a0cade1327d0eb62adeecf7e20bfe5693083be3bdd93e702c9c40be73d394",
+      "what": "SHA-256 of the whole fifteen-line output of `cargo run -p engine` (fourteen before the demo's budget line arrived), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
-      "first_measured_at": "38320575157",
+      "first_measured_at": "pending its own green run (the previous value was measured by 38320575157)",
       "superseded": [
         {
           "value": "15c1e8af1b523d7382f705a6ffe6a19e7d3ef4dbfc4c585fd4ead8931c139cf3",
@@ -27,11 +27,16 @@
         {
           "value": "c6c4ec046bec12607e6693238957f49fe3cd34fa17366bd27ce4b3ffebf0f8f8",
           "why": "the boot's scene grew from one compact object to a scene: the hero plus three spread spheres joined by plain unions (11 nodes, depth 4, 348 asset bytes instead of 204). That moves the raster line and the marched-grid counts - 605 of 3072 rays now find surface, 241779 evaluations unculled, and the two culling paths finally disagree in the demo: the single scene bound proves 0 of 3072 rays empty where the hierarchy proves 666 and charges 177843. The hero's own probe ray still lands at t = 3.0070 after 8 evaluations, which is the invariant that says adding distant geometry did not move the near surface. No hashed value moved."
+        },
+        {
+          "value": "649eff38a5529b1bd01616e029d10e13b0654f08c5d193a7d76b8962b1c25a79",
+          "why": "the boot grew a fifteenth line: the demo frame is now also drawn under a ceiling (half the hierarchy render's charged work, centre-out), printing 1475 pixels drawn, 1597 left undrawn and 599 of 605 hits kept. No hashed value moved - the ledger lines are the same digests, and the budgeted frame is asserted pixel-for-pixel equal to the unbudgeted one wherever it drew."
         }
       ],
       "cited_in": [
         "docs/11-roadmap.md",
-        "docs/04-rendering.md"
+        "docs/04-rendering.md",
+        "docs/13-risks-open-questions.md"
       ],
       "_note_value_change": "measured by 38320575157 (green on all ten definitions: the spread scene prints this digest natively, under bare V8, in Chromium on three architectures and in Safari/JavaScriptCore)"
     }

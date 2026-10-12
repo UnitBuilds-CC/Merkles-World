@@ -138,6 +138,17 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
         "the boot must raster the scene:
 {output}"
     );
+    // And under a ceiling, which is the renderer workstream's budget pass with a caller: the line must
+    // report both what was sacrificed and what survived of the surface, because the whole point of the
+    // pass is that the shortfall is a number rather than a black pixel.
+    assert!(
+        output.contains("scene budget")
+            && output.contains("pixels drawn")
+            && output.contains("left undrawn")
+            && output.contains("hits kept"),
+        "the boot must draw the frame under a stated ceiling and report the cut:
+{output}"
+    );
     // The two culled paths must be reported as different measurements, because that difference is the
     // demo's own evidence for ADR-024: a scene of one compact object has a tight single bound and nothing
     // for a hierarchy to do, so the spread objects are what make the columns disagree. Pinned to the line
