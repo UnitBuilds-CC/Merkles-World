@@ -246,6 +246,19 @@ radius 0.4, two arrangements of the same counts:
 | line | 8 | 4.60 | 291,164 | 71.4% | 98,280 | 69,122 | 29.7% |
 | line | 32 | 19.00 | 287,112 | 0.0% | 1,268,568 | 784,424 | **38.2%** |
 | line | 128 | 76.60 | 287,112 | 0.0% | 5,134,680 | 2,757,440 | **46.3%** |
+| scatter, authored order | 32 | 33.11 | 284,992 | 0.0% | 1,655,892 | 1,403,902 | 15.2% |
+| scatter, median split | 32 | 22.98 | 284,992 | 0.0% | 1,655,892 | 892,554 | **46.1%** |
+| scatter, authored order | 128 | 138.01 | 284,800 | 0.0% | 6,474,195 | 5,150,135 | 20.5% |
+| scatter, median split | 128 | 84.69 | 284,800 | 0.0% | 6,474,195 | 2,961,586 | **54.3%** |
+
+**The last four rows are a build decision, not an algorithm one.** Same scattered spheres, same camera,
+same picture, same steps, same unpruned node visits — only the order the leaves were emitted in differs,
+and the median split turns 15.2% into 46.1% at 32 and 20.5% into 54.3% at 128: **2.6× to 3.0× more of the
+work removed by nothing but tree shape**. It also tightens the root bound as a side effect (r 138.0 to
+84.7), because covering two spheres by midpoint-and-max is order-dependent — so a tree shape is looseness
+as well as traversal, and both are bought at build time. The safe place to spend that is `assetc`'s
+lowering of plain unions, where commutativity of `min` makes reordering exactly semantics-preserving;
+under `subtract` operand order *is* meaning, so the rule must be per kind and never a general sort.
 
 Two layers, two very different failure modes. **A single bound per ray** is the `Rays skipped` column: it
 proves 99.9% of rays empty on a compact scene and exactly **0.0%** on the same 32 or 128 spheres laid
