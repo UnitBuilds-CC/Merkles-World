@@ -402,6 +402,44 @@ fn ray_charge(camera: &Camera) -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget(pub u64);
 
+/// The order a [`render_bnb_budget`] walk visits pixels in, which decides *where* a ceiling bites.
+///
+/// Not a cosmetic choice: `budget_probe` measures that at one quarter of the work the tile-major walk keeps
+/// 0% of the scene's surface, because it starts in the top-left corner and that is sky, while centre-out
+/// keeps the subject and spends the cut on the edges. Same ceiling, same bound, same march, different
+/// frame - which is the sense in which ordering is policy here, and why it is an argument rather than an
+/// internal detail of one function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scan {
+    /// Eight-by-eight blocks, top-left block first, rows within a block. The order that spends a ceiling on
+    /// whatever happens to sit at the top left.
+    TileMajor,
+    /// Eight-by-eight blocks ordered by squared tile distance from the frame's centre, ties broken by row
+    /// then column so the sequence is a total order and identical on every machine. Integer arithmetic on
+    /// purpose: a float here would make the cut position depend on how a backend rounds a square root.
+    CentreOut,
+}
+
+/// Every tile index in the requested order. `CentreOut` sorts on `(dy*dy + dx*dx, ty, tx)` in integers.
+fn tile_order(camera: &Camera, scan: Scan) -> Vec<u32> {
+    let tiles_x = camera.width.div_ceil(TILE);
+    let tiles_y = camera.height.div_ceil(TILE);
+    let mut tiles: Vec<u32> = (0..tiles_x * tiles_y).collect();
+    if scan == Scan::CentreOut {
+        // The centre doubled to keep half-tiles exact: twice_cx = tiles_x - 1.
+        let twice_cx = tiles_x as i64 - 1;
+        let twice_cy = tiles_y as i64 - 1;
+        tiles.sort_unstable_by_key(|&tile| {
+            let tx = (tile % tiles_x) as i64;
+            let ty = (tile / tiles_x) as i64;
+            let dx = 2 * tx - twice_cx;
+            let dy = 2 * ty - twice_cy;
+            (dx * dx + dy * dy, ty, tx)
+        });
+    }
+    tiles
+}
+
 /// Pixels per tile side, for [`render_bnb_budget`]. Eight is a choice rather than a law - it is the
 /// smallest block that still amortises a bound test - and `tests/budget.rs` pins the *behaviour* (whole
 /// tiles cut, prefixes identical) instead of the number, so a different tile on a GPU is not a failure.
@@ -433,6 +471,19 @@ fn write_pixel(frame: &mut Frame, index: usize, rgb: &[u8; 3]) {
 /// notice. The bound table is built per call here; the unbudgeted path has `render_bnb_with` for callers
 /// that hoist it, and a budget pass is expected to want the ceiling more than the allocation.
 pub fn render_bnb_budget(tree: &Tree, camera: &Camera, budget: Budget, frame: &mut Frame) -> Stats {
+    render_bnb_budget_in(tree, camera, budget, Scan::TileMajor, frame)
+}
+
+/// The same ceiling with the visit order chosen by the caller, because [`Scan`] is what decides which
+/// part of the frame the cut falls on. Every property documented on [`render_bnb_budget`] holds for
+/// both orders; only the set of sacrificed pixels differs.
+pub fn render_bnb_budget_in(
+    tree: &Tree,
+    camera: &Camera,
+    budget: Budget,
+    scan: Scan,
+    frame: &mut Frame,
+) -> Stats {
     let bounds = crate::cull::scene_bounds(tree);
     let enclosure = bounds.enclosure_of(crate::ROOT as usize);
     let forward = unit(camera.forward);
@@ -458,9 +509,10 @@ pub fn render_bnb_budget(tree: &Tree, camera: &Camera, budget: Budget, frame: &m
     let mut not_drawn = 0u32;
 
     let tiles_x = camera.width.div_ceil(TILE);
-    let tiles_y = camera.height.div_ceil(TILE);
-    'tiles: for ty in 0..tiles_y {
-        for tx in 0..tiles_x {
+    'tiles: for tile in tile_order(camera, scan) {
+        let tx = tile % tiles_x;
+        let ty = tile / tiles_x;
+        {
             for py in ty * TILE..((ty + 1) * TILE).min(camera.height) {
                 for px in tx * TILE..((tx + 1) * TILE).min(camera.width) {
                     if spent + charge > budget.0 {

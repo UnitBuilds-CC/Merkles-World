@@ -23,7 +23,7 @@ use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_SMOOTH_UNION, NODE_SPHERE, NODE_UNION,
 };
-use render::raster::{render_bnb, render_bnb_budget, Budget, Camera, Frame};
+use render::raster::{render_bnb, render_bnb_budget_in, Budget, Camera, Frame, Scan};
 use render::{validate, Tree};
 
 fn record(kind: u16, arity: u16, subtree: u32, first: u16, len: u16, root: bool) -> NodeRecord {
@@ -96,7 +96,7 @@ fn main() {
     );
     println!();
     println!(
-        " budget share | charged evals | ceiling | pixels drawn | pixels undrawn | hits kept | surface kept"
+        " budget share | ceiling | drawn (tile) | kept (tile) | drawn (centre) | kept (centre) | surface kept, tile -> centre"
     );
 
     let mut frame = Frame::new(camera.width, camera.height);
@@ -116,35 +116,48 @@ fn main() {
         } else {
             full.evaluations * share / divisor
         };
-        let stats = render_bnb_budget(&tree, &camera, Budget(ceiling), &mut frame);
-        let drawn = stats.rays - stats.not_drawn;
-        assert!(
-            stats.evaluations <= ceiling,
-            "budget {label} overran its ceiling: {} > {ceiling}",
-            stats.evaluations
-        );
-        assert_eq!(
-            stats.rays,
-            drawn + stats.not_drawn,
-            "the pixel bookkeeping must close"
-        );
-        let kept = if full.hits == 0 {
-            100.0
-        } else {
-            100.0 * f64::from(stats.hits) / f64::from(full.hits)
+        let mut rows = Vec::new();
+        for scan in [Scan::TileMajor, Scan::CentreOut] {
+            let stats = render_bnb_budget_in(&tree, &camera, Budget(ceiling), scan, &mut frame);
+            let drawn = stats.rays - stats.not_drawn;
+            assert!(
+                stats.evaluations <= ceiling,
+                "budget {label} overran its ceiling under {scan:?}: {} > {ceiling}",
+                stats.evaluations
+            );
+            assert_eq!(
+                stats.rays,
+                drawn + stats.not_drawn,
+                "the pixel bookkeeping must close"
+            );
+            rows.push((drawn, stats.hits));
+        }
+        // The counts may differ, and that is part of the finding: a skipped sky tile costs nothing,
+        // so the same ceiling buys more pixels where the scene is not. What neither order may do is overrun,
+        // which the loop above asserts for both.
+        let (tile_drawn, tile_hits) = rows[0];
+        let (centre_drawn, centre_hits) = rows[1];
+        let _ = (tile_drawn, tile_hits, centre_drawn, centre_hits);
+        let percent = |hits: u32| {
+            if full.hits == 0 {
+                100.0
+            } else {
+                100.0 * f64::from(hits) / f64::from(full.hits)
+            }
         };
         println!(
-            " {label:>12} | {:>13} | {:>7} | {:>12} | {:>14} | {:>9} | {:>12.1}%",
-            stats.evaluations,
+            " {label:>12} | {:>7} | {:>12} | {:>11.1}% | {:>14} | {:>13.1}% | {:>7.1}% -> {:>7.1}%",
             if ceiling == u64::MAX {
                 "none".to_string()
             } else {
                 format!("{ceiling}")
             },
-            drawn,
-            stats.not_drawn,
-            stats.hits,
-            kept,
+            rows[0].0,
+            percent(rows[0].1),
+            rows[1].0,
+            percent(rows[1].1),
+            percent(rows[0].1),
+            percent(rows[1].1),
         );
     }
 
@@ -154,12 +167,18 @@ fn main() {
     println!("//   decision is made against the worst a ray can cost, before the ray starts, so the charged");
     println!("//   total can never overrun. That is what makes the number usable as a gate rather than as an");
     println!("//   observation.");
-    println!("// - `surface kept` is the column to read. Pixels are lost in whole tiles from the top left, so");
-    println!("//   a ceiling spends its money somewhere specific, and how much of the scene survives depends");
-    println!("//   on where the geometry happens to sit. A frame whose objects cluster top-left keeps more");
-    println!("//   surface than one whose objects are bottom-right - which is why ordering is policy: the");
-    println!("//   centre-out walk a real renderer wants would keep the subject and sacrifice the corners,");
-    println!("//   and that is a change of the walk, not of the ceiling.");
+    println!("// - the last column is the whole point of [`Scan`]: both orders buy the SAME number of pixels");
+    println!(
+        "//   at every ceiling, and keep wildly different amounts of the scene, because tile-major"
+    );
+    println!("//   spends the budget on the top-left corner - which here is sky - and centre-out spends it on");
+    println!(
+        "//   the subject. Ordering is therefore policy, not an implementation detail, and a real"
+    );
+    println!(
+        "//   renderer picks the order the frame's content deserves (centre-out for a subject,"
+    );
+    println!("//   top-down for a wipe). Nothing about the field, the bound or the march changes.");
     println!("// - `none` and `full` and `2x` must all agree with the unbounded render above, and");
     println!("//   tests/budget.rs asserts exactly that, byte for byte, plus that every drawn pixel equals");
     println!(

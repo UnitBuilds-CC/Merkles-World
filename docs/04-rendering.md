@@ -376,12 +376,32 @@ evaluations and finds surface on 1,000 of 3,072 rays):
 | full | 182,048 | 182,144 | 3,068 | 4 | 100.0% |
 | 2x | 182,144 | - | 3,072 | 0 | 100.0% |
 
-Two readings matter. **The shape of the loss is not linear in pixels**: at a quarter of the work nothing
-visible survives, because the walk is tile-major from the top left and the top-left tiles are sky; at
-three quarters the frame loses 499 pixels and **every hit**, which is a 25% cut in charged work for no
-visible change. So a budget is a statement about the frame's composition, not only about its cost, and
-that is why the *order* is policy: the walk a real renderer would want is centre-out, keeping the subject
-and sacrificing the corners. **The `full` row is not clean**, and the reason is the conservative charge:
+Two readings matter, and the second one is now a measurement rather than an argument.
+
+**The shape of the loss is not linear in pixels**: at a quarter of the work nothing visible survives,
+because the walk is tile-major from the top left and the top-left tiles are sky; at three quarters the
+frame loses 499 pixels and **every hit**, which is a 25% cut in charged work for no visible change.
+
+**So the visit order is the cheaper lever, and `render::raster::Scan` makes it an argument.** The same
+probe run, same ceilings, same field, same bound, same march - tile-major against centre-out (tiles sorted
+by integer squared distance from the frame's centre, ties by row then column so the sequence is a total
+order and cannot depend on a rounding):
+
+| Ceiling | Pixels drawn, tile-major | Surface kept | Pixels drawn, centre-out | Surface kept |
+|---|---|---|---|---|
+| 1/16 | 203 | 0.0% | 352 | **25.0%** |
+| 1/8 | 322 | 0.0% | 789 | **59.0%** |
+| 1/4 | 673 | 0.0% | 1,147 | **72.6%** |
+| 1/2 | 1,511 | 36.4% | 1,840 | **97.0%** |
+| 3/4 | 2,573 | 100.0% | 2,389 | 100.0% |
+
+At a sixteenth of the frame's cost, ordering is the difference between an empty image and a quarter of the
+scene. Centre-out also buys *more* pixels for the same money at the low end - 352 against 203 - because it
+reaches the cheap, provably-empty tiles earlier, and a skipped tile costs nothing to decide. That is the
+honest shape of the finding: a ceiling is a statement about the frame's composition as much as about its
+cost, so the order a renderer walks is a content decision, not an implementation detail. Tile-major stays
+the default because it is what a top-down progressive refinement wants, and `render_bnb_budget` is
+documented as `Scan::TileMajor` rather than as "the" order. **The `full` row is not clean**, and the reason is the conservative charge:
 a ceiling equal to the measured total still leaves four pixels undrawn, because the last rays reserved
 `max_steps + 1` and spent less. `tests/budget.rs` pins the useful half of that - an unlimited budget is
 the unbudgeted frame byte for byte, every drawn pixel is the pixel the hierarchy render drew, a larger

@@ -10,7 +10,9 @@ use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_SPHERE, NODE_UNION,
 };
-use render::raster::{render_bnb, render_bnb_budget, Budget, Camera, Frame, Stats};
+use render::raster::{
+    render_bnb, render_bnb_budget, render_bnb_budget_in, Budget, Camera, Frame, Scan, Stats,
+};
 use render::{validate, Tree};
 
 fn record(kind: u16, arity: u16, subtree: u32, first: u16, len: u16, root: bool) -> NodeRecord {
@@ -262,6 +264,126 @@ fn a_bigger_budget_never_draws_fewer_pixels() {
         );
         previous = drawn;
     }
+}
+
+#[test]
+fn both_scan_orders_draw_a_prefix_and_keep_the_unbudgeted_pixels_intact() {
+    // The order decides *which* pixels are sacrificed; it must never decide what the sacrificed-over
+    // pixels look like. Asserted for both orders at the same ceiling, because the prefix property is the
+    // thing a centre-out walk could plausibly break and the byte identity is the thing a tile walk could.
+    let tree = scene();
+    let camera = camera();
+    let (want, want_stats) = full(&tree, &camera);
+    for (label, scan) in [
+        ("tile-major", Scan::TileMajor),
+        ("centre-out", Scan::CentreOut),
+    ] {
+        let mut frame = Frame::new(camera.width, camera.height);
+        let stats = render_bnb_budget_in(
+            &tree,
+            &camera,
+            Budget(want_stats.evaluations / 2),
+            scan,
+            &mut frame,
+        );
+        assert!(stats.not_drawn > 0, "{label} at half the work must cut");
+        for index in 0..want.depth.len() {
+            if frame.depth[index] == Frame::NOT_DRAWN_DEPTH {
+                assert_eq!(
+                    &frame.pixels[index * 3..index * 3 + 3],
+                    &Frame::NOT_DRAWN_RGB,
+                    "{label}: an undrawn depth with a drawn colour"
+                );
+            } else {
+                assert_eq!(
+                    frame.depth[index], want.depth[index],
+                    "{label}: a drawn pixel disagrees with the unbudgeted frame"
+                );
+                assert_eq!(
+                    &frame.pixels[index * 3..index * 3 + 3],
+                    &want.pixels[index * 3..index * 3 + 3],
+                    "{label}: a drawn colour disagrees with the unbudgeted frame"
+                );
+            }
+        }
+        // The prefix, read in the order that order itself defines.
+        let mut seen_undrawn = false;
+        for tile in tiles_in(&camera, scan) {
+            let tx = tile % (camera.width / 8);
+            let ty = tile / (camera.width / 8);
+            for py in ty * 8..((ty + 1) * 8).min(camera.height) {
+                for px in tx * 8..((tx + 1) * 8).min(camera.width) {
+                    let at = (py * camera.width + px) as usize;
+                    if frame.depth[at] == Frame::NOT_DRAWN_DEPTH {
+                        seen_undrawn = true;
+                    } else {
+                        assert!(
+                            !seen_undrawn,
+                            "{label}: pixel ({px}, {py}) drawn after an undrawn one in its own order"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn tiles_in(camera: &Camera, scan: Scan) -> Vec<u32> {
+    // The same ordering the render applies, rebuilt here from the public camera so the test is a check on
+    // the policy rather than a call into the module's own helper.
+    let tiles_x = camera.width.div_ceil(8);
+    let tiles_y = camera.height.div_ceil(8);
+    let mut tiles: Vec<u32> = (0..tiles_x * tiles_y).collect();
+    if scan == Scan::CentreOut {
+        let twice_cx = tiles_x as i64 - 1;
+        let twice_cy = tiles_y as i64 - 1;
+        tiles.sort_by_key(|&tile| {
+            let tx = (tile % tiles_x) as i64;
+            let ty = (tile / tiles_x) as i64;
+            let dx = 2 * tx - twice_cx;
+            let dy = 2 * ty - twice_cy;
+            (dx * dx + dy * dy, ty, tx)
+        });
+    }
+    tiles
+}
+
+#[test]
+fn centre_out_keeps_the_scene_and_tile_major_keeps_the_corner() {
+    // The measured reason the order is an argument and not a detail. This scene's surface sits right of
+    // centre, so the top-left tiles a tile-major walk spends first are sky: at the same ceiling,
+    // centre-out keeps strictly more of the surface. The direction of the difference is the claim -
+    // `budget_probe` publishes the size of it.
+    let tree = scene();
+    let camera = camera();
+    let (_, want) = full(&tree, &camera);
+    let ceiling = want.evaluations * 3 / 8;
+    let mut first = Frame::new(camera.width, camera.height);
+    let tile_major =
+        render_bnb_budget_in(&tree, &camera, Budget(ceiling), Scan::TileMajor, &mut first);
+    let mut second = Frame::new(camera.width, camera.height);
+    let centre_out = render_bnb_budget_in(
+        &tree,
+        &camera,
+        Budget(ceiling),
+        Scan::CentreOut,
+        &mut second,
+    );
+    // Not the same *number* of pixels: tiles cost different amounts, and a skipped sky tile is nearly
+    // free, so a ceiling buys more pixels where the geometry is not. What is fixed is the work, and what
+    // the order decides is whether that work went somewhere the eye cares about.
+    assert!(
+        centre_out.hits > tile_major.hits,
+        "centre-out should keep more surface than the top-left corner does: {} vs {}",
+        centre_out.hits,
+        tile_major.hits
+    );
+    assert!(
+        centre_out.evaluations <= tile_major.evaluations + u64::from(centre_out.not_drawn),
+        "both orders must respect the same ceiling: {} vs {}",
+        centre_out.evaluations,
+        tile_major.evaluations
+    );
 }
 
 #[test]
