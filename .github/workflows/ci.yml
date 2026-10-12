@@ -290,6 +290,9 @@ jobs:
             --virtual-time-budget=30000 --dump-dom http://127.0.0.1:8137/ > dom.html
           page=$(grep -o 'mlws-sha256=[0-9a-f]\{64\}' dom.html | head -1 | cut -d= -f2)
           test -n "$page" || { echo "the page printed no digest"; sed -n '1,40p' dom.html; exit 1; }
+          # Which imported functions the shim had to refuse rather than implement. Informational, and
+          # deliberately not a pass/fail: this is how a reader sees what the module really asks a host.
+          echo "stubs called: $(grep -o 'mlws-stubs=[^ ]*' dom.html | head -1 | cut -d= -f2)"
           # macOS ships `shasum`, Linux and Git-Bash-on-Windows ship `sha256sum`; the same file, either way.
           if command -v sha256sum >/dev/null 2>&1; then
             expected=$(sha256sum host.txt | cut -d' ' -f1)

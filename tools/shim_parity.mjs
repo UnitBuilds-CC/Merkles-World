@@ -29,12 +29,21 @@ const module = await WebAssembly.compile(bytes);
 // instance - so the reference is filled in one step after.
 let instance = null;
 const shim = buildWasiShim(() => instance.exports.memory);
-instance = await WebAssembly.instantiate(module, importObject(shim));
+const host = importObject(module, shim);
+instance = await WebAssembly.instantiate(module, host.imports);
 
 try {
   instance.exports._start();
 } catch (error) {
   if (!String(error?.message).startsWith("proc_exit(")) throw error;
+}
+
+// On stderr, never stdout: stdout is the thing being diffed, and a report of what the host was asked for
+// must not be able to make the two runs differ. A name here means the module imported a function this
+// file refuses rather than implements - harmless if the output still matches, and worth seeing anyway.
+const stubs = host.stubCalls();
+if (stubs.length > 0) {
+  process.stderr.write(`shim stubs called: ${stubs.join(", ")}\n`);
 }
 
 process.stdout.write(shim.text());

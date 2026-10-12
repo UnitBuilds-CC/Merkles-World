@@ -4,8 +4,9 @@
 //
 // Why hand-write a shim at all. `node:wasi` proves the module runs under V8 in a CLI host, which is what
 // CI's `roots executed in WASM` job measures. A browser has no WASI, so the only way to ask "do these
-// roots survive a browser engine" is to provide the handful of host functions this module actually
-// imports - 12 of them, no clocks and no randomness in the release build.
+// roots survive a browser engine" is to provide the host functions this module actually imports - which
+// is a set derived from the module, not remembered here, because Rust's std grows the list between
+// toolchains.
 //
 // Deliberately minimal, and the minimality is the claim: the boot writes to stdout and reads nothing, so
 // `fd_read`, `path_open` and the prestat probes answer errors rather than pretending to have a
@@ -104,6 +105,18 @@ export function buildWasiShim(memoryOf, options = {}) {
     path_open: () => ENOENT,
     fd_prestat_get: () => EBADF,
     fd_prestat_dir_name: () => EBADF,
+    fd_fdstat_get: (fd, statPtr) => {
+      // 40-byte `wasi_fdstat`: dev, ino, filetype (+7 padding), rights, rights_inheriting. Rust's std
+      // asks this about stdout before it decides how to buffer, and CI's toolchain builds a module that
+      // imports it while a local one does not - so answering EBADF here would be a silent behaviour
+      // change between machines rather than a refusal. A character device is the truthful answer for a
+      // shim that collects bytes.
+      if (fd !== 1 && fd !== 2) return EBADF;
+      const words = view32();
+      for (let i = 0; i < 10; i += 1) words[statPtr / 4 + i] = 0;
+      words[statPtr / 4 + 4] = 2; // __WASI_FILETYPE_CHARACTER_DEVICE
+      return 0;
+    },
     proc_exit: (code) => {
       throw new Error(`proc_exit(${code})`);
     },
@@ -117,7 +130,35 @@ export function buildWasiShim(memoryOf, options = {}) {
   };
 }
 
-/** The import object shape WebAssembly.instantiate expects for a wasip1 command. */
-export function importObject(shim) {
-  return { wasi_snapshot_preview1: shim.module };
+/**
+ * The import object a module actually needs, derived from the module rather than from a list kept here.
+ *
+ * Why derived: the first version of this file hand-listed the twelve functions a local build imported,
+ * and CI's toolchain produced a module importing a thirteenth (`fd_fdstat_get`), so a hardcoded list
+ * made the harness fail to link on the machine that was supposed to be measuring the code rather than
+ * the shim. Anything outside the explicit table above is refused with EBADF and **recorded**, because a
+ * stub that gets called during a run whose output still matches the native boot is information, not a
+ * pass - and printing it is how the next reader finds out which host functions this program really needs.
+ */
+export function importObject(module, shim) {
+  const stubbed = new Set();
+  const table = { ...shim.module };
+  for (const entry of WebAssembly.Module.imports(module)) {
+    if (entry.module !== "wasi_snapshot_preview1") {
+      // Not shimmed by design: a module importing something else is running a different program, and
+      // WebAssembly.instantiate will say so loudly rather than quietly pretending.
+      continue;
+    }
+    if (table[entry.name] === undefined) {
+      table[entry.name] = () => {
+        stubbed.add(entry.name);
+        return EBADF;
+      };
+    }
+  }
+  return {
+    imports: { wasi_snapshot_preview1: table },
+    /** Names the module imported but this file does not implement, that the run then called. */
+    stubCalls: () => [...stubbed].sort(),
+  };
 }

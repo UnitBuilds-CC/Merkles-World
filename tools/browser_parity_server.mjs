@@ -63,7 +63,11 @@ const page = `<!doctype html>
         let instance = null;
         const shim = buildWasiShim(() => instance.exports.memory);
         const compiled = await WebAssembly.compile(bytes);
-        instance = await WebAssembly.instantiate(compiled, importObject(shim));
+        // Imports come from the module, not from a list kept in this file: CI's toolchain builds a module
+        // that imports fd_fdstat_get and a local one does not, so a hand-list breaks the harness on the
+        // machine that was supposed to be measuring the boot rather than the shim.
+        const host = importObject(compiled, shim);
+        instance = await WebAssembly.instantiate(compiled, host.imports);
         let exit = "returned normally";
         try {
           instance.exports._start();
@@ -87,7 +91,9 @@ const page = `<!doctype html>
           text,
         };
         document.getElementById("meta").textContent =
-          "mlws-sha256=" + sha256 + " mlws-lines=" + window.__mlws.lines;
+          "mlws-sha256=" + sha256 +
+          " mlws-lines=" + window.__mlws.lines +
+          " mlws-stubs=" + (host.stubCalls().join(",") || "none");
         status.textContent = "done - " + window.__mlws.lines + " lines, " + exit;
       } catch (error) {
         window.__mlws = { ok: false, error: String(error) };
