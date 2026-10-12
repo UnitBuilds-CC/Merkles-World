@@ -100,22 +100,20 @@ fn main() {
     );
 
     let mut frame = Frame::new(camera.width, camera.height);
-    for (label, share, divisor) in [
-        ("none", 0u64, 0u64),
-        ("1/16", 1, 16),
-        ("1/8", 1, 8),
-        ("1/4", 1, 4),
-        ("1/2", 1, 2),
-        ("3/4", 3, 4),
-        ("7/8", 7, 8),
-        ("full", 1, 1),
-        ("2x", 2, 1),
+    // The ceilings are written out as expressions rather than computed from a share/divisor pair: a
+    // division whose guard is `if divisor == 0` is precisely the "manual checked division" CI's newer
+    // clippy rejects, and the constant form is easier to read anyway.
+    for (label, ceiling) in [
+        ("none", u64::MAX),
+        ("1/16", full.evaluations / 16),
+        ("1/8", full.evaluations / 8),
+        ("1/4", full.evaluations / 4),
+        ("1/2", full.evaluations / 2),
+        ("3/4", full.evaluations * 3 / 4),
+        ("7/8", full.evaluations * 7 / 8),
+        ("full", full.evaluations),
+        ("2x", full.evaluations * 2),
     ] {
-        let ceiling = if divisor == 0 {
-            u64::MAX
-        } else {
-            full.evaluations * share / divisor
-        };
         let mut rows = Vec::new();
         for scan in [Scan::TileMajor, Scan::CentreOut] {
             let stats = render_bnb_budget_in(&tree, &camera, Budget(ceiling), scan, &mut frame);
