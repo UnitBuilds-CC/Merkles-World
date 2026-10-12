@@ -1,0 +1,17 @@
+[package]
+name = "gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "docs/04's WGSL half: the A-07 master interpreter on a device, checked against the CPU reference (S1, S4, S6, R1)"
+
+[dependencies]
+contracts = { path = "../../contracts" }
+render = { path = "../render" }
+wgpu = "27"
+pollster = "0.4"
+
+[lints]
+workspace = true

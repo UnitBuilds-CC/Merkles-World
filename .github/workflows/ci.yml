@@ -105,6 +105,12 @@ jobs:
       - name: Raster probe and node-cost sweep (informational)
         run: cargo run --release --example raster_probe -p render
 
+      # Spike S9 (what does wgpu cost) and the S6 question hiding behind it (is there any device in a
+      # runner at all). Printed, never asserted: a CPU rasteriser in a CI log can validate WGSL against
+      # the CPU reference, which is a real gate, but it cannot measure a frame budget, which is not.
+      - name: GPU adapter probe (informational)
+        run: cargo run -p gpu
+
       # The engine asserts docs/03's published vectors itself, so running it is a gate check rather
       # than a smoke test: a wrong digest anywhere in slab -> commit -> read -> march exits non-zero.
       - name: Engine boots and reproduces the published vectors
