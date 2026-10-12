@@ -10,24 +10,38 @@
 //!   `d3d12`, `metal`, `glow`, `gpu-alloc` and the `windows` crate;
 //! - a cold build of the dependency graph took **132 s**, and `target/debug` grew from 1,160 MB to
 //!   1,904 MB (+744 MB) for a binary that does nothing yet but enumerate;
-//! - `deny.toml`'s allow list does not cover everything the graph brings. Read with cargo-deny's own
-//!   rule - an `OR` is satisfied by any one allowed operand, an `AND` needs all of them - the gaps are
-//!   `hexf-parse` (**CC0-1.0**, only, via `naga`), `khronos-egl` and `rustc-hash` (written as
-//!   `MIT/Apache-2.0`, a slash form the SPDX expression parser does not read as an `OR`), and
-//!   `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`), already in the graph and already waived.
-//!   None of those is copyleft; all of them are a licence-policy widening, which is OQ-43's decision
-//!   and not this branch's. CI's `cargo-deny` job is the authority on what it actually rejects, which
-//!   is why this branch exists as a pull request rather than a merge.
+//! - `deny.toml`'s allow list does not cover everything the graph brings - but the guess made here was
+//!   wrong and CI corrected it. The job's whole licence finding was **one rejection: `hexf-parse`,
+//!   `CC0-1.0`, via `naga`**. The slash-form licences (`khronos-egl`, `rustc-hash`, written
+//!   `MIT/Apache-2.0`) cargo-deny reads as alternatives, so they pass; only the public-domain
+//!   dedication is outside the list. The second failure was not a licence at all: **`paste` is flagged
+//!   unmaintained**, an advisory rather than a policy gap, and it is the same category of thing as
+//!   BLAKE3's SIMD build - a transitive crate whose maintenance status is somebody's call, not this
+//!   branch's. Three duplicate-version warnings (`hashbrown` x3, `foldhash`, `syn`) and a
+//!   future-incompat note about `block v0.1.6` came along too.
 //!
-//! **And the finding that changes the roadmap:** this machine exposes a `Microsoft Basic Render Driver`
-//! adapter with `device_type: Cpu` alongside the Intel UHD and NVIDIA MX250, and `request_device`
-//! succeeds (on Vulkan here). GitHub's Windows runners have no GPU, so the hypothesis worth testing - and
-//! the reason this is a pull request rather than a paragraph - is that the same software rasteriser shows
-//! up there, which would mean **S6's headless WGSL check and a GPU-versus-CPU agreement test can run in CI
-//! at all.** They have been written off as needing hardware the harness does not have. If the runner's
-//! adapter list comes back empty, S6 needs a self-hosted machine and this branch says so instead of
-//! pretending otherwise. Either way it does not make R1 measurable there: a CPU rasteriser is precisely
-//! the thing that cannot answer a frame-budget question, and a number from it must never be quoted as one.
+//! **The hypothesis about CI came back wrong in one place and right in two, which is the finding.** PR
+//! #1 ran this probe on all three gate runners (`38258220750`):
+//!
+//! - **x86-64 Windows** - adapters present, `request_device` **opened on Dx12** (no GPU on a shared
+//!   runner, so that is a software device);
+//! - **ARM64 macOS** - one adapter, `Apple Paravirtual device` on **Metal**, and it **opened**;
+//! - **x86-64 Linux** - **no adapters at all**: the probe printed its own refusal, "no device means no
+//!   frame curve".
+//!
+//! So a WGSL compute program can be run against the CPU reference in CI on two of the three
+//! architectures, which is spike S6's missing harness - it was being written off as impossible without
+//! hardware. It cannot on the Linux runner, so an agreement check there has to skip, and a skip must
+//! never be reported as a passing gate. None of it makes R1 measurable: a paravirtual or software
+//! device is the wrong instrument for a frame budget, as is this machine's GeForce MX250, which is below
+//! docs/04's "mid-range dGPU" rather than an example of it.
+//!
+//! And what landing `wgpu` would cost is in the list above, measured rather than estimated. The
+//! `cargo-deny` job on this branch is what replaced the guesswork: it failed, with one licence
+//! rejection and one unmaintained-crate advisory, and both are policy for OQ-43 and ADR-025 to absorb -
+//! which is why this is a pull request with a red job on purpose rather than a merge with the list
+//! quietly widened.
+
 //!
 //! Limits matter for the shape of the march, so they are printed rather than assumed:
 //! `max_compute_workgroup_size_x` is 1,024 on every adapter here except the NVIDIA one under Vulkan
