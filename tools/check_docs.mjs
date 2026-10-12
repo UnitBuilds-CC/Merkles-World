@@ -234,6 +234,64 @@ for (const [f, t] of text) {
   if (!t.includes("**Status:**")) fail(f, 1, "numbered design doc has no **Status:** line");
 }
 
+// ---------- 7. published evidence cannot drift from the docs that cite it ----------
+// docs/evidence.json holds the numbers the documentation publishes as *measured* — a whole-output hash, an
+// asset digest — and this makes each one a rule rather than a habit. The motivation is concrete: the boot's
+// output digest was quoted in five places and went stale the moment the raster line grew, because nothing
+// checked the prose against the artifact. CI carries the other half (it fails when the measured value stops
+// matching the manifest), so a green run means the published number is the measured one.
+//
+// Mechanical only, in keeping with the rule at the top of this file: a claim's value must be a full 64-hex
+// digest, each file listed as citing it must contain that digest's prefix, and **a line that cites a
+// superseded digest must also cite the current digest on that same line**. There is deliberately no list of
+// acceptable "history" words: a vocabulary rule is prose contorted to satisfy a checker, and one that any
+// sentence could satisfy by including a magic word is not a check. Requiring the current value beside the
+// old one is the property actually wanted - nobody reads a stale number without meeting the live one.
+let evidence = null;
+try {
+  evidence = JSON.parse(readFileSync(join(repoRoot, "docs", "evidence.json"), "utf8"));
+} catch (error) {
+  fail(join(repoRoot, "docs", "evidence.json"), 1, `unreadable: ${error.message}`);
+}
+if (evidence) {
+  const claims = evidence.claims ?? {};
+  for (const [name, claim] of Object.entries(claims)) {
+    if (typeof claim?.value !== "string" || !/^[0-9a-f]{64}$/.test(claim.value)) {
+      fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: value must be a 64-character lowercase hex digest`);
+      continue;
+    }
+    if (!Array.isArray(claim.cited_in) || claim.cited_in.length === 0) {
+      fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: cited_in must list at least one doc`);
+      continue;
+    }
+    const prefix = claim.value.slice(0, 16);
+    for (const doc of claim.cited_in) {
+      const entry = [...text.entries()].find(([path]) => path === join(repoRoot, doc));
+      if (!entry) {
+        fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: cited_in names ${doc}, which is not a markdown file in this repo`);
+        continue;
+      }
+      if (!entry[1].includes(prefix)) {
+        fail(entry[0], 1, `${name}: ${doc} is declared as citing ${prefix}… but does not contain it — the citation moved, changed or was dropped`);
+      }
+    }
+    for (const past of claim.superseded ?? []) {
+      if (typeof past?.value !== "string" || !/^[0-9a-f]{64}$/.test(past.value)) {
+        fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: a superseded value is not a 64-character hex digest`);
+        continue;
+      }
+      const stale = past.value.slice(0, 16);
+      for (const [f, t] of text) {
+        t.split(/\r?\n/).forEach((line, i) => {
+          if (!line.includes(stale)) return;
+          if (line.includes(prefix)) return;
+          fail(f, i + 1, `${name}: this line cites the superseded digest ${stale}… without the current ${prefix}… beside it`);
+        });
+      }
+    }
+  }
+}
+
 // ---------- report ----------
 console.log(`docs check: ${files.length} files, ${linksChecked} local links, ` +
   `${defined.OQ.size} OQ + ${defined.SPEC.size} SPEC + ${defined.ADR.size} ADR + ` +

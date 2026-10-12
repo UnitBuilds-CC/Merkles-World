@@ -327,6 +327,16 @@ jobs:
             exit 1
           fi
           echo "browser parity ok on ${{ matrix.label }}"
+          # The published-evidence half. docs/evidence.json carries the digest the docs cite as
+          # measured; if the boot's output moves without the manifest moving with it, this fails here
+          # rather than leaving five prose citations quietly quoting a stale number.
+          declared=$(node -e "console.log(JSON.parse(require('fs').readFileSync('docs/evidence.json','utf8')).claims.boot_output_sha256.value)")
+          if [ "$declared" != "$expected" ]; then
+            echo "docs/evidence.json says the boot output hashes to $declared; this run measured $expected" >&2
+            echo "either the boot's printed output changed (update the manifest and the citations) or the measurement moved" >&2
+            exit 1
+          fi
+          echo "evidence manifest agrees with the measured boot digest"
 
   # Gate P1.5's other browser question: not "can a page host this module" (the step above answers that on
   # three architectures, all of them Chromium, i.e. V8 four times counting Node) but "does a second
