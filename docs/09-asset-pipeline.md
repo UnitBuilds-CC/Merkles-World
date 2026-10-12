@@ -42,7 +42,12 @@ parsed document:
   comment.
 - **`grammar_version` is refused at load, never hashed.** Shape files are presentation data (ADR-028,
   A-03, A-10 own what a peer must agree on); the field exists so a mismatched asset is one comparison
-  rather than a silently misinterpreted kind table.
+  rather than a silently misinterpreted kind table. `reader::from_bytes` makes that comparison before it
+  parses a single node and returns `GrammarVersionMismatch { found, expected }` - the version decides what
+  every other byte *means*, so reading on would produce a plausible tree instead of an error. The
+  comparison is exact equality against `contracts::sdf::GRAMMAR_VERSION` today, because the accepted
+  window and migration strategy are still OQ-30's; when a window exists it belongs to
+  `AssetError::SchemaVersionUnsupported` in A-09, not to a policy invented in the loader.
 
 `assetc` exists in three stages. `crates/assetc::lower` turns an authored `Shape` into the pre-order
 `NodeRecord` array and `f32` pool the envelope carries, deriving `subtree_len` from the children
@@ -63,9 +68,10 @@ the bytes to `flatc`, which reads them back with its own parser - the only verdi
 does not come from the code that wrote it. And `crates/assetc/tests/asset_round_trip.rs` feeds the
 reader a file `flatc` packed, committed as a fixture because a test cannot run a compiler it does not
 have: a reader validated only against its own writer can share a mistake, one validated against
-`flatc`'s output cannot. Refusals are tested too - short buffer, wrong identifier, an offset past the
-end, a vtable wider than this schema - because a loader that guesses at a malformed asset shows the
-player a wrong world instead of an error.
+`flatc`'s output cannot. Six refusals are tested too - a buffer too short for a header, a wrong
+identifier, a root offset past the end, a vtable that does not fit below its table, a vtable from a
+wider schema, and a container declaring another grammar version - because a loader that guesses at a
+malformed asset shows the player a wrong world instead of an error.
 
 What still keeps AS1-AS5 open: `engine <asset.bin>` boots from a file the compiler wrote - the test
 writes one with `assetc::writer` and checks the boot reports that file's own header and marches the

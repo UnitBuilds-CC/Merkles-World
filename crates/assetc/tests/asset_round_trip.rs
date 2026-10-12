@@ -13,7 +13,7 @@
 use assetc::reader::{from_bytes, ReadError, FILE_IDENTIFIER};
 use assetc::writer::to_bytes;
 use assetc::{lower, Shape};
-use contracts::sdf::{FLAG_IS_ROOT, NODE_ROUNDED_BOX};
+use contracts::sdf::{FLAG_IS_ROOT, GRAMMAR_VERSION, NODE_ROUNDED_BOX};
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -115,21 +115,55 @@ fn malformed_buffers_are_refused_not_guessed() {
 /// its table, so a vtable wide enough to reach six slots always trips the bounds check first.
 #[test]
 fn a_vtable_from_a_different_schema_is_refused() {
-    let mut buf = vec![0u8; 64];
-    buf[0..4].copy_from_slice(&24u32.to_le_bytes()); // root uoffset -> table at 24
-    buf[4..8].copy_from_slice(b"MLWS");
-    buf[8..10].copy_from_slice(&16u16.to_le_bytes()); // vtable: 4 header + 6 slots
-    buf[10..12].copy_from_slice(&20u16.to_le_bytes()); // object size
-    buf[24..28].copy_from_slice(&16u32.to_le_bytes()); // soffset back to the vtable at 8
+    let buf = hand_built_table(16, 20, &[0, 0, 0, 0, 0, 0]);
     assert_eq!(from_bytes(&buf), Err(ReadError::UnsupportedField));
 
     // And with the vtable's own size brought back to this schema's five slots, the same buffer reads
     // as an all-defaults asset instead of being refused.
-    buf[8..10].copy_from_slice(&14u16.to_le_bytes());
-    let asset = from_bytes(&buf).expect("five slots is this schema");
+    let asset =
+        from_bytes(&hand_built_table(14, 20, &[0, 0, 0, 0, 0])).expect("five slots is this schema");
     assert_eq!(
         asset.grammar_version, 1,
         "absent field, so the schema default"
     );
     assert!(asset.nodes.is_empty());
+}
+
+/// doc 09's other half of the version story: the field exists so a mismatched asset costs one
+/// comparison rather than a silently misinterpreted kind table. A grammar-2 container would mean kind
+/// numbers somewhere else, so reading its nodes at all is the bug - which is why the refusal happens
+/// before the tree is walked.
+#[test]
+fn a_container_from_another_grammar_is_refused_before_anything_is_parsed() {
+    let mut buf = hand_built_table(14, 20, &[4, 0, 0, 0, 0]);
+    buf[28..32].copy_from_slice(&2u32.to_le_bytes());
+    assert_eq!(
+        from_bytes(&buf),
+        Err(ReadError::GrammarVersionMismatch {
+            found: 2,
+            expected: GRAMMAR_VERSION,
+        })
+    );
+    // The same buffer declaring the version this reader implements is an ordinary, if empty, asset.
+    buf[28..32].copy_from_slice(&GRAMMAR_VERSION.to_le_bytes());
+    assert!(from_bytes(&buf).is_ok());
+}
+
+/// A buffer with the layout `writer::to_bytes` produces - root offset, identifier, vtable below the
+/// table - so a test can state one header field exactly. `to_bytes` cannot express "declare grammar
+/// version 2" or "advertise six slots", because it only writes what the contract says, and the
+/// refusals above are about buffers that do not.
+///
+/// Table at 24, vtable at 8, so the soffset is always 16; `slots` are the vtable's per-field offsets.
+fn hand_built_table(vt_size: u16, obj_size: u16, slots: &[u16]) -> Vec<u8> {
+    let mut buf = vec![0u8; 64];
+    buf[0..4].copy_from_slice(&24u32.to_le_bytes());
+    buf[4..8].copy_from_slice(b"MLWS");
+    buf[8..10].copy_from_slice(&vt_size.to_le_bytes());
+    buf[10..12].copy_from_slice(&obj_size.to_le_bytes());
+    for (index, value) in slots.iter().enumerate() {
+        buf[12 + index * 2..14 + index * 2].copy_from_slice(&value.to_le_bytes());
+    }
+    buf[24..28].copy_from_slice(&16u32.to_le_bytes());
+    buf
 }

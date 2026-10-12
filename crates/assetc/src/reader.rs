@@ -15,7 +15,7 @@
 //! vector of the 16-byte node struct, vector of f32, string), and it refuses anything else, because a
 //! shape loader that guesses at an unfamiliar buffer produces a wrong picture instead of an error.
 
-use contracts::sdf::NodeRecord;
+use contracts::sdf::{NodeRecord, GRAMMAR_VERSION};
 
 /// The schema's `file_identifier`.
 pub const FILE_IDENTIFIER: [u8; 4] = *b"MLWS";
@@ -31,6 +31,22 @@ pub enum ReadError {
     Corrupt,
     /// A vtable slot this reader does not understand (a struct field, an out-of-order table).
     UnsupportedField,
+    /// The container declares a grammar version this reader was not built for.
+    ///
+    /// This is doc 09's "refused at load, never hashed": a version mismatch means A-07's kind numbers,
+    /// the arity table and the record's field packing are all unknown, so parsing one more byte than
+    /// the header would produce a plausible tree rather than an error. A loader that guesses shows the
+    /// player a wrong shape.
+    ///
+    /// Not yet an A-09 mapping: `AssetError::SchemaVersionUnsupported` carries `u16`s and its accepted
+    /// *window* is OQ-30's open question, so this reader compares against the one version it
+    /// implements and leaves the policy to whoever owns the error band.
+    GrammarVersionMismatch {
+        /// Version the asset declares.
+        found: u32,
+        /// Version this reader implements - `contracts::sdf::GRAMMAR_VERSION`.
+        expected: u32,
+    },
 }
 
 /// The decoded asset: the node array, the parameter pool, and the label the compiler stamped in.
@@ -111,8 +127,17 @@ pub fn from_bytes(buf: &[u8]) -> Result<CompiledAsset, ReadError> {
     // Slot 0 is grammar_version, which the schema defaults to 1 and which a writer may therefore omit.
     let grammar_version = match field(0)? {
         Some(at) => u32_at(buf, at)?,
-        None => 1,
+        None => GRAMMAR_VERSION,
     };
+    // Refused here, before a single node is read: the version decides what the kind numbers and the
+    // record's fields *mean*, so everything after this point would be interpreted through the wrong
+    // grammar and come out looking like a valid tree.
+    if grammar_version != GRAMMAR_VERSION {
+        return Err(ReadError::GrammarVersionMismatch {
+            found: grammar_version,
+            expected: GRAMMAR_VERSION,
+        });
+    }
     let depth = match field(1)? {
         Some(at) => u32_at(buf, at)?,
         None => 0,
