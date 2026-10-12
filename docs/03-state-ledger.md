@@ -783,8 +783,9 @@ entire agreement it has to keep.
 
 A published root is only evidence if a second execution produces it. The strongest form of that check
 available without new hardware: build the engine for `wasm32-wasip1`, run the module under a WASM
-engine, and diff its output against the native build's. CI does exactly this, and the thirteen lines
-match - `EPOCH_0 91b97a52…`, the region list and the slot table included - so the digest is now
+engine, and diff its output against the native build's. CI does exactly this on all three of its
+architectures, and the thirteen lines match on each - `parity ok on arm64`, `parity ok on x86_64` twice
+over - `EPOCH_0 91b97a52…`, the region list and the slot table included - so the digest is now
 produced by two different code generators, two link-time target configurations, and a different
 machine-model of function calls, with nothing in this repository writing an `unsafe` block or an
 export attribute to achieve it.
