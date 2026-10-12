@@ -311,7 +311,15 @@ Whether the licence is *too* conservative is [OQ-53](13-risks-open-questions.md)
 **OQ-54**: a smooth union's enclosure is grown by `k`, while the dip `smin` can produce is bounded by
 `k/4`, which suggests the grown bound may satisfy `field >= distance to bound` after all. The reasoning is
 sketched and deliberately not acted on - the failure mode of being wrong is deleted geometry, and the
-current refusal is what the tests assert.
+current refusal is what the tests assert. The lattice question has now been measured
+(`tests/cull.rs::the_smooth_union_licence_is_measured_and_not_yet_relaxed`): four scenes on a 41-cubed grid
+at 0.25 spacing plus dense 0.005 sweeps along the blend axis and both waist lines, and every blended scene
+keeps `field >= distance to its grown enclosure` with a margin of **exactly +k** at the worst sample, zero
+violations bigger than the render tolerance and zero hit-band points outside the bound. The licensed plain
+union, by contrast, reaches -0.000000 at the far corner - its own bound is tight to `f32` rounding - which is
+why the test measures violations relative to `surface` rather than against zero. Evidence, still not a
+proof: a lattice cannot speak for every point in space, so OQ-54 stays open and the refusal stays in place
+until the inequality is derived from the `smin` formula actually implemented.
 
 ### The third layer: a descent through the bounds, and the tolerance bug it found (2026-10-12)
 

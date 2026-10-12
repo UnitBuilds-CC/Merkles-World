@@ -559,3 +559,156 @@ fn the_descent_adds_rejections_where_children_are_licensed_and_none_where_they_a
     let (plain_plane, _) = render(&plane, &camera);
     assert_eq!(plain_plane.pixels, plane_frame.pixels);
 }
+
+/// A record with the root flag carried explicitly, because the file's `branch` helper flags every branch
+/// and a two-branch tree then fails `validate`'s single-root rule.
+fn node(kind: u16, arity: u16, subtree: u32, first: u16, len: u16, root: bool) -> NodeRecord {
+    NodeRecord([
+        pack_kind_and_arity(kind, arity),
+        subtree,
+        pack_first_and_flags(first, if root { FLAG_IS_ROOT } else { 0 }),
+        pack_params_len(len),
+    ])
+}
+
+/// The scene the boot actually marches: a plain union whose second operand is a blend. One blended branch
+/// is enough to make `respects` false all the way to the root, which is why the demo prints a refusal.
+fn union_over_blend(k: f32) -> Tree {
+    Tree {
+        nodes: vec![
+            node(NODE_UNION, 2, 5, 0, 0, true),
+            node(NODE_SPHERE, 0, 1, 0, 4, false),
+            node(NODE_SMOOTH_UNION, 2, 3, 4, 1, false),
+            node(NODE_SPHERE, 0, 1, 5, 4, false),
+            node(NODE_SPHERE, 0, 1, 9, 4, false),
+        ],
+        params: vec![
+            1.0, 0.0, 0.0, 0.0, //
+            k, 1.0, -1.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0,
+        ],
+    }
+}
+
+#[test]
+fn the_smooth_union_licence_is_measured_and_not_yet_relaxed() {
+    // `respects[node]` is the precondition a skip - per ray or per step - reads, and it is withheld from
+    // every smooth union because `smin` returns below `min` by up to `k/4`. cull_probe priced what that
+    // costs (a 128-sphere scene written with blended branches loses the hierarchy outright: 648 evaluations
+    // becomes 287,128), so the question OQ-54 asks is whether the *grown* enclosure the table already stores
+    // satisfies the inequality anyway. This measures it rather than arguing it: for each scene, sample the
+    // field on a lattice and report the worst `field(p) - distance(p, enclosure)` over the samples, where
+    // distance is the clamped one `lower_bound` returns. A negative worst margin is a real violation of the
+    // precondition - a point the marcher would treat as surface, outside the sphere a skip would have
+    // ignored - and a non-negative one is evidence, still not proof, that the licence could be relaxed.
+    let surface = 1e-3f32;
+    for (label, tree, expect_respected) in [
+        ("blend k 0.4, offset 2.0", smooth_union(0.4, 2.0), false),
+        ("blend k 1.5, offset 3.0", smooth_union(1.5, 3.0), false),
+        ("plain union, offset 3.0", union(3.0), true),
+        ("union over blend k 0.5", union_over_blend(0.5), false),
+    ] {
+        validate(&tree).unwrap_or_else(|error| panic!("{label} must validate: {error:?}"));
+        let bounds = scene_bounds(&tree);
+        let root = ROOT as usize;
+        assert_eq!(
+            bounds.respects(root),
+            expect_respected,
+            "{label}: the licence bit is not the one this test is written to measure"
+        );
+        let Enclosure::Bounded { centre, radius } = bounds.enclosure_of(root) else {
+            panic!("{label} must have a derived bound to measure against");
+        };
+        // One measurement, run over two point sets: the coarse lattice (whose step is 250x the surface
+        // epsilon, so a thin band can slip between samples) and a dense sweep along exactly the lines where
+        // `smin` dips most - the axis through the two centres and the two lines through the waist, at a
+        // 0.005 step. The lattice is the breadth; the sweep is the depth.
+        let measure = |points: &mut dyn Iterator<Item = [f32; 3]>| {
+            let mut worst = f32::MAX;
+            let mut worst_point = [0.0f32; 3];
+            let mut violations = 0usize;
+            let mut samples = 0usize;
+            let mut band = 0usize;
+            for p in points {
+                let field = sdf_eval(&tree, ROOT, p);
+                let d = (p[0] - centre[0]).powi(2)
+                    + (p[1] - centre[1]).powi(2)
+                    + (p[2] - centre[2]).powi(2);
+                let distance = (d.sqrt() - radius).max(0.0);
+                if distance > 0.0 {
+                    samples += 1;
+                    let margin = field - distance;
+                    if margin < worst {
+                        worst = margin;
+                        worst_point = p;
+                    }
+                    // "Materially below" is `surface`, not zero. A plain union - the case the licence
+                    // *grants* - also dips a few parts in 10^7 below its own bound at the far corner,
+                    // because both quantities are large and nearly equal there and the arithmetic is `f32`.
+                    // A rounding-scale miss cannot delete geometry: the point is inside the hit band the
+                    // marcher stops in anyway. What would matter is a violation larger than the tolerance
+                    // the frame is rendered with, so that is what is counted.
+                    if margin < -surface {
+                        violations += 1;
+                    }
+                }
+                if field.abs() < surface && distance > radius + surface {
+                    band += 1;
+                }
+            }
+            (worst, worst_point, violations, samples, band)
+        };
+
+        let mut lattice = (0..41).flat_map(move |ix| {
+            (0..41).flat_map(move |iy| {
+                (0..41).map(move |iz| {
+                    [
+                        -6.0 + ix as f32 * 0.25,
+                        -6.0 + iy as f32 * 0.25,
+                        -6.0 + iz as f32 * 0.25,
+                    ]
+                })
+            })
+        });
+        let (worst, worst_point, exterior_violations, exterior_samples, band_outside) =
+            measure(&mut lattice);
+
+        // The dense sweeps, as three lines. `waist` is the midpoint between the two blended centres, which
+        // is where the quadratic `smin` sits furthest below `min`.
+        let axis = (0..2401).map(|i| -6.0 + i as f32 * 0.005);
+        let (axis_worst, axis_point, axis_violations, axis_samples, axis_band) = measure(
+            &mut axis
+                .clone()
+                .map(|x| [x, 0.0, 0.0])
+                .chain(axis.clone().map(|y| [0.5 * (centre[0]), y, 0.0]))
+                .chain(axis.map(|z| [0.5 * centre[0], 0.0, z])),
+        );
+
+        println!(
+            "MEASURE {label}: lattice {exterior_samples} pts worst margin {worst:.6} at {worst_point:?} violations {exterior_violations} band {band_outside} | sweeps {axis_samples} pts worst {axis_worst:.6} at {axis_point:?} violations {axis_violations} band {axis_band} | bound r {radius:.4} licence {expect_respected}",
+        );
+        // Both halves are asserted, because both are what a relaxation of OQ-54 would rest on: the
+        // containment of the *hit band* (the property whose violation would be a deleted surface rather
+        // than a slower frame), and the precondition itself on the exterior, where it is the thing a skip
+        // substitutes for the real field.
+        assert_eq!(
+            exterior_violations, 0,
+            "{label}: {exterior_violations} exterior points sit below the bound a skip would use, worst              margin {worst} at {worst_point:?}"
+        );
+        assert!(
+            worst >= 0.0,
+            "{label}: the grown bound is not a lower bound on the field outside it: {worst} at {worst_point:?}"
+        );
+        assert_eq!(
+            axis_violations, 0,
+            "{label}: the dense sweep found {axis_violations} exterior points below the bound, worst              {axis_worst} at {axis_point:?}"
+        );
+        assert_eq!(
+            axis_band, 0,
+            "{label}: the dense sweep found surface-band points outside the bound"
+        );
+        assert_eq!(
+            band_outside, 0,
+            "{label}: a point the marcher calls surface lies outside the bound a skip would use"
+        );
+    }
+}
