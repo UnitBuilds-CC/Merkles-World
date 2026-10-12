@@ -328,6 +328,33 @@ jobs:
           fi
           echo "browser parity ok on ${{ matrix.label }}"
 
+  # Gate P1.5's other browser question: not "can a page host this module" (the step above answers that on
+  # three architectures, all of them Chromium, i.e. V8 four times counting Node) but "does a second
+  # WebAssembly implementation agree". The only non-V8 engine reachable without installing anything is
+  # JavaScriptCore, and it ships with macOS as Safari alongside a `safaridriver` that speaks WebDriver
+  # over plain HTTP - so this runs on the ARM64 leg, and an Apple-silicon Safari is as close to S3's
+  # `M1-browser` row as CI can get. The script skips out loud with its reason when remote automation is
+  # refused, and fails if Safari's digest differs from the native one.
+  browser-jsc:
+    name: roots in JavaScriptCore (Safari)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the WASI target
+        shell: bash
+        run: rustup target add wasm32-wasip1
+      - name: Build the engine as a WASI command module
+        shell: bash
+        run: cargo build --release --target wasm32-wasip1 -p engine
+      - name: The native boot, to compare against
+        shell: bash
+        run: cargo run --release -q -p engine > host.txt
+      - name: The same module inside Safari
+        shell: bash
+        env:
+          MLWS_NATIVE_OUTPUT: host.txt
+        run: bash tools/safari_parity.sh target/wasm32-wasip1/release/engine.wasm
+
   schema:
     name: asset schema (flatc)
     runs-on: ubuntu-latest
