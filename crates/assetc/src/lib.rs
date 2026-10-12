@@ -11,6 +11,8 @@
 //! is OQ-10's; the semantics below are where a wrong choice silently authors a different shape, and
 //! they are testable today against `crates/render`'s hand-built trees.
 
+pub mod writer;
+
 use contracts::sdf::{
     arity_of, is_known_kind, pack_first_and_flags, pack_kind_and_arity, pack_params_len,
     NodeRecord, FLAG_HAS_MATERIAL, FLAG_IS_ROOT, MAX_TREE_DEPTH,
