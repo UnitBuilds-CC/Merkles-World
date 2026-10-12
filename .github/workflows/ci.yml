@@ -37,6 +37,11 @@ env:
   # are upgraded together, in one commit, with the check run locally first.
   CARGO_DENY_VERSION: 0.20.2
 
+  # Pinned for the same reason as cargo-deny: the asset schema's guarantees come from a generator, so
+  # the generator's version is part of the check. Upgraded together with contracts/sdf.fbs, in one
+  # commit, with `flatc --version` run locally first.
+  FLATC_VERSION: 24.3.25
+
 jobs:
   gates:
     name: gates on ${{ matrix.label }}
@@ -96,6 +101,40 @@ jobs:
         run: rustup show
       - name: Build contracts, coords, the ledger hasher and the slab for the browser target
         run: cargo build --target wasm32-unknown-unknown -p contracts -p coords -p ledger -p memory
+
+  schema:
+    name: asset schema (flatc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download pinned flatc
+        run: |
+          set -euo pipefail
+          asset="Linux.flatc.binary.g++-13.zip"
+          base="https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}"
+          curl -sSfL -o flatc.zip "${base}/${asset}"
+          unzip -q flatc.zip -d flatc-dist
+          echo "$PWD/flatc-dist" >> "$GITHUB_PATH"
+
+      # The schema's central promise is a layout claim: a node is 16 inline bytes, because that is what
+      # lets the compiled asset be the WGSL storage buffer with no repacking step. Checking it through
+      # the generator is the point - the Rust type says `[u8; 16]` or the promise is not true.
+      - name: Generate Rust and assert the node struct is 16 inline bytes
+        run: |
+          set -euo pipefail
+          flatc --version
+          flatc --rust --gen-all -o /tmp/fbsgen contracts/sdf.fbs
+          grep -q 'pub struct NodeRecord(pub \[u8; 16\])' /tmp/fbsgen/*.rs
+          grep -q 'grammar_version' /tmp/fbsgen/*.rs
+
+      # Pack the committed probe asset. This is a golden file for the format before `assetc` exists to
+      # produce one: it proves the schema is emittable, not only parseable.
+      - name: Pack the probe shape asset
+        run: |
+          set -euo pipefail
+          flatc -o /tmp/packed --binary --raw-binary --strict-json             contracts/sdf.fbs contracts/tests/fixtures/probe_shape.json
+          ls -l /tmp/packed/probe_shape.bin
 
   deny:
     name: cargo-deny

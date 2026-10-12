@@ -1,0 +1,9 @@
+{
+  "grammar_version": 1,
+  "depth": 1,
+  "nodes": [
+    { "kind_and_arity": 1, "subtree_len": 1, "first_and_flags": 65536, "params_len_reserved": 4 }
+  ],
+  "params": [1.0, 0.0, 0.0, 0.0],
+  "label": "probe: a unit sphere at the origin"
+}
