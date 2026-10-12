@@ -1,0 +1,50 @@
+// contracts/sdf.fbs — artifact A-07's other half, DRAFT 2026-10-12: the asset envelope.
+//
+// A-07 was listed as "(`.fbs` + interpreter signature)" and contracts/sdf.rs supplied the grammar and
+// the signature; this is the container that carries a tree to a buffer, so `assetc` has something to
+// emit and doc 09's "compiled to raw binary blobs at build time" has a defined blob.
+//
+// Two rules the layout follows, both inherited rather than invented:
+//
+// - **A node is a FlatBuffers *struct*, not a table.** Structs are fixed-layout, inline, and
+//   little-endian, which is the only way the compiled asset can be handed to WGSL as the same
+//   16-byte record `contracts::sdf::NodeRecord` describes, with no repacking step to get wrong and no
+//   vtable to walk on a per-pixel path. Fields are four `uint32`s in the record's documented order:
+//   `kind|arity`, `subtree_len`, `params_first|flags`, `params_len|reserved`.
+// - **Nothing in a shape file is hashed.** This is presentation data; a mod's *identity* and the
+//   world's state are ledger quantities (ADR-028, A-03, A-10). So `grammar_version` and `depth` exist
+//   to be refused at load, not to be committed to a root.
+
+namespace merkles.shape;
+
+/// One node, byte-for-byte `contracts::sdf::NodeRecord`. Packed fields keep the struct at 16 bytes:
+/// FlatBuffers structs have no padding flexibility, so the widths here ARE the contract.
+struct NodeRecord {
+  kind_and_arity: uint32;
+  subtree_len: uint32;
+  first_and_flags: uint32;
+  params_len_reserved: uint32;
+}
+
+/// A compiled shape: the node array in pre-order, plus the `f32` pool its records index.
+table ShapeAsset {
+  /// Must equal `contracts::sdf::GRAMMAR_VERSION`. A mismatch is an A-09 asset error and a refusal to
+  /// load - the alternative is interpreting someone's tree with the wrong kind table, which produces
+  /// a wrong *shape* silently rather than an error.
+  grammar_version: uint32 = 1;
+  /// Tree depth, computed by `assetc`. The cap is `MAX_TREE_DEPTH` (a draft number pending spike S1);
+  /// carrying it in the file lets the loader refuse before it walks anything.
+  depth: uint32;
+  /// `assetc` guarantees pre-order and one root; `validate` in crates/render is the runtime check.
+  nodes: [NodeRecord];
+  params: [float32];
+  /// Human-readable only: error messages and hot-reload logs. Never read by the interpreter.
+  label: string;
+}
+
+root_type ShapeAsset;
+
+/// Four bytes the loader checks before trusting anything else, so a truncated or misnamed file fails
+/// in one comparison instead of producing a plausible-looking tree of garbage kinds.
+file_identifier "MLWS";
+file_extension "bin";

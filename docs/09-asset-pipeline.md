@@ -28,6 +28,26 @@ runtime are different layers with a compiler between them.
 that gets parsed at load — during gameplay, in a hot loop, on a browser main thread. Text exists
 only to the left of `assetc`.
 
+## The shape envelope exists (A-07, DRAFT)
+
+`contracts/sdf.fbs` is the container doc 09 assumed: a `ShapeAsset` holding `grammar_version`, the tree
+depth, a vector of fixed-layout `NodeRecord` structs and the `f32` parameter pool, with `root_type`, a
+`file_identifier` of `MLWS` and a `.bin` extension. Two decisions make it a compiled blob rather than a
+parsed document:
+
+- **Nodes are FlatBuffers *structs*, not tables.** A struct is fixed-layout, inline and little-endian, so
+  the compiled file hands WGSL exactly the 16-byte record `contracts::sdf::NodeRecord` describes -
+  no repacking step, no vtable walk on a per-pixel path. `flatc --rust` generates
+  `pub struct NodeRecord(pub [u8; 16])`, which is the stride claim coming from a compiler instead of a
+  comment.
+- **`grammar_version` is refused at load, never hashed.** Shape files are presentation data (ADR-028,
+  A-03, A-10 own what a peer must agree on); the field exists so a mismatched asset is one comparison
+  rather than a silently misinterpreted kind table.
+
+`assetc` still does not exist, so nothing emits this format yet - the missing piece is the compiler, not
+the format. Its gates (AS1-AS5) stay open, and the headless WGSL check (S6, OQ-41) is still what stands
+between an authored tree and a drawn one.
+
 ## Formats
 
 | Role | Format | Notes |
