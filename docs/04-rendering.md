@@ -303,7 +303,7 @@ asserted - `tests/stream.rs` requires a one-region frame to equal the single-tre
 and depth for depth with the same charge, requires a region out of range to be invisible whether it is
 planned in or out, and requires a seven-cell world to produce the same frame as a one-region plan.
 
-Whether the grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
+What is **not** yet true: `stream` is verified at cell-local scales, and an attempt to make the demo a row of three cells - surfaces at 4,096, 8,192 and 12,288 units - rendered zero hits and was reverted rather than shipped, with the three candidate causes and the repro recorded as [OQ-56](13-risks-open-questions.md). A wide view across region cells is exactly where docs/02's camera-relative rule stops being doctrine and becomes arithmetic. Whether the grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
 contract decision with a cost attached (interpreter arm, validator, WGSL twin, asset graph). Until it is
 answered, streaming is a rendering pattern rather than an asset feature. `cargo run --release --example
 region_cost -p render` prints the table above; nothing in it is a frame time, and gate R1 still waits on a
