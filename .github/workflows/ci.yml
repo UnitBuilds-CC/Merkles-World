@@ -89,6 +89,11 @@ jobs:
       - name: Spike S2 Merkle pass (informational)
         run: cargo run --release --example merkle_pass -p ledger
 
+      # OQ-49's decision packet: where the sub-millisecond line falls as N shrinks, and what spreading the
+      # same edits across eight regions costs. Digest counts, not milliseconds, are the part that repeats.
+      - name: Spike S2 pass budget sweep (informational)
+        run: cargo run --release --example pass_budget -p ledger
+
       # Spike S1's CPU half: evaluations per ray on a four-node scene. Informational for the same
       # reason as S2's numbers - a runner cannot measure a GPU frame budget, so nothing here gates.
       - name: Spike S1 march steps (informational)

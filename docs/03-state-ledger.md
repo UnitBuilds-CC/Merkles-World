@@ -628,10 +628,53 @@ floor is the hash function. That is the number OQ-49 has to argue with.
 
 And **gate P1.3's `< 1 ms` is not met, by about two orders of magnitude at a full scattered slab**
 (52 ms, of which ~35 ms is BLAKE3 itself). Solving the gate for its own arithmetic means one of: a
-much smaller outstanding `N` per epoch per region (≈250 clustered edits is where ~1 ms lands, which
-is a *compaction-frequency* decision, not a hashing one), batching or parallelising the hash pass
+much smaller outstanding `N` per epoch per region (the sweep below puts ~1 ms near 150 scattered or
+~1,000 clustered edits, which is a *compaction-frequency* decision, not a hashing one), batching or parallelising the hash pass
 across regions, or re-scoping what the gate measures. None of those is a change to make quietly, so
 it is [OQ-49](13-risks-open-questions.md) with the numbers attached.
+
+### Where the sub-millisecond line actually falls (S2 part three, 2026-10-12)
+
+`cargo run --release --example pass_budget -p ledger` measures the two things the paragraph above
+asserted rather than knew: how the pass behaves as `N` shrinks, and what "batching across regions" is
+worth. Informational timings, release profile, one x86-64 Windows machine; the digest column is
+measured, not modelled, and it is the reproducible part - the milliseconds moved by up to 30% between
+two runs of the same binary, the counts did not move at all.
+
+| Edits in one region | Clustered digests | Clustered time | Scattered digests | Scattered time |
+|---|---|---|---|---|
+| 1 | 13 | 12 µs | 13 | 10 µs |
+| 8 | 24 | 14 µs | 91 | 63 µs |
+| 32 | 70 | 35 µs | 354 | 249 µs |
+| 128 | 260 | 124 µs | 1,321 | 895 µs |
+| 512 | 1,026 | 496 µs | 4,938 | 3.383 ms |
+| 2,048 | 4,096 | 1.985 ms | 18,489 | 12.861 ms |
+| 8,192 (a full 64 KB slab) | 12,287 | 5.023 ms | 68,524 | 48.589 ms |
+
+- **The 1 ms line sits between 128 and 512 edits, and which side you are on is the arrangement.** 128
+  scattered edits cost 895 µs; 512 clustered ones cost 496 µs. So "under 1 ms" is currently true for a
+  per-region dirty set of a few hundred edits and false for a full slab by two orders of magnitude, in
+  either arrangement. Per digest the cost is steady at roughly 480-770 ns, which is consistent with the
+  earlier finding that the floor is BLAKE3 rather than this code.
+- **The full-slab scattered row reproduces the published figure independently.** `merkle_pass.rs` reports
+  68,524 digests for one full slab of scattered edits; this second example, written later and generating
+  its own positions, reports the same 68,524. A measurement two implementations agree on is worth more
+  than one, and the first draft of this file disagreed - a too-regular position generator kept two of the
+  three coordinates nearly constant and reported 12,287 digests for the same count, a *faster* pass over a
+  different arrangement. Comparing against the published number is what caught it.
+- **Batching across regions does not reduce the hashing; it increases it.** The same 65,536 edits as eight
+  regions of 8,192 compute **548,192 digests in 404.9 ms**; kept in one region of 65,536 they compute
+  **483,285 digests in 370.7 ms**. Spreading costs 13.4% more digests and 9.2% more time, because
+  separate trees cannot share interior nodes. So the "batch the pass across regions" option in OQ-49 is a
+  *parallelism* idea, not a work-reduction one - it helps only if cores are available, and it is the
+  renderer's job to say whether any are.
+- **The epoch's own lists are not where the time goes.** Committing 512 scattered edits with a slot table
+  of 1, 2, 8 or 16 rows costs 4.10-4.43 ms in every case: the region pass dominates and the number of
+  slots barely registers. More live regions per epoch is therefore cheap in ledger terms, which is the
+  opposite of what the "smaller slab budget" option implies about scaling.
+
+What this does **not** decide: OQ-49 stays open. These rows say what each lever would cost or buy, and the
+choice among them - target, budget, compaction frequency, or scope - belongs to whoever owns gate P1.3.
 
 What is **fixed** since the first S2 report: the resolution pass. `resolve_last_write_wins` was an
 O(N²) pre-pass costing 46 ms per full slab — more than the hashing — and it is gone:
