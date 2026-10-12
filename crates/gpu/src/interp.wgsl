@@ -41,7 +41,11 @@ const UNSUPPORTED: f32 = 3.402823466e+38;
 @group(0) @binding(0) var<storage, read> nodes: array<Node>;
 @group(0) @binding(1) var<storage, read> pool: array<f32>;
 @group(0) @binding(2) var<storage, read> queries: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read> header: Header;
+// The header is a *uniform*, not a fifth storage buffer: `Limits::downlevel_defaults()` allows
+// four storage buffers per stage, and asking for five is a validation error on any target that has to
+// live downlevel - which includes the WebGL-class backends the browser target would use. Found by
+// running this, not by reading the limits table.
+@group(0) @binding(3) var<uniform> header: Header;
 @group(0) @binding(4) var<storage, read_write> distances: array<f32>;
 
 fn param(node: Node, offset: u32) -> f32 {
@@ -88,8 +92,17 @@ fn combine(kind: u32, a: f32, b: f32, node: Node) -> f32 {
         // Lipschitz constant, so the two implementations disagreeing here would change the march's
         // step guarantee, not just its shading.
         let k = param(node, 0u);
-        let h = max(k - abs(a - b), 0.0) / k;
-        return min(a, b) - h * h * h * k * (1.0 / 6.0);
+        // Mirrored from crates/render::smin exactly: a quadratic blend with a 0.25 factor, and a
+        // k <= 0 collapse to the plain min. The first draft here used the cubic form with 1/6 - the
+        // version that circulates in the SDF literature - and the two disagreed by 0.042 world units
+        // at [0, -1.48, 0], which is 4% of a voxel. That divergence is the whole reason this file is
+        // compiled against the reference rather than trusted: both formulas look right, both keep the
+        // 1-Lipschitz bound, and only one of them is the contract's.
+        if (k <= 0.0) {
+            return min(a, b);
+        }
+        let h = max(1.0 - abs(b - a) / k, 0.0);
+        return min(a, b) - h * h * k * 0.25;
     }
     if kind == NODE_SUBTRACT {
         return max(a, -b);

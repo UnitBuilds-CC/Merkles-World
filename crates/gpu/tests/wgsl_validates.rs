@@ -65,3 +65,25 @@ fn the_interpreter_covers_the_kinds_the_demo_scene_needs() {
         "the stack machine that replaces WGSL's missing recursion is the point of the file"
     );
 }
+
+#[test]
+fn the_blend_formula_matches_the_reference_rather_than_the_literature() {
+    // The device check in examples/agreement.rs is the real gate, but it can only run where a device
+    // exists - and the Linux runner has none. A wrong blend radius formula is visible in the source, so
+    // the regression that actually happened gets a text guard too: the first draft used the cubic smin
+    // (h^3, k/6) that circulates in the SDF literature, while crates/render::smin is quadratic (h^2,
+    // k/4). Two f32 evaluators of "the same" smooth union differed by 0.042 world units, about 4% of a
+    // voxel, on a point inside the blend region.
+    assert!(
+        INTERP.contains("h * h * k * 0.25"),
+        "the shader must use the reference quadratic blend, not another valid-looking one"
+    );
+    assert!(
+        !INTERP.contains("1.0 / 6.0"),
+        "the cubic blend is the wrong implementation of this contract"
+    );
+    assert!(
+        INTERP.contains("k <= 0.0"),
+        "a zero blend radius has to collapse to the plain min on both sides"
+    );
+}

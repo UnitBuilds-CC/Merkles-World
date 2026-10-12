@@ -2,4 +2,5 @@
 //!
 //! See [`naga_validate`] for why this is checkable without a GPU and what it therefore does not prove.
 
+pub mod device;
 pub mod naga_validate;

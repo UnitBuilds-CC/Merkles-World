@@ -1,0 +1,298 @@
+//! The device half: upload a shape tree exactly as `assetc` wrote it, run A-07's WGSL master interpreter
+//! over a set of points, and compare the distances with the CPU reference in `crates/render`.
+//!
+//! This is the check docs/04 has been promising since ADR-012: the grammar has two implementations, and
+//! "the shader agrees with the interpreter" is worth nothing until somebody runs both and subtracts. WGSL
+//! has no recursion, so the shader walks the tree with an explicit stack while the reference recurses -
+//! two different ways to get the same answer, which is exactly the situation a contract should be nervous
+//! about.
+//!
+//! What agreement would mean, and what it would not: it is evidence about presentation code agreeing with
+//! presentation code. Nothing here is hashed, so no number in this file may be quoted as gate P1.5 or
+//! gate R4 evidence (ADR-017), and running on a software adapter says nothing about gate R1's frame
+//! budget. The `f32` tolerance below is a statement about two different evaluators, not a claim that the
+//! renderer is deterministic across machines - the march's step counts already are, and were measured to
+//! be so, in `raster_probe`.
+//!
+//! No device is a legitimate outcome: the x86-64 Linux CI runner reports no adapters at all, so
+//! [`Interpreter::open`] distinguishes "no adapter" from "adapter that would not open" and the caller
+//! prints a skip rather than a failure.
+
+use render::{sdf_eval, Tree, Vec3, ROOT};
+use wgpu::util::DeviceExt;
+
+/// The stack capacity declared in `interp.wgsl`'s `DEPTH`, kept in sync by the test that asserts both.
+pub const STACK_DEPTH: u32 = 32;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenError {
+    /// Nothing enumerated an adapter. The Linux CI runner is the case this exists for.
+    NoAdapter,
+    /// An adapter existed and refused a device - a real failure, never to be reported as a skip.
+    NoDevice,
+}
+
+pub struct Interpreter {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    adapter: String,
+}
+
+/// One distance comparison.
+pub struct Agreement {
+    pub adapter: String,
+    pub samples: usize,
+    /// `max |gpu - cpu|` in world units, with the point that produced it.
+    pub max_abs_deviation: f32,
+    pub worst_point: Vec3,
+    pub gpu_at_worst: f32,
+    pub cpu_at_worst: f32,
+    /// Points where either side returned the depth/unsupported sentinel; those agree trivially and must
+    /// not be counted as evidence, so they are reported separately.
+    pub sentinels: usize,
+}
+
+fn bytes_of_u32(words: &[u32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(words.len() * 4);
+    for word in words {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    out
+}
+
+fn bytes_of_f32(values: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+/// A shape tree as four `u32` words per node, in `contracts::sdf::NodeRecord`'s order - the bytes an
+/// `assetc` run writes, with no repacking between the file and the buffer.
+pub fn node_bytes(tree: &Tree) -> Vec<u8> {
+    let words: Vec<u32> = tree.nodes.iter().flat_map(|node| node.0).collect();
+    bytes_of_u32(&words)
+}
+
+impl Interpreter {
+    /// Open a device, preferring the fallback (software) adapter so the check runs on the same
+    /// architecture in CI and on a laptop, and only then trying the machine's own GPU.
+    pub fn open() -> Result<Interpreter, OpenError> {
+        for fallback in [true, false] {
+            match pollster::block_on(Self::open_with(fallback)) {
+                Ok(interpreter) => return Ok(interpreter),
+                Err(OpenError::NoAdapter) => continue,
+                Err(OpenError::NoDevice) => return Err(OpenError::NoDevice),
+            }
+        }
+        Err(OpenError::NoAdapter)
+    }
+
+    async fn open_with(fallback: bool) -> Result<Interpreter, OpenError> {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                compatible_surface: None,
+                force_fallback_adapter: fallback,
+            })
+            .await
+            .map_err(|_| OpenError::NoAdapter)?;
+        let info = adapter.get_info();
+        let adapter_name = format!("{} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("a07-agreement"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|_| OpenError::NoDevice)?;
+
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("a07-master-interpreter"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("interp.wgsl").into()),
+        });
+        // `layout: None` lets wgpu derive the bind group layout from the shader itself, which is the
+        // point of this check: if the WGSL's bindings and the CPU side's uploads disagree, the failure
+        // surfaces as a validation error here rather than as a shader quietly reading the wrong buffer.
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("evaluate_points"),
+            layout: None,
+            module: &module,
+            entry_point: Some("evaluate_points"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        Ok(Interpreter {
+            device,
+            queue,
+            pipeline,
+            adapter: adapter_name,
+        })
+    }
+
+    /// Evaluate `tree` at `points` on the device and compare with the reference.
+    pub fn compare_with_reference(
+        &self,
+        tree: &Tree,
+        points: &[Vec3],
+    ) -> Result<Agreement, String> {
+        if points.is_empty() {
+            return Err("no points to compare".to_string());
+        }
+        let storage = wgpu::BufferUsages::STORAGE;
+        let nodes = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("nodes"),
+                contents: &node_bytes(tree),
+                usage: storage,
+            });
+        let pool = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("pool"),
+                contents: &bytes_of_f32(&tree.params),
+                usage: storage,
+            });
+        // One vec4 per query: the point, and the root index as a float the shader reads back as u32.
+        let mut query_bytes = Vec::with_capacity(points.len() * 16);
+        for point in points {
+            query_bytes.extend_from_slice(&bytes_of_f32(point));
+            query_bytes.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let queries = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("queries"),
+                contents: &query_bytes,
+                usage: storage,
+            });
+        let header_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("header"),
+                contents: &bytes_of_u32(&u32_le_header(points.len(), STACK_DEPTH)),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let size = (points.len() * 4) as u64;
+        let distances = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("distances"),
+            size,
+            usage: storage | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        // A storage buffer cannot be mapped - WebGPU forbids it - so the results are copied into a
+        // staging buffer whose only job is to be read back. Two buffers, not one convenience flag.
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("distances-staging"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[
+                entry(0, &nodes),
+                entry(1, &pool),
+                entry(2, &queries),
+                entry(3, &header_buf),
+                entry(4, &distances),
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(points.len().div_ceil(64) as u32, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&distances, 0, &staging, 0, size);
+        self.queue.submit([encoder.finish()]);
+
+        let raw = self.read(&staging, size)?;
+        let mut worst = Agreement {
+            adapter: self.adapter.clone(),
+            samples: points.len(),
+            max_abs_deviation: 0.0,
+            worst_point: points[0],
+            gpu_at_worst: 0.0,
+            cpu_at_worst: 0.0,
+            sentinels: 0,
+        };
+        for (index, point) in points.iter().enumerate() {
+            let gpu = f32::from_le_bytes(
+                raw[index * 4..index * 4 + 4]
+                    .try_into()
+                    .map_err(|_| "short read")?,
+            );
+            let cpu = sdf_eval(tree, ROOT, *point);
+            if gpu > UNSUPPORTED_HALF || cpu > UNSUPPORTED_HALF {
+                worst.sentinels += 1;
+                continue;
+            }
+            let deviation = (gpu - cpu).abs();
+            if deviation > worst.max_abs_deviation {
+                worst.max_abs_deviation = deviation;
+                worst.worst_point = *point;
+                worst.gpu_at_worst = gpu;
+                worst.cpu_at_worst = cpu;
+            }
+        }
+        Ok(worst)
+    }
+
+    fn read(&self, buffer: &wgpu::Buffer, size: u64) -> Result<Vec<u8>, String> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer.map_async(wgpu::MapMode::Read, 0..size, move |result| {
+            let _ = sender.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("poll: {error}"))?;
+        let status = receiver
+            .recv()
+            .map_err(|_| "the map callback never ran".to_string())?;
+        status.map_err(|error| format!("map_async: {error}"))?;
+        let out = buffer.slice(0..size).get_mapped_range().to_vec();
+        buffer.unmap();
+        Ok(out)
+    }
+}
+
+const UNSUPPORTED_HALF: f32 = 1.0e37;
+
+fn u32_le_header(point_count: usize, stack_depth: u32) -> Vec<u32> {
+    vec![point_count as u32, stack_depth, 0, 0]
+}
+
+fn entry<'a>(index: u32, buffer: &'a wgpu::Buffer) -> wgpu::BindGroupEntry<'a> {
+    wgpu::BindGroupEntry {
+        binding: index,
+        resource: buffer.as_entire_binding(),
+    }
+}
+
+/// A deterministic sample grid: no RNG and no clock, so a deviation reported by one machine describes the
+/// same points another machine would test.
+pub fn sample_grid() -> Vec<Vec3> {
+    let mut out = Vec::new();
+    for x in -6..=6 {
+        for y in -4..=4 {
+            for z in -6..=6 {
+                out.push([x as f32 * 0.42, y as f32 * 0.37, z as f32 * 0.45]);
+            }
+        }
+    }
+    out
+}

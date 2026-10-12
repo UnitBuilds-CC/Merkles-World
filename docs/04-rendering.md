@@ -113,6 +113,41 @@ Steps per ray on a CPU are not nanoseconds per frame on a GPU, and there is no W
 BVH, and no `assetc` to emit an asset yet - so those stay targets, and this file says so instead of
 quoting the reference implementation's speed as if it were the renderer's.
 
+### The WGSL interpreter agrees — having first disagreed (2026-10-12)
+
+`crates/gpu` holds A-07's master interpreter in WGSL, and `cargo run --release -p gpu --example
+agreement` uploads the engine's own five-node boot scene and compares the two implementations at
+1,521 fixed sample points on a device. On the `Microsoft Basic Render Driver [Dx12, Cpu]` adapter the
+maximum deviation was **0.000000000 world units** — not "close", identical, which is what you want
+from two `f32` evaluators of the same formulas. CI runs it on every gate job; the x86-64 Linux runner
+has no adapter and the step prints a SKIP and exits 0, so a missing device can never read as
+agreement, and an adapter that refuses to open a device is a hard failure rather than a skip.
+
+It disagreed first, and the reason is the whole point of writing it twice. The shader's smooth union
+used the cubic blend that circulates in the SDF literature — `h³ · k / 6` — while
+`crates/render::smin` is quadratic, `h² · k / 4`. Both are valid smooth minimums, both keep the
+1-Lipschitz bound that makes a march step a guaranteed-empty sphere, and both read as "the" formula.
+At `[-2.52, -1.48, -2.70]`-adjacent sample `…-1.48…` inside the blend region they differed by
+**0.042 world units**, about 4% of a voxel, which in a shipped frame is a surface in the wrong place
+and in a mod is two machines disagreeing about one shape. The shader now mirrors the reference
+expression for expression, including the `k <= 0` collapse to a plain `min`. A device-free text guard
+pins the three constants so the regression cannot come back on a runner with no GPU: `h * h * k *
+0.25` present, `1.0 / 6.0` absent, the zero-radius guard present.
+
+Two more things came out of running it rather than reading the docs. The interpreter needs five
+storage buffers, and `Limits::downlevel_defaults()` allows four per stage — so the header moved to a
+uniform binding, which is also the only shape that survives a WebGL-class backend, and that is a
+constraint on the real renderer, not on a test. And a storage buffer cannot be mapped at all, so
+results are copied into a `COPY_DST | MAP_READ` staging buffer before the CPU can look at them;
+reading back is a two-buffer operation on every path that wants to check itself.
+
+What is still missing here, stated so the agreement above is not over-read: the shader implements
+sphere, rounded box, plane, union, smooth union, subtract and intersect — seven of A-07's fifteen
+kinds, and the CPU reference's other six (cylinder, torus, repeat, mirror, twist, bend) have no WGSL
+counterpart yet, while `Noise` is refused on both sides. There is no GPU march, no BVH and no
+culling, so gate R1 and R2 are untouched by any of this, and none of these distances is hashed —
+presentation agreeing with presentation is a contract check, not gate P1.5 or R4 evidence (ADR-017).
+
 ### The raster probe: the first frame-cost shape, on a CPU (2026-10-12)
 
 `crates/render::raster` turns a tree into a pixel grid: a pinhole camera with an explicit image-plane

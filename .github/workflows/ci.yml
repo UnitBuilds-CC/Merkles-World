@@ -99,6 +99,13 @@ jobs:
       - name: Spike S1 march steps (informational)
         run: cargo run --release --example scene_steps -p render
 
+      # A-07 has two implementations now, so the contract's real claim is testable: the WGSL master
+      # interpreter and crates/render must compute the same distances. Exits 0 with a printed SKIP where
+      # no adapter exists (the Linux runner) and 1 where a device disagrees, so silence never reads as
+      # agreement. Not gate R1: a software adapter validates the shader, it does not measure a frame.
+      - name: A-07 WGSL vs CPU agreement (skips where the runner has no device)
+        run: cargo run --release -p gpu --example agreement
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.
