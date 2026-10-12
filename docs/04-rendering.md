@@ -91,8 +91,8 @@ Legs use `abs(p.x)` for bilateral symmetry — mirroring in the domain is the ch
 
 ## The CPU reference (crates/render)
 
-**Landed 2026-10-12.** A Rust evaluator for the grammar above - `validate`, `sdf_eval`, `march`,
-`normal` - covering the eleven kinds implemented so far and **refusing** `Twist`, `Bend` and `Noise`
+**Landed 2026-10-12, extended the same day.** A Rust evaluator for the grammar above - `validate`, `sdf_eval`, `march`,
+`normal` - covering thirteen of the fifteen kinds, including the two transforms `Twist` and `Bend`, and **refusing** `Noise`
 rather than answering a distance question with a guess. It is the reference the WGSL interpreter has to
 agree with, and it is what lets two of this doc's claims be measured before a shader exists:
 

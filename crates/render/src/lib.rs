@@ -93,7 +93,7 @@ pub enum ValidationError {
 /// Kinds this evaluator implements. `Twist`, `Bend` and `Noise` are in the grammar and not here yet,
 /// and refusing them is the point of `UnsupportedKind`: an unimplemented operator must never answer a
 /// distance question with a guess.
-pub const IMPLEMENTED_KINDS: [u16; 11] = [
+pub const IMPLEMENTED_KINDS: [u16; 13] = [
     NODE_SPHERE,
     NODE_ROUNDED_BOX,
     NODE_CYLINDER,
@@ -105,6 +105,8 @@ pub const IMPLEMENTED_KINDS: [u16; 11] = [
     NODE_INTERSECT,
     NODE_REPEAT,
     NODE_MIRROR,
+    NODE_TWIST,
+    NODE_BEND,
 ];
 
 #[inline]
@@ -329,6 +331,29 @@ fn eval_at(tree: &Tree, index: usize, p: Vec3, depth: u32) -> f32 {
             mirrored[axis] = mirrored[axis].abs();
             sdf_eval(tree, first as u32, mirrored)
         }
+        // Twist about `axis`: the perpendicular pair rotates by `amount * p[axis]`. cos/sin are
+        // legal here and nowhere near a digest - docs/04 says the renderer outputs pixels only
+        // (AGENTS.md section 4, ADR-017).
+        NODE_TWIST => {
+            let axis = (params[1] as u8).min(2) as usize;
+            let (a, b) = perpendicular(axis);
+            let angle = params[0] * p[axis];
+            let (cos, sin) = (angle.cos(), angle.sin());
+            let mut twisted = p;
+            twisted[a] = cos * p[a] - sin * p[b];
+            twisted[b] = sin * p[a] + cos * p[b];
+            sdf_eval(tree, first as u32, twisted)
+        }
+        // Shear, not curve: the second perpendicular coordinate moves by amount * p[axis].
+        // Written down because the grammar fixes no sign, and a second implementation quietly
+        // picking one is the fork this contract exists to prevent.
+        NODE_BEND => {
+            let axis = (params[1] as u8).min(2) as usize;
+            let (_, b) = perpendicular(axis);
+            let mut bent = p;
+            bent[b] = p[b] - params[0] * p[axis];
+            sdf_eval(tree, first as u32, bent)
+        }
         // A material leaf carries no boundary. Reaching this arm means a material node sat in the
         // shape path; MAX keeps it out of the march instead of inventing a surface for it.
         _ => f32::MAX,
@@ -417,5 +442,20 @@ pub fn normal(tree: &Tree, root: u32, point: Vec3, eps: f32) -> Vec3 {
         [out[0] / len, out[1] / len, out[2] / len]
     } else {
         out
+    }
+}
+
+use contracts::sdf::{NODE_BEND, NODE_TWIST};
+
+/// The two axes perpendicular to `axis`, in a fixed order. The order is contract, not taste:
+/// "rotate the other two" is a different shape depending on which is the sine term, and a WGSL
+/// interpreter that picked the other way would evaluate a valid-looking field that disagrees with
+/// this reference node deep.
+#[inline]
+fn perpendicular(axis: usize) -> (usize, usize) {
+    match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
     }
 }

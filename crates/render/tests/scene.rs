@@ -15,7 +15,7 @@
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_CYLINDER, NODE_INTERSECT, NODE_MIRROR, NODE_PLANE, NODE_REPEAT, NODE_ROUNDED_BOX,
-    NODE_SMOOTH_UNION, NODE_SPHERE, NODE_SUBTRACT, NODE_TORUS, NODE_TWIST, NODE_UNION,
+    NODE_SMOOTH_UNION, NODE_SPHERE, NODE_SUBTRACT, NODE_TORUS, NODE_UNION,
 };
 use render::{
     is_implemented, march, normal, sdf_eval, validate, Hit, Tree, ValidationError,
@@ -98,14 +98,14 @@ fn implemented_kinds_are_a_subset_of_the_grammar() {
     let implemented = IMPLEMENTED_KINDS.len();
     assert!(is_implemented(NODE_SPHERE));
     assert!(
-        !is_implemented(NODE_TWIST),
+        !is_implemented(contracts::sdf::NODE_NOISE),
         "in the grammar, not in this evaluator"
     );
     assert!(
         implemented < 15,
         "the grammar has 15 kinds; refusing the gap is the point"
     );
-    assert_eq!(implemented, 11);
+    assert_eq!(implemented, 13);
 }
 
 #[test]
@@ -139,12 +139,12 @@ fn every_way_to_lie_about_a_tree_is_refused_with_the_right_reason() {
     assert_eq!(validate(&unknown), Err(ValidationError::UnknownKind(63)));
 
     let bead = b.leaf(NODE_SPHERE, &[1.0, 0.0, 0.0, 0.0]);
-    let built = b.branch(NODE_TWIST, &[0.0], vec![bead]);
-    let twist = b.finish(built);
+    let built = b.branch(contracts::sdf::NODE_NOISE, &[0.0], vec![bead]);
+    let noisy = b.finish(built);
     assert!(matches!(
-        validate(&twist),
-        Err(ValidationError::UnsupportedKind(k)) if k == NODE_TWIST
-    ));
+        validate(&noisy),
+        Err(ValidationError::UnsupportedKind(k)) if k == contracts::sdf::NODE_NOISE
+    ), "Noise is the refused transform since twist and bend landed; the refusal path still has to bite");
 
     let lying = b.finish(vec![NodeRecord([
         pack_kind_and_arity(NODE_SPHERE, 1),
@@ -412,5 +412,109 @@ fn cylinder_and_torus_answer_their_axial_geometry() {
     assert!(
         (sdf_eval(&ring, ROOT, [3.0, 2.0, 0.0]) - 1.0).abs() < 1e-6,
         "above the tube"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The two transforms the evaluator refused until now. Written with fully-qualified kind
+// constants and a hoisted child: `b.finish(b.branch(..))` and `b.branch(k, p, vec![b.leaf(..)])`
+// are both double borrows of the Builder, and `implemented, 13` below is the count this adds.
+// ---------------------------------------------------------------------------
+
+fn sphere_leaf(b: &mut Builder, r: f32) -> Vec<contracts::sdf::NodeRecord> {
+    b.leaf(contracts::sdf::NODE_SPHERE, &[r, 0.0, 0.0, 0.0])
+}
+
+fn wrapped(b: &mut Builder, kind: u16, params: &[f32], r: f32) -> Tree {
+    let child = sphere_leaf(b, r);
+    let nodes = b.branch(kind, params, vec![child]);
+    b.finish(nodes)
+}
+
+#[test]
+fn a_zero_amount_transform_is_the_child() {
+    let mut b = Builder::new();
+    let twisted = wrapped(&mut b, contracts::sdf::NODE_TWIST, &[0.0, 1.0], 0.7);
+    let mut c = Builder::new();
+    let leaf = sphere_leaf(&mut c, 0.7);
+    let plain = c.finish(leaf);
+    render::validate(&twisted).expect("twist is implemented, not refused");
+
+    let mut d = Builder::new();
+    let bent = wrapped(&mut d, contracts::sdf::NODE_BEND, &[0.0, 1.0], 0.7);
+    render::validate(&bent).expect("bend is implemented, not refused");
+
+    for probe in [[0.4f32, 0.9, -0.2], [1.5, -0.3, 0.7], [0.0, 0.0, 2.0]] {
+        assert_eq!(
+            sdf_eval(&twisted, render::ROOT, probe),
+            sdf_eval(&plain, render::ROOT, probe),
+            "a zero twist must not move the field, probed at {probe:?}"
+        );
+        assert_eq!(
+            sdf_eval(&bent, render::ROOT, probe),
+            sdf_eval(&plain, render::ROOT, probe),
+            "a zero bend must not move the field, probed at {probe:?}"
+        );
+    }
+}
+
+#[test]
+fn both_transforms_are_the_identity_on_their_axis_plane() {
+    // Both displacements are functions of p[axis], so on the plane through the axis they vanish
+    // however strong the parameter is elsewhere.
+    let mut b = Builder::new();
+    let twisted = wrapped(&mut b, contracts::sdf::NODE_TWIST, &[2.5, 1.0], 0.7);
+    let mut c = Builder::new();
+    let bent = wrapped(&mut c, contracts::sdf::NODE_BEND, &[1.5, 1.0], 0.7);
+    let mut d = Builder::new();
+    let leaf = sphere_leaf(&mut d, 0.7);
+    let plain = d.finish(leaf);
+
+    for probe in [[1.3f32, 0.0, -0.4], [-0.9, 0.0, 2.0]] {
+        let expected = sdf_eval(&plain, render::ROOT, probe);
+        let t = sdf_eval(&twisted, render::ROOT, probe);
+        let s = sdf_eval(&bent, render::ROOT, probe);
+        assert!(
+            (t - expected).abs() < 1e-6,
+            "twist is the identity at {probe:?}: {t} vs {expected}"
+        );
+        assert!(
+            (s - expected).abs() < 1e-6,
+            "bend is the identity at {probe:?}: {s} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn a_sphere_centred_on_the_axis_cannot_tell_how_far_it_twisted() {
+    // Rotation about y preserves radius and height, so every probe at radius 1, height 0.5 reads
+    // 1 - 0.7. It is also the guard on `perpendicular`'s ordering: swap that pair and the map stops
+    // preserving radius, which is a different shape rather than a different orientation.
+    let mut b = Builder::new();
+    let twisted = wrapped(&mut b, contracts::sdf::NODE_TWIST, &[1.1, 1.0], 0.7);
+    // Every probe is at xz-radius 1 and height 0.5, so |p| = sqrt(1.25) and the distance is
+    // |p| - r = 0.418034. The claim under test is that the twist cannot change it: rotation about
+    // y preserves both the pair's radius and the height. (An earlier draft of this line compared
+    // against 1 - r and forgot the height, which is the arithmetic mistake, not the evaluator's.)
+    let expected = (1.25f32).sqrt() - 0.7;
+    for probe in [[1.0f32, 0.5, 0.0], [0.0, 0.5, 1.0], [-0.6, 0.5, 0.8]] {
+        let d = sdf_eval(&twisted, render::ROOT, probe);
+        assert!(
+            (d - expected).abs() < 1e-5,
+            "expected {expected} at {probe:?}, got {d}"
+        );
+    }
+}
+
+#[test]
+fn noise_is_still_refused_rather_than_approximated() {
+    let mut b = Builder::new();
+    let noisy = wrapped(&mut b, contracts::sdf::NODE_NOISE, &[1.0], 0.7);
+    assert!(
+        matches!(
+            render::validate(&noisy),
+            Err(render::ValidationError::UnsupportedKind(k)) if k == contracts::sdf::NODE_NOISE
+        ),
+        "the lattice hash and OQ-45's payload meaning come before a noise arm"
     );
 }
