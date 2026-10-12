@@ -303,7 +303,19 @@ asserted - `tests/stream.rs` requires a one-region frame to equal the single-tre
 and depth for depth with the same charge, requires a region out of range to be invisible whether it is
 planned in or out, and requires a seven-cell world to produce the same frame as a one-region plan.
 
-What is **not** yet true: `stream` is verified at cell-local scales, and an attempt to make the demo a row of three cells - surfaces at 4,096, 8,192 and 12,288 units - rendered zero hits and was reverted rather than shipped, with the three candidate causes and the repro recorded as [OQ-56](13-risks-open-questions.md). A wide view across region cells is exactly where docs/02's camera-relative rule stops being doctrine and becomes arithmetic. Whether the grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
+One claim this section had to take back: an attempt to make the demo a row of three cells produced zero hits
+at 4,096 units, was reverted, and looked like a precision or march failure. It was neither.
+`examples/far_scale_probe.rs` walks the view axis out to 12,288 units and hits in **one step** at every
+distance - 8, 64, 512, 4,096, 8,192, 12,288 - including at the finest 1e-3 tolerance, and `march` agrees, so
+the march, the bound and the `world - cell * 4096` subtraction are all sound at region scale. The angular
+size is the whole story, and it is now a test: a 1.6-unit object 4,096 away subtends 0.0004 radians in a
+0.5 half-height frustum, about six parts per million of the grid, so **the empty frame was the correct
+render**; give that cell a 400-unit feature - the scale region content actually is - and 16 of 768 pixels
+meet it where the disc formula predicts 17, the centre ray on a chord at 3,712.8 against the 3,715 the
+formula gives. Region streaming therefore needs no precision work; a frame that spans cells needs
+**terrain**, which is SPEC-04's terrain half rather than a renderer fix, and
+[OQ-56](13-risks-open-questions.md) records the diagnosis and retires the camera-relative worry. Whether the
+grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
 contract decision with a cost attached (interpreter arm, validator, WGSL twin, asset graph). Until it is
 answered, streaming is a rendering pattern rather than an asset feature. `cargo run --release --example
 region_cost -p render` prints the table above; nothing in it is a frame time, and gate R1 still waits on a
