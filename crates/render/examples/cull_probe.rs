@@ -13,8 +13,9 @@
 //! stops the next structure from being built on a vibe.
 //!
 //! Two arrangements per count, one line, one cluster, same spheres, same camera. The interesting column
-//! is the last: if `skipped` collapses between the two, the enclosure is doing its job and the job it
-//! cannot do is the loose bound.
+//! pair is the last two: the ray cull and the per-node hierarchy, which this run shows reporting exactly
+//! the same number - and the reason they do is in the closing commentary, because it is a fact about the
+//! metric rather than about the structures.
 //!
 //! Informational output, release profile, one machine - the same labelling every timing here carries.
 //! Unlike the other probes this one prints no milliseconds: everything it reports is a count, and counts
@@ -25,7 +26,7 @@ use contracts::sdf::{
     NODE_SPHERE, NODE_UNION,
 };
 use render::cull::{scene_enclosure, Enclosure};
-use render::raster::{render, render_culled, Camera};
+use render::raster::{render, render_bnb, render_culled, Camera};
 use render::{validate, Tree};
 
 const RADIUS: f32 = 0.4;
@@ -115,6 +116,7 @@ fn report(arrangement: &str, tree: &Tree, camera: &Camera) {
     let spheres = tree.nodes.iter().filter(|n| n.arity() == 0).count();
     let (plain, plain_stats) = render(tree, camera);
     let (culled, culled_stats) = render_culled(tree, camera);
+    let (_, bnb_stats) = render_bnb(tree, camera);
     assert_eq!(
         plain.pixels, culled.pixels,
         "{arrangement}: culling changed pixels"
@@ -123,25 +125,37 @@ fn report(arrangement: &str, tree: &Tree, camera: &Camera) {
         plain.depth, culled.depth,
         "{arrangement}: culling changed depth"
     );
+    assert_eq!(
+        plain.pixels,
+        bnb_pixels(tree, camera),
+        "{arrangement}: the per-node skip changed pixels"
+    );
     assert_eq!(plain.hit_count(), culled.hit_count());
+    assert_eq!(plain.hit_count(), bnb_stats.hits);
     let bound = match scene_enclosure(tree) {
         Enclosure::Bounded { radius, .. } => radius,
         Enclosure::Unbounded => f32::NAN,
     };
-    let rays = u64::from(plain_stats.rays);
-    let saved = plain_stats.evaluations - culled_stats.evaluations;
+    let saved_ray = plain_stats.evaluations - culled_stats.evaluations;
+    let saved_bnb = plain_stats.evaluations - bnb_stats.evaluations;
     println!(
-        " {:>9} | {:>5} | {:>5} | {:>7.2} | {:>9} | {:>10} | {:>8} | {:>6.1}% | {:>6.1}%",
+        " {:>9} | {:>5} | {:>5} | {:>7.2} | {:>9} | {:>8} | {:>8} | {:>6.1}% | {:>6.1}%",
         arrangement,
         spheres,
         plain_stats.hits,
         bound,
         plain_stats.evaluations,
         culled_stats.evaluations,
-        culled_stats.skipped,
-        100.0 * culled_stats.skipped as f64 / rays as f64,
-        100.0 * saved as f64 / plain_stats.evaluations as f64
+        bnb_stats.evaluations,
+        100.0 * saved_ray as f64 / plain_stats.evaluations as f64,
+        100.0 * saved_bnb as f64 / plain_stats.evaluations as f64,
     );
+}
+
+/// The per-node path's pixels, kept as a separate call so the assertion above compares the plain frame
+/// against both culled frames rather than against itself.
+fn bnb_pixels(tree: &Tree, camera: &Camera) -> Vec<u8> {
+    render_bnb(tree, camera).0.pixels
 }
 
 fn main() {
@@ -155,7 +169,7 @@ fn main() {
     );
     println!();
     println!(
-        " arrangement | spheres |  hits | bound r | evals plain | evals culled | rays skipped | skipped | work saved"
+        " arrangement | spheres |  hits | bound r | evals plain | evals ray | evals bnb | saved ray | saved bnb"
     );
     let camera = camera();
     for count in [1usize, 8, 32, 128] {
@@ -175,17 +189,22 @@ fn main() {
         "//   every ray 'might' hit: skipped falls toward zero and the saving with it, while the"
     );
     println!("//   pixels stay identical. The early-out did not fail; it ran out of information.");
+    println!("// - the last two columns are EQUAL, and that is the real finding of this run. The per-node");
+    println!("//   skips are built and correct (tests/cull.rs proves the frames agree, and proves a smooth");
+    println!("//   union is refused the skip because smin dips below its own bound), but this table cannot");
+    println!("//   see them: Stats counts *march steps*, and pruning inside one step does not change how");
+    println!("//   many steps the march takes - the distance it returns is the same one the unpruned field");
+    println!("//   would have returned. A hierarchy shortens each step, not their number. Pricing ADR-024");
     println!(
-        "// - so the next structure is not optional polish, it is the only thing that can keep the"
+        "//   therefore needs a counter of primitive evaluations per frame, which does not exist"
     );
+    println!("//   yet, and until it does the honest reading of the last column is 'no worse than the ray");
+    println!("//   cull, and unmeasured below that'.");
+    println!("// - so the next structure is not optional polish: the line rows show one bound running out");
+    println!("//   of information as entities spread, and the only thing that keeps a bound tight is more");
     println!(
-        "//   bound tight as entities spread - a hierarchy of these same conservative spheres,"
+        "//   bounds. It also needs its own metric before anyone is allowed to claim a saving."
     );
-    println!(
-        "//   traversed per ray or per tile. docs/04's O(log N) claim is now stated against a"
-    );
-    println!("//   measured baseline: the percentages in the last two columns are what a BVH has to beat");
-    println!("//   at the same hit fraction.");
     println!(
         "// - unchanged by this probe: gate R1 and R2 are frame-time claims and there is still no"
     );

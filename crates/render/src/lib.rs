@@ -254,10 +254,28 @@ fn wrap(v: f32, period: f32) -> f32 {
 /// child.** `SUBTRACT(A, B) = max(dA, -dB)` ("inside A, outside B"); writing it as `max(-dA, dB)`
 /// computes B minus A, reads correctly at the surface and inverts everywhere else.
 pub fn sdf_eval(tree: &Tree, node: u32, p: Vec3) -> f32 {
-    eval_at(tree, node as usize, p, 0)
+    eval_at(tree, node as usize, p, 0, None)
 }
 
-fn eval_at(tree: &Tree, index: usize, p: Vec3, depth: u32) -> f32 {
+/// The same field, with per-node skips licensed by [`cull::SceneBounds`].
+///
+/// Not a second evaluator: one evaluator with an optional bound table, which is the point. Two
+/// implementations of A-07 that agree today are two programs tomorrow (the WGSL reference suite exists
+/// because of exactly that risk), so the pruning lives inside `eval_at`'s own union arm and this function
+/// differs from [`sdf_eval`] only in the argument it passes. When the bounds decline to license a skip -
+/// which is every node below a smooth union, and every unbounded kind - the two answer identically, and
+/// `tests/cull.rs` asserts that on scenes built to sit on both sides of that line.
+pub fn sdf_eval_bnb(tree: &Tree, bounds: &cull::SceneBounds, node: u32, p: Vec3) -> f32 {
+    eval_at(tree, node as usize, p, 0, Some(bounds))
+}
+
+fn eval_at(
+    tree: &Tree,
+    index: usize,
+    p: Vec3,
+    depth: u32,
+    bounds: Option<&cull::SceneBounds>,
+) -> f32 {
     // `validate` is the gate; this is the recursion's own belt, so an unvalidated tree hangs a
     // computation rather than a frame.
     if depth > MAX_TREE_DEPTH + 8 {
@@ -306,36 +324,54 @@ fn eval_at(tree: &Tree, index: usize, p: Vec3, depth: u32) -> f32 {
             length([to_circle, p[1], 0.0]) - params[1]
         }
         NODE_PLANE => p[0] * params[0] + p[1] * params[1] + p[2] * params[2] - params[3],
-        NODE_UNION => sdf_eval(tree, first as u32, p).min(sdf_eval(tree, second as u32, p)),
+        NODE_UNION => {
+            let a = eval_at(tree, first, p, depth + 1, bounds);
+            // The skip ADR-024 asks for, and the only arm that can take it: a union's field is a `min`, so
+            // if the other child's own bound is already farther than `a`, its distance cannot be smaller
+            // and evaluating it cannot change the answer. `lower_bound` returns `None` wherever the bound
+            // does not license the claim - below a smooth union, inside a deformation, on a plane - and a
+            // `None` here means the child is evaluated, exactly as it was before this arm existed.
+            if let Some(scene) = bounds {
+                if let Some(distance) = scene.lower_bound(second, p) {
+                    if distance >= a {
+                        return a;
+                    }
+                }
+            }
+            let b = eval_at(tree, second, p, depth + 1, bounds);
+            a.min(b)
+        }
         NODE_SMOOTH_UNION => {
-            let a = sdf_eval(tree, first as u32, p);
-            let b = sdf_eval(tree, second as u32, p);
+            let a = eval_at(tree, first, p, depth + 1, bounds);
+            let b = eval_at(tree, second, p, depth + 1, bounds);
             smin(a, b, params[0])
         }
         NODE_SUBTRACT => {
-            let kept = sdf_eval(tree, first as u32, p);
-            let cutter = sdf_eval(tree, second as u32, p);
+            let kept = eval_at(tree, first, p, depth + 1, bounds);
+            let cutter = eval_at(tree, second, p, depth + 1, bounds);
             kept.max(-cutter)
         }
         NODE_INTERSECT => {
-            let a = sdf_eval(tree, first as u32, p);
-            let b = sdf_eval(tree, second as u32, p);
+            let a = eval_at(tree, first, p, depth + 1, bounds);
+            let b = eval_at(tree, second, p, depth + 1, bounds);
             a.max(b)
         }
-        NODE_REPEAT => sdf_eval(
+        NODE_REPEAT => eval_at(
             tree,
-            first as u32,
+            first,
             [
                 wrap(p[0], params[0]),
                 wrap(p[1], params[0]),
                 wrap(p[2], params[0]),
             ],
+            depth + 1,
+            bounds,
         ),
         NODE_MIRROR => {
             let axis = (params[0] as u8).min(2) as usize;
             let mut mirrored = p;
             mirrored[axis] = mirrored[axis].abs();
-            sdf_eval(tree, first as u32, mirrored)
+            eval_at(tree, first, mirrored, depth + 1, bounds)
         }
         // Twist about `axis`: the perpendicular pair rotates by `amount * p[axis]`. cos/sin are
         // legal here and nowhere near a digest - docs/04 says the renderer outputs pixels only
@@ -348,7 +384,7 @@ fn eval_at(tree: &Tree, index: usize, p: Vec3, depth: u32) -> f32 {
             let mut twisted = p;
             twisted[a] = cos * p[a] - sin * p[b];
             twisted[b] = sin * p[a] + cos * p[b];
-            sdf_eval(tree, first as u32, twisted)
+            eval_at(tree, first, twisted, depth + 1, bounds)
         }
         // Shear, not curve: the second perpendicular coordinate moves by amount * p[axis].
         // Written down because the grammar fixes no sign, and a second implementation quietly
@@ -358,7 +394,7 @@ fn eval_at(tree: &Tree, index: usize, p: Vec3, depth: u32) -> f32 {
             let (_, b) = perpendicular(axis);
             let mut bent = p;
             bent[b] = p[b] - params[0] * p[axis];
-            sdf_eval(tree, first as u32, bent)
+            eval_at(tree, first, bent, depth + 1, bounds)
         }
         // A material leaf carries no boundary. Reaching this arm means a material node sat in the
         // shape path; MAX keeps it out of the march instead of inventing a surface for it.
@@ -400,6 +436,52 @@ pub fn march(
     surface: f32,
     max_steps: u32,
 ) -> Option<Hit> {
+    march_with(
+        tree,
+        root,
+        Ray {
+            origin,
+            dir,
+            max_t,
+            surface,
+            max_steps,
+        },
+        None,
+    )
+}
+
+/// The same loop, evaluating through [`sdf_eval_bnb`] so each step may skip subtrees the bound table
+/// licenses.
+///
+/// What it is allowed to change is *nothing about the frame* - same trajectory, same distance values,
+/// same hit - and `tests/cull.rs` asserts exactly that. What it changes is the work inside a step, which
+/// this crate cannot yet report: [`raster::Stats::evaluations`] counts march steps, and a hierarchy
+/// shortens each step rather than their number, so the two currently print the same figure. Naming the
+/// limit here is the point: the saving is real arithmetic and unmeasured by this harness.
+pub fn march_bnb(tree: &Tree, bounds: &cull::SceneBounds, root: u32, ray: Ray) -> Option<Hit> {
+    march_with(tree, root, ray, Some(bounds))
+}
+
+/// One ray and the budget it is allowed to spend. A struct rather than five parameters, because the
+/// march needs the bound table too and clippy is right that seven loose arguments is a bug waiting for an
+/// eighth.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ray {
+    pub origin: Vec3,
+    pub dir: Vec3,
+    pub max_t: f32,
+    pub surface: f32,
+    pub max_steps: u32,
+}
+
+fn march_with(tree: &Tree, root: u32, ray: Ray, bounds: Option<&cull::SceneBounds>) -> Option<Hit> {
+    let Ray {
+        origin,
+        dir,
+        max_t,
+        surface,
+        max_steps,
+    } = ray;
     let mut t = 0.0f32;
     let mut steps = 0u32;
     while t < max_t && steps < max_steps {
@@ -408,7 +490,10 @@ pub fn march(
             origin[1] + dir[1] * t,
             origin[2] + dir[2] * t,
         ];
-        let distance = sdf_eval(tree, root, point);
+        let distance = match bounds {
+            None => sdf_eval(tree, root, point),
+            Some(scene) => sdf_eval_bnb(tree, scene, root, point),
+        };
         if distance.abs() < surface {
             return Some(Hit { t, point, steps });
         }

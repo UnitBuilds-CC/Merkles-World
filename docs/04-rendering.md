@@ -237,15 +237,27 @@ segment test per ray. `render::raster::render_culled` is the same march with tha
 `cargo run --release --example cull_probe -p render` prices it on a 64×48 grid, 96-step budget, spheres of
 radius 0.4, two arrangements of the same counts:
 
-| Arrangement | Spheres | Bound r | Evals plain | Evals culled | Rays skipped | Work saved |
-|---|---|---|---|---|---|---|
-| cluster | 1 | 0.40 | 294,544 | 16 | 99.9% | **100.0%** |
-| cluster | 8 | 2.20 | 291,594 | 14,250 | 94.0% | 95.1% |
-| cluster | 32 | 4.96 | 279,551 | 70,271 | 71.0% | 74.9% |
-| cluster | 128 | 16.09 | 278,136 | 147,384 | 44.3% | 47.0% |
-| line | 8 | 4.60 | 291,164 | 80,540 | 71.4% | 72.3% |
-| line | 32 | 19.00 | 287,112 | 287,112 | 0.0% | **0.0%** |
-| line | 128 | 76.60 | 287,112 | 287,112 | 0.0% | **0.0%** |
+| Arrangement | Spheres | Bound r | Evals plain | Evals ray-cull | Evals per-node | Rays skipped | Saved by ray | Saved per-node |
+|---|---|---|---|---|---|---|---|---|
+| cluster | 1 | 0.40 | 294,544 | 16 | 16 | 99.9% | **100.0%** | 100.0% |
+| cluster | 8 | 2.20 | 291,594 | 14,250 | 14,250 | 94.0% | 95.1% | 95.1% |
+| cluster | 32 | 4.96 | 279,551 | 70,271 | 70,271 | 71.0% | 74.9% | 74.9% |
+| cluster | 128 | 16.09 | 278,136 | 147,384 | 147,384 | 44.3% | 47.0% | 47.0% |
+| line | 8 | 4.60 | 291,164 | 80,540 | 80,540 | 71.4% | 72.3% | 72.3% |
+| line | 32 | 19.00 | 287,112 | 287,112 | 287,112 | 0.0% | **0.0%** | 0.0% |
+| line | 128 | 76.60 | 287,112 | 287,112 | 287,112 | 0.0% | **0.0%** | 0.0% |
+
+**The last two columns are identical, and that equality is the most useful number in the table.** The
+per-node skips exist: `scene_bounds` builds one enclosure *per node* in a single reverse pre-order pass,
+`sdf_eval_bnb` consults it inside the same `eval_at` (one evaluator, one field, no second implementation
+free to drift), and the union arm declines to evaluate its second child when that child's own bound is
+already farther than the value in hand. It is correct, and this instrument cannot see it, for one reason:
+`Stats::evaluations` counts **march steps**, and a skip inside a step changes no step count — the distance
+returned is the value the unpruned field would have returned, so the ray's trajectory is identical by
+construction. A hierarchy shortens each step rather than their number. Pricing ADR-024 therefore needs a
+counter of *primitive evaluations per frame*, which does not exist yet; until it does, the honest
+statement about per-node skipping is **implemented, provably frame-preserving, unmeasured** — and no
+saving may be quoted from this table for it.
 
 Spike S1's third reading above guessed that "an early-out on a scene like this is worth up to about 3×".
 The measurement says the guess was not a ceiling or a floor but the wrong variable: the same one-sphere
@@ -264,10 +276,20 @@ Two honesty notes this section keeps rather than smooths over:
 - **Correctness was the design constraint, not speed.** A bound that is too small silently deletes
   geometry — a frame that looks like a render. So the module's refusals are load-bearing (`Plane`,
   `Repeat`, `Twist`, `Bend`, `Noise` and any unknown kind answer `Unbounded`, which means "no early-out",
-  never "a guessed box"), and `crates/render/tests/cull.rs`'s seven tests assert that a culled frame is
+  never "a guessed box"), and `crates/render/tests/cull.rs`'s nine tests assert that a culled frame is
   **byte-identical** to an unculled one — pixels, depth and hit count — while requiring the evaluation
   count to drop by exactly `skipped × max_steps`. A second test samples the evaluator for interior points
-  and demands the enclosure contain them, which makes the field, not this file's arithmetic, the oracle.
+  and demands the enclosure contain them, which makes the field, not this file's arithmetic, the oracle;
+  a third asserts the two bound derivations agree — the re-descending `enclose` and the one-pass
+  `scene_bounds` — because two implementations of one rule is the divergence this repository has been
+  burned before.
+  The subtle part is what a per-node skip is actually entitled to, and it is not coverage: the field must
+  be **at least the distance to its own bound**, which is stronger than "the bound contains the surface".
+  A `min` preserves that property (each child is at least its own distance and the covering sphere is no
+  closer than either), a `max` inherits it from the first operand — which is why `Subtract` and `Intersect`
+  can be pruned below — and a mirror keeps it, but **`smin` returns less than `min`, by up to `k/4`**, so
+  no node under a smooth union may be skipped however far its sphere is. That bit is computed
+  structurally per node in the same pass, and the test asserts the refusal rather than the speed.
   Those tests found nothing to fix first try, which is worth saying plainly: their value is that the next
   bound rule — a hierarchy's, or a deformation's — cannot be shipped on a guess.
 - **No gate moved.** R1 and R2 are still frame-time claims with no GPU behind them. These are counts of

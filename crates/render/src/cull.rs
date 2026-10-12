@@ -97,6 +97,136 @@ pub fn scene_enclosure(tree: &Tree) -> Enclosure {
     enclose(tree, ROOT)
 }
 
+/// Every node's enclosure plus one more bit per node, explained on [`SceneBounds::respects`].
+///
+/// Computed in one pass over the pre-order array, in reverse index order, because pre-order puts every
+/// child after its parent: children are finished before the node that reads them, so no recursion and no
+/// re-walking of subtrees is needed. The same is not true of [`enclose`], which is the on-demand form and
+/// re-descends per call - fine for building this table once, wrong for consulting per march step.
+pub fn scene_bounds(tree: &Tree) -> SceneBounds {
+    let mut bounds = SceneBounds {
+        enclosure: vec![Enclosure::Unbounded; tree.nodes.len()],
+        respects: vec![false; tree.nodes.len()],
+    };
+    for index in (0..tree.nodes.len()).rev() {
+        let record = tree.nodes[index];
+        let params = tree.params_of(record);
+        let first = if record.arity() > 0 { index + 1 } else { index };
+        let second = if record.arity() > 1 {
+            first + tree.nodes[first].subtree_len() as usize
+        } else {
+            first
+        };
+        let (first_enc, first_ok) = (bounds.enclosure[first], bounds.respects[first]);
+        let (second_enc, second_ok) = (bounds.enclosure[second], bounds.respects[second]);
+        let (enclosure, respects) = match record.kind() {
+            NODE_SPHERE => (
+                Enclosure::Bounded {
+                    centre: [params[1], params[2], params[3]],
+                    radius: params[0],
+                },
+                true,
+            ),
+            NODE_ROUNDED_BOX => (
+                Enclosure::Bounded {
+                    centre: [0.0, 0.0, 0.0],
+                    radius: length([params[0], params[1], params[2]]) + params[3],
+                },
+                true,
+            ),
+            NODE_CYLINDER => (
+                Enclosure::Bounded {
+                    centre: [0.0, 0.0, 0.0],
+                    radius: length([params[0], params[1], 0.0]),
+                },
+                true,
+            ),
+            NODE_TORUS => (
+                Enclosure::Bounded {
+                    centre: [0.0, 0.0, 0.0],
+                    radius: params[0] + params[1],
+                },
+                true,
+            ),
+            // A plane has no bound at all, so the respecting bit is moot: no lower bound can be offered.
+            NODE_PLANE | NODE_REPEAT => (Enclosure::Unbounded, false),
+            // Twist and bend rotate or shear space without moving it *closer*: they are isometries only
+            // per-point, and a bound that holds for the child need not bound the deformed field's surface
+            // from the outside at all. Refused, not assumed.
+            NODE_TWIST | NODE_BEND | NODE_NOISE => (Enclosure::Unbounded, false),
+            NODE_UNION => (first_enc.cover(second_enc), first_ok && second_ok),
+            // smin returns *less* than min - by up to k/4 - so the field can dip below the distance to
+            // its own bound, which is exactly the inequality a skip needs. It is therefore not a node this
+            // pass may prune below, whatever its enclosure says about coverage.
+            NODE_SMOOTH_UNION => (first_enc.cover(second_enc).grown(params[0]), false),
+            // Both combinators take a `max` that contains the first operand's distance, so the field is
+            // at least the first child's, which bounds the whole node by induction.
+            NODE_SUBTRACT | NODE_INTERSECT => (first_enc, first_ok),
+            NODE_MIRROR => match first_enc {
+                Enclosure::Bounded { centre, radius } => {
+                    let axis = (params[0] as u8).min(2) as usize;
+                    let mut mirrored = centre;
+                    mirrored[axis] = -centre[axis];
+                    (
+                        first_enc.cover(Enclosure::Bounded {
+                            centre: mirrored,
+                            radius,
+                        }),
+                        first_ok,
+                    )
+                }
+                Enclosure::Unbounded => (Enclosure::Unbounded, false),
+            },
+            _ => (Enclosure::Unbounded, false),
+        };
+        bounds.enclosure[index] = enclosure;
+        bounds.respects[index] = respects;
+    }
+    bounds
+}
+
+/// One node's enclosure and respecting bit, indexed by node.
+#[derive(Debug, Clone)]
+pub struct SceneBounds {
+    enclosure: Vec<Enclosure>,
+    respects: Vec<bool>,
+}
+
+impl SceneBounds {
+    #[inline]
+    pub fn enclosure_of(&self, node: usize) -> Enclosure {
+        self.enclosure[node]
+    }
+
+    /// Whether this subtree's field is at least the distance to its own enclosure, everywhere.
+    ///
+    /// That is the condition a per-node skip needs, and it is *not* the same as "the enclosure covers the
+    /// surface", which is what coverage requires and the weaker property. A hard union's field is a
+    /// `min`, so it is at least each child's distance and hence at least the distance to the sphere that
+    /// covers them; a subtract's or intersect's field is a `max` that contains the first operand's
+    /// distance, so it inherits the first child's; a **smooth union's is not** - `smin` returns less than
+    /// `min` by up to `k/4` - so a node below one cannot be skipped on a sphere test no matter how far
+    /// away the sphere is. Getting this backwards is a frame with geometry missing, and it looks correct.
+    #[inline]
+    pub fn respects(&self, node: usize) -> bool {
+        self.respects[node]
+    }
+
+    /// A lower bound on `node`'s field at `p`, when one is licensed. `None` means "you must evaluate it",
+    /// which is a refusal rather than a zero.
+    #[inline]
+    pub fn lower_bound(&self, node: usize, p: [f32; 3]) -> Option<f32> {
+        if !self.respects[node] {
+            return None;
+        }
+        let Enclosure::Bounded { centre, radius } = self.enclosure[node] else {
+            return None;
+        };
+        let d = length([p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]]);
+        Some((d - radius).max(0.0))
+    }
+}
+
 fn enclose_at(tree: &Tree, index: usize, depth: u32) -> Enclosure {
     // The same belt the evaluator carries: `validate` is the gate, and this makes an unvalidated deep tree
     // give up the bound rather than produce one that quietly excluded part of the scene.

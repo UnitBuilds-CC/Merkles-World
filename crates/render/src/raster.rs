@@ -20,7 +20,7 @@
 //! than a tangent, and every number a ray depends on here is one the tests can recompute.
 
 use crate::cull::{ray_may_hit, Enclosure};
-use crate::{march, normal, Tree, Vec3, ROOT};
+use crate::{march, march_bnb, normal, Tree, Vec3, ROOT};
 
 /// Where the probe looks from. `forward`, `right` and `up` are normalised by [`render`], so a caller can
 /// pass a convenient basis without orthonormalising it by hand - though a non-perpendicular basis still
@@ -97,7 +97,7 @@ pub struct Stats {
 /// March every pixel with no culling. This is the reference: whatever a culled path produces has to
 /// produce the same image, and only the evaluation count may differ.
 pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
-    render_with(tree, camera, None)
+    render_with(tree, camera, None, None)
 }
 
 /// March every pixel against the scene's own [`crate::cull::Enclosure`], charging nothing for a ray that
@@ -108,11 +108,30 @@ pub fn render(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
 /// A scene containing an unbounded node (a plane, a tiling) yields `skipped = 0`, which is the refusal
 /// working: no bound, no early-out, no invented box.
 pub fn render_culled(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
-    render_with(tree, camera, Some(crate::cull::scene_enclosure(tree)))
+    render_with(tree, camera, Some(crate::cull::scene_enclosure(tree)), None)
+}
+
+/// The whole culling story: the ray-level early-out of [`render_culled`] plus the per-step subtree skips
+/// ADR-024 asks for, which is what keeps working when a scene spreads out and one bound stops proving
+/// anything. See `examples/cull_probe.rs` for the measured difference between the two - it is large, and
+/// it is the reason the ray-level version alone was not enough.
+pub fn render_bnb(tree: &Tree, camera: &Camera) -> (Frame, Stats) {
+    let bounds = crate::cull::scene_bounds(tree);
+    render_with(
+        tree,
+        camera,
+        Some(bounds.enclosure_of(crate::ROOT as usize)),
+        Some(&bounds),
+    )
 }
 
 /// March every pixel of `camera`'s grid against `tree` and shade what comes back.
-fn render_with(tree: &Tree, camera: &Camera, cull: Option<Enclosure>) -> (Frame, Stats) {
+fn render_with(
+    tree: &Tree,
+    camera: &Camera,
+    cull: Option<Enclosure>,
+    bounds: Option<&crate::cull::SceneBounds>,
+) -> (Frame, Stats) {
     let forward = unit(camera.forward);
     let right = unit(camera.right);
     let up = unit(camera.up);
@@ -147,15 +166,30 @@ fn render_with(tree: &Tree, camera: &Camera, cull: Option<Enclosure>) -> (Frame,
                     continue;
                 }
             }
-            match march(
-                tree,
-                ROOT,
-                camera.origin,
-                dir,
-                camera.max_t,
-                camera.surface,
-                camera.max_steps,
-            ) {
+            let hit = match bounds {
+                None => march(
+                    tree,
+                    ROOT,
+                    camera.origin,
+                    dir,
+                    camera.max_t,
+                    camera.surface,
+                    camera.max_steps,
+                ),
+                Some(scene) => march_bnb(
+                    tree,
+                    scene,
+                    ROOT,
+                    crate::Ray {
+                        origin: camera.origin,
+                        dir,
+                        max_t: camera.max_t,
+                        surface: camera.surface,
+                        max_steps: camera.max_steps,
+                    },
+                ),
+            };
+            match hit {
                 Some(hit) => {
                     hits += 1;
                     evaluations += u64::from(hit.steps) + 1;

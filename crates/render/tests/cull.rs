@@ -15,8 +15,8 @@ use contracts::sdf::{
     NODE_CYLINDER, NODE_MIRROR, NODE_PLANE, NODE_REPEAT, NODE_ROUNDED_BOX, NODE_SMOOTH_UNION,
     NODE_SPHERE, NODE_SUBTRACT, NODE_TORUS, NODE_UNION,
 };
-use render::cull::{enclose, ray_may_hit, scene_enclosure, Enclosure};
-use render::raster::{render, render_culled, Camera};
+use render::cull::{enclose, ray_may_hit, scene_bounds, scene_enclosure, Enclosure};
+use render::raster::{render, render_bnb, render_culled, Camera};
 use render::{sdf_eval, validate, Tree, ROOT};
 
 const SIDE: u32 = 32;
@@ -292,6 +292,76 @@ fn a_ray_aimed_away_is_proved_empty_and_a_ray_aimed_through_is_not() {
         [1.0, 0.0, 0.0],
         1.0
     ));
+}
+
+#[test]
+fn the_two_bound_forms_agree_and_the_hierarchy_leaves_the_frame_untouched() {
+    // Two derivations of the same rule exist in this module on purpose: `enclose` re-descends and is the
+    // form the ray early-out and these tests read, `scene_bounds` is the one-pass table a march consults
+    // per step. Two implementations of one contract is the divergence this repository has been burned by
+    // before (the WGSL suite exists for the same reason), so they are asserted against each other rather
+    // than trusted.
+    for (name, tree) in [
+        ("sphere", sphere_at([1.0, 2.0, -3.0], 0.75)),
+        ("union", union(3.0)),
+        ("blended", smooth_union(0.4, 2.0)),
+        ("subtract", subtract(1.5, 0.8, 0.9)),
+        ("mirror", mirrored_sphere()),
+    ] {
+        let recursive = scene_enclosure(&tree);
+        let table = scene_bounds(&tree);
+        assert_eq!(
+            recursive,
+            table.enclosure_of(ROOT as usize),
+            "{name}: the two bound forms disagree"
+        );
+
+        let camera = camera_at([0.0, 0.0, -6.0]);
+        let (plain, _) = render(&tree, &camera);
+        let (bnb, bnb_stats) = render_bnb(&tree, &camera);
+        assert_eq!(
+            plain.pixels, bnb.pixels,
+            "{name}: the per-node skip changed pixels"
+        );
+        assert_eq!(
+            plain.depth, bnb.depth,
+            "{name}: the per-node skip changed depth"
+        );
+        assert_eq!(plain.hit_count(), bnb_stats.hits);
+    }
+}
+
+#[test]
+fn a_smooth_union_is_the_one_combinator_that_may_not_be_skipped() {
+    // The bound rule a skip needs is not "the sphere covers the surface" but "the field is at least the
+    // distance to the sphere". A `min` keeps that; `smin` deliberately returns *less* than `min`, by up to
+    // k/4, so a node below a smooth union cannot be skipped however far its sphere is. This test pins the
+    // refusal on the tree where it matters, because the wrong answer here is a missing surface.
+    let blended = smooth_union(0.4, 2.0);
+    let bounds = scene_bounds(&blended);
+    assert!(
+        !bounds.respects(ROOT as usize),
+        "a smooth union's root must not offer skips"
+    );
+    assert!(
+        bounds.respects(1),
+        "the sphere leaf below it is still a true distance"
+    );
+
+    let hard = union(2.0);
+    let hard_bounds = scene_bounds(&hard);
+    assert!(
+        hard_bounds.respects(ROOT as usize),
+        "the same pair under a plain union is prunable"
+    );
+
+    // And the refusal is not cosmetic: the blended scene renders identically either way.
+    let camera = camera_at([0.0, 0.0, -6.0]);
+    let (plain, _) = render(&blended, &camera);
+    let (bnb, bnb_stats) = render_bnb(&blended, &camera);
+    assert_eq!(plain.pixels, bnb.pixels);
+    assert_eq!(plain.depth, bnb.depth);
+    assert!(bnb_stats.hits > 0, "the blend should still be visible");
 }
 
 #[test]
