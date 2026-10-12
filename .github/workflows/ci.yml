@@ -178,6 +178,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Architecture and Node version of this runner
+        shell: bash
         run: |
           uname -m
           node --version
@@ -185,7 +186,11 @@ jobs:
         run: rustup target add wasm32-wasip1
       - name: Build the engine as a WASI command module
         run: cargo build --release --target wasm32-wasip1 -p engine
+      # bash on every runner: the Windows default shell is PowerShell, where `set -euo pipefail` is a
+      # no-op and `2>&1` is a parse error - which is exactly how this step first failed trunk, on a
+      # syntax difference rather than a divergent root.
       - name: Run it under a WASM engine and diff against the native build
+        shell: bash
         run: |
           set -euo pipefail
           cargo run --release -q -p engine > host.txt
