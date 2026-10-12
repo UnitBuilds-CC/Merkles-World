@@ -123,7 +123,7 @@ jobs:
           set -euo pipefail
           asset="Linux.flatc.binary.g++-13.zip"
           base="https://github.com/google/flatbuffers/releases/download/v${FLATC_VERSION}"
-          curl -sSfL -o flatc.zip "${base}/${asset}"
+          curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors -o flatc.zip "${base}/${asset}"
           unzip -q flatc.zip -d flatc-dist
           echo "$PWD/flatc-dist" >> "$GITHUB_PATH"
 
@@ -190,8 +190,11 @@ jobs:
           set -euo pipefail
           asset="cargo-deny-${CARGO_DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           base="https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_VERSION}"
-          curl -sSfLO "${base}/${asset}"
-          curl -sSfLO "${base}/${asset}.sha256"
+          # Release-asset downloads flake: run 38245836230 red the trunk on a bare `curl: (22) ... 504`
+          # from a CDN edge, with nothing wrong in the commit. Retry the transient, never the verdict -
+          # if the pin cannot be fetched after three tries the job still fails.
+          curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors -O "${base}/${asset}"
+          curl -sSfL --retry 3 --retry-delay 2 --retry-all-errors -O "${base}/${asset}.sha256"
           # The .sha256 asset is a bare digest, so re-attach the filename `sha256sum -c` needs.
           tr 'A-Z' 'a-z' < "${asset}.sha256" > checksum.line
           sed -i "s/\$/  ${asset}/" checksum.line
