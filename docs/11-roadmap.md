@@ -45,7 +45,16 @@ comparison, and a harness duplicated is a harness that drifts, so the job runs
 `MLWS_ENGINES=chromium MLWS_SKIP_BUILD=1 MLWS_NATIVE_OUTPUT=host.txt bash tools/browser_parity_check.sh` and
 keeps the two things the script deliberately leaves to the caller - the closing-marker guard and the
 declared-vs-measured check against this manifest. Status 2 from the leg is a loud `SKIP` rather than a red
-trunk, because a runner that lost its browser is a fact about the image and not about the floats. |
+trunk, because a runner that lost its browser is a fact about the image and not about the floats. **And the
+checker is checked (2026-10-13):** `tools/check_docs_selftest.mjs` copies the tree to a temp directory, plants
+each register violation in turn - agreement against an older digest, agreement with no digest, agreement with no
+commit, a `diverges` row with no note, a target dropped from the register, a target the roadmap does not name, a
+row with no command, a status outside the three allowed, and the derived count wrong in docs/11 and again in
+README - and fails unless the validator reports every one, then requires the restored copy to report nothing. It
+is a docs-integrity step, and it was itself falsified the same way: with the stale-digest rule sabotaged to
+accept anything, the self-test prints `NOT CAUGHT` and exits 1; with the validator intact it catches 10 of 10 and
+the pristine control is clean. A rule about absence can only be trusted when something proves it notices the
+absence. |
 | **S4** | FlatBuffers → GPU: zero-copy upload actually work? | RON→`.bin`→storage buffer, no allocation churn (AS1/AS4). **Partly measured 2026-10-12, the CPU half**: an asset is written, loaded and drawn into a caller-owned frame with buffers that stop allocating at a stable resolution (`allocation_audit`), and `assetc` already hand-builds its FlatBuffer bytes without the `flatbuffers` crate precisely because that crate needs unsafe traits the workspace forbids. The upload to a storage buffer is the half that cannot be measured without a device, so it waits on OQ-51 with the rest of the renderer | doc 09 |
 | **S5** | wasmtime + WIT determinism across languages | Rust/TS/Python mods agree bit-for-bit (W1–W3) | doc 08 |
 | **S6** | Headless WGSL validation harness | shader compiles, renders offscreen, hashes output in CI | doc 12, ADR-003  **harness half measured 2026-10-12** (PR #1, run `38258220750`): a device is reachable on the Windows and macOS runners and not on Linux, so the check is two-thirds buildable today and must announce its Linux skip. The missing third was WGSL, and it now exists on that branch: A-07's master interpreter, a post-order stack machine (WGSL has no recursion, so the walk needs a frame stack where the reference needs a call stack), covering all thirteen implemented kinds and compared per kind against the CPU reference over 729 fixed points. Run `38272893103`: twelve kinds identical to the last bit on both Dx12-software and Metal, and `twist` differing by 1e-6 - the only arm calling sin/cos, which is docs/02's rule in measured form: a transcendental is safe in the renderer precisely because no root ever sees it. None of it is on main yet: merging waits on OQ-51 (CC0-1.0 on `hexf-parse` via naga, and `paste` flagged unmaintained). Offscreen output is never a state gate (gate R4 is informational, ADR-017) |

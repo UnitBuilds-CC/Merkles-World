@@ -688,3 +688,9 @@ jobs:
       # is exercised here, against synthetic digest files, in both directions plus a truncated artefact.
       - name: AS2 comparison logic (the gate that checks the gate)
         run: bash tools/check_as2_gate.sh
+      # Same principle, applied to the docs checker itself. The gate P1.5 register rules are all rules about
+      # absence - a row with no digest, a count nobody verified, a target that stopped being listed - and an
+      # absence rule is satisfied by a checker that stopped working. So each violation is planted in a
+      # throwaway copy of the tree here and the checker must report it; a rule that cannot fail is not a rule.
+      - name: docs checker proves it catches each planted violation
+        run: node tools/check_docs_selftest.mjs
