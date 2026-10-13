@@ -58,6 +58,15 @@ const fs = require("fs");
 const path = "docs/evidence.json";
 const j = JSON.parse(fs.readFileSync(path, "utf8"));
 const register = j.gate_p1_5_targets;
+const { execFileSync } = require("child_process");
+const commitExists = (sha) => {
+  try {
+    execFileSync("git", ["cat-file", "-e", sha + "^{commit}"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+};
 const label = process.argv[2];
 let record;
 try {
@@ -85,6 +94,9 @@ if (!hex64.test(record.boot_sha256 ?? "")) {
   );
 }
 if (!/^[0-9a-f]{7,40}$/.test(record.commit ?? "")) fail.push("commit is missing or not a hex SHA");
+else if (!commitExists(record.commit)) {
+  fail.push("commit " + record.commit + " is not in this clone's history - fetch it, or record the run from the checkout it was built from; a verdict tied to an unreadable SHA cannot be re-checked");
+}
 if (!/^\d{4}-\d{2}-\d{2}$/.test(record.recorded ?? "")) fail.push("recorded must be a YYYY-MM-DD date");
 const legs = String(record.legs ?? "").split(",");
 if (!legs.includes("native")) fail.push("legs must include native, or no root was computed here");

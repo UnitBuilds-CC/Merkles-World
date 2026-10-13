@@ -32,6 +32,9 @@ git add -A >/dev/null 2>&1
 git -c user.name=recorder-selftest -c user.email=recorder@invalid \
   -c commit.gpgsign=false commit -qm baseline >/dev/null 2>&1 || exit 2
 
+# Use a commit that exists in this throwaway history: the recorder now refuses one that does not.
+HEAD_SHA="$(git rev-parse HEAD)"
+
 # The digest this copy publishes, and the count its prose currently claims.
 published="$(node -e 'console.log(require("./docs/evidence.json").claims.boot_output_sha256.value)')"
 claim="$(node -e 'const r=require("./docs/evidence.json").gate_p1_5_targets;console.log(r.filter(x=>x.status==="agrees").length+" of "+r.length+" named targets have reported")')"
@@ -61,7 +64,7 @@ expect() {
 
 good() {
   # $1 target label, $2 legs
-  printf '{"target":"%s","status":"agrees","boot_sha256":"%s","commit":"deadbeef01","recorded":"2026-10-13","host":"testbox","os":"selftest","legs":"%s","command":"selftest"}' "$1" "$published" "$2"
+  printf '{"target":"%s","status":"agrees","boot_sha256":"%s","commit":"%s","recorded":"2026-10-13","host":"testbox","os":"selftest","legs":"%s","command":"selftest"}' "$1" "$published" "$HEAD_SHA" "$2"
 }
 
 echo "// recorder self-test (register currently claims: $claim)"
@@ -91,6 +94,11 @@ expect "an unknown target is refused rather than appended to the register" 1 "$o
 # 4. malformed JSON must be refused
 out="$(record N2600 '{not json' --apply)"
 expect "a malformed record is refused" 1 "$out" "not valid JSON"
+# 4b. a commit that is not in this clone's history must be refused: a verdict pinned to an unreadable SHA
+#     cannot be re-checked, and the device run is exactly the sort of thing a mistyped SHA would invalidate.
+ghost_record="$(good N2600 native,wasi | sed "s/$HEAD_SHA/0000000000000000000000000000000000000000/")"
+out="$(record N2600 "$ghost_record" --apply)"
+expect "a record citing a commit absent from history is refused" 1 "$out" "not in this clone's history"
 
 # 5. --apply with a valid record must land in all three files, and keep docs integrity passing
 out="$(record 'RTX 3060' "$(good 'RTX 3060' native,wasi)" --apply)"
