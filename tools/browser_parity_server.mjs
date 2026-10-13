@@ -81,7 +81,7 @@ const page = `<!doctype html>
         const text = shim.text();
         out.textContent = text;
         // A digest of the whole output, written into the DOM, so a headless harness can assert equality
-        // without scraping fourteen lines - and so the comparison is against the native run's own hash
+        // without scraping a hard-coded line count (the boot's line total changes with every printed step) - and so the comparison is against the native run's own hash
         // rather than against a literal copied into this file.
         const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
         const sha256 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
