@@ -278,7 +278,7 @@ fn main() {
     // ---- 6. the scene half: marched, not drawn ----
     // `engine [asset.bin]` boots from a file the compiler wrote; with no argument it compiles its own
     // scene and loads those bytes back, which keeps the default demo self-contained.
-    let asset_path = std::env::args().nth(1);
+    let asset_path = std::env::args().nth(1).filter(|arg| arg != "--frame-ppm");
     let tree = match &asset_path {
         Some(path) => scene_from_disk(path),
         None => scene_tree(),
@@ -544,6 +544,65 @@ fn main() {
         world_frame.depth, descent_frame.depth,
         "the descent inside the region cells moved a surface"
     );
+    // `--frame-ppm` hands the demo's own three-cell frame to a file, so the pitch's headline picture can be
+    // looked at rather than only counted. Deliberately opt-in and deliberately not a second march: this is
+    // `world_frame`, the bytes the assertions above just proved equal the descent's picture, upscaled
+    // nearest-neighbour because 64x48 is not legible. The published output is unchanged when the flag is
+    // absent, which is what docs/evidence.json's whole-output digest is measuring on every push.
+    if std::env::args().any(|arg| arg == "--frame-ppm") {
+        let scale = 4u32;
+        let (pw, ph) = (world_frame.width * scale, world_frame.height * scale);
+        let path = std::env::temp_dir().join("merkle_demo_frame.ppm");
+        let mut bytes: Vec<u8> = format!("P6\n{pw} {ph}\n255\n").into_bytes();
+        for source_row in world_frame
+            .pixels
+            .chunks_exact((world_frame.width * 3) as usize)
+        {
+            for _ in 0..scale {
+                for pixel in source_row.chunks_exact(3) {
+                    for _ in 0..scale {
+                        bytes.extend_from_slice(pixel);
+                    }
+                }
+            }
+        }
+        if let Err(error) = std::fs::write(&path, &bytes) {
+            println!("demo frame       : not written, {error}");
+        } else {
+            // The file is the artifact someone opens, so the file is what has to agree with the march: same
+            // length, and the same surface count the region line above reports.
+            let read_back = std::fs::read(&path).expect("the file just written is readable");
+            let surface = world_frame
+                .depth
+                .iter()
+                .filter(|d| **d != render::raster::Frame::NO_HIT)
+                .count();
+            assert_eq!(
+                surface,
+                usize::try_from(world_stats.hits).unwrap_or(usize::MAX),
+                "the frame carries {surface} pixels with surface while the march reported {}",
+                world_stats.hits
+            );
+            assert_eq!(
+                read_back.len(),
+                bytes.len(),
+                "the written demo frame is {} bytes, the frame in memory is {}",
+                read_back.len(),
+                bytes.len()
+            );
+            assert_eq!(
+                read_back, bytes,
+                "the written demo frame is not the frame the boot marched"
+            );
+            println!(
+                "demo frame       : {} - {pw}x{ph} ({}x{} marched, upscaled {scale}x), {surface} of {} rays found surface, every byte equal to the frame in memory",
+                path.display(),
+                world_frame.width,
+                world_frame.height,
+                world_frame.depth.len()
+            );
+        }
+    }
     println!(
         "region world     : {} cells {:+} units apart, all planned - {} of {} rays found surface ({:.1}% of the frame), {} charged evaluations against {} for the terrain cells alone, {} proved empty by their bounds; adding the nearest cell re-lit {} pixels and lost none, worst depth shift {:.1} units - composition as a minimum of fields, which is how a frame spans cells until A-07 grows an instance node (OQ-55, OQ-57). Each region's children then asked: {} charged evaluations and {} proved empty, against {} and {} from the cell bound alone (ADR-024)",
         cells.len(),

@@ -120,7 +120,15 @@ half-height (so ray generation needs no trigonometry at all), one `march` per pi
 surface normal. The colour is deliberately **not** a material model - `material_eval` and lighting are
 [OQ-10](13-risks-open-questions.md)'s open question, so inventing shading here would answer a question the
 project has not answered. `cargo run --release -p render --example raster_probe` prints the numbers and
-writes a PPM into the temp directory, so there is a picture to look at as well as counts to argue with.
+writes a PPM into the temp directory, so there is a picture to look at as well as counts to argue with - and
+since 2026-10-13 it reads that file back and requires every byte to equal the frame in memory, because a
+printed path is a claim about a file nobody opened. The shipped binary does the same for the demo's own
+three-cell world on request: `cargo run --release -p engine -- --frame-ppm` writes the frame step 9 just
+marched and asserted equal to the descent's picture, upscaled nearest-neighbour 64x48 to 256x192 because two
+cells meeting is not legible at 64 pixels. Measured on this host: `259 of 3072 rays found surface, every byte
+equal to the frame in memory` - the same 259 the region line beside it reports. It is opt-in, it is not a
+second march, and the default boot prints nothing extra: `cargo run -p engine` still hashes to the published
+`db71f8a0bf5818d6…`, which is what every CI leg checks.
 
 Measured on one machine, one 3-node tree (a ball on a ground plane), `surface = 1e-3`, 96-step budget,
 release profile:
