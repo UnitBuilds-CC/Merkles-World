@@ -10,11 +10,15 @@
       "cited_in": ["README.md", "docs/11-roadmap.md"]
     },
     "boot_output_sha256": {
-      "value": "d66eff197a7e40ca57a00b9559455ac68bee81a57c352b4698c9d131e61c1eb6",
+      "value": "594a8b1cc9add7d2fdbbef56bad507cdf4ce53977e274e785f9100b23c3b32f0",
       "what": "SHA-256 of the whole sixteen-line output of `cargo run -p engine` (fifteen before the region-cell line arrived, fourteen before the budget line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
       "first_measured_at": "38327470938",
       "superseded": [
+        {
+          "value": "d66eff197a7e40ca57a00b9559455ac68bee81a57c352b4698c9d131e61c1eb6",
+          "why": "the region line now also prints what the descent charges - 174,881 evaluations against 57,665 with each region's own children asked, and 1,039 rays proved empty against 2,260. The whole-output bytes move; no hashed value does: EPOCH_0, REGIONS, SLOT_TABLE and the re-entered REGION_0 still agree with doc 03, and the WASM leg still matches the native build line for line"
+        },
         {
           "value": "15c1e8af1b523d7382f705a6ffe6a19e7d3ef4dbfc4c585fd4ead8931c139cf3",
           "why": "the raster line grew to report the scene-cull path in 40008e7, which changes the whole-output hash while changing no hashed value; runs up to 38305051150 printed the older digest"

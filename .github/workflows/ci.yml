@@ -136,6 +136,12 @@ jobs:
       - name: Deep zoom, four coordinate regimes (informational)
         run: cargo run --release --example deep_zoom -p render
 
+      # The same descent `cull_probe` prices on one tree, priced inside a region cell instead - the case a
+      # streamed world is made of. Integer columns only (evaluations charged, rays proved empty, node
+      # visits), so the three runners can disagree on nothing but a real regression.
+      - name: Descent inside a region (informational)
+        run: cargo run --release --example stream_descent -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.

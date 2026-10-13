@@ -467,8 +467,21 @@ fn main() {
         world_stats.hits,
         world_stats.rays
     );
+    // The same frame, with ADR-024's descent asked of each region's own children rather than only of the
+    // cell's cover sphere. The picture may not move - that is the assertion the streaming path now carries
+    // in the shipped demo, not just in a suite - and the two charge columns are the demo's own evidence that
+    // the hierarchy is doing work in this scene rather than only in `stream_descent`.
+    let (descent_frame, descent_stats) = render::stream::render_bnb(&world_camera, &cells, &planned);
+    assert_eq!(
+        world_frame.pixels, descent_frame.pixels,
+        "the descent inside the region cells changed the picture - a skip that disagrees with the marcher"
+    );
+    assert_eq!(
+        world_frame.depth, descent_frame.depth,
+        "the descent inside the region cells moved a surface"
+    );
     println!(
-        "region world     : {} cells {:+} units apart, all planned - {} of {} rays found surface ({:.1}% of the frame), {} charged evaluations against {} for the terrain cells alone, {} proved empty by their bounds; adding the nearest cell re-lit {} pixels and lost none, worst depth shift {:.1} units - composition as a minimum of fields, which is how a frame spans cells until A-07 grows an instance node (OQ-55, OQ-57)",
+        "region world     : {} cells {:+} units apart, all planned - {} of {} rays found surface ({:.1}% of the frame), {} charged evaluations against {} for the terrain cells alone, {} proved empty by their bounds; adding the nearest cell re-lit {} pixels and lost none, worst depth shift {:.1} units - composition as a minimum of fields, which is how a frame spans cells until A-07 grows an instance node (OQ-55, OQ-57). Each region's children then asked: {} charged evaluations and {} proved empty, against {} and {} from the cell bound alone (ADR-024)",
         cells.len(),
         render::stream::REGION_UNITS,
         world_stats.hits,
@@ -479,6 +492,10 @@ fn main() {
         world_stats.skipped,
         relit,
         worst_depth_delta,
+        descent_stats.evaluations,
+        descent_stats.skipped,
+        world_stats.evaluations,
+        world_stats.skipped,
     );
 
     // ---- 10. the commit's cheap half: recycling the slab ----
