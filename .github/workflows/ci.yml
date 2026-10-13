@@ -195,6 +195,14 @@ jobs:
       - name: Pop-in of a re-entered region (informational)
         run: cargo run --release --example region_pop_in -p render
 
+      # Gate P1.5's fourth named target is ARM, and until now the codegen-level axis was only ever
+      # asked of x86: the script skipped every other host. On this runner the question is 'does compiling
+      # for this machine's full ISA move a hashed line or the asset serialization', which is the M1's NEON
+      # analogue of the AVX2/FMA spread between the N2600 and the desktop box.
+      - name: Native codegen level cannot move hashed state or asset bytes (ARM64, informational)
+        if: runner.arch == 'ARM64'
+        run: bash tools/cpu_codegen_parity.sh
+
       # Two probes whose percentages the docs quote, previously run by no job at all: the frame-cost law
       # (`steps x nodes`, the unit AS5's ceiling would use) and the single-tree pop-in comparison that reads
       # 25.1% centre-out against 1.4% tile-major. Integers and percentages only, so a runner can only

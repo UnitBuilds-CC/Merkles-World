@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Does x86 codegen level change anything the ledger hashes, or anything the demo prints?
+# Does the compiler's codegen level change anything the ledger hashes, or anything the demo prints?
 #
 #   bash tools/cpu_codegen_parity.sh
+#   bash tools/cpu_codegen_parity.sh --print     (what would this machine be asked to compare, no build)
 #
 # Gate P1.5's four machines are not the same CPU. The N2600 is a Bonnell-era Celeron: SSE2/SSSE3, no AVX2,
 # no FMA. A desktop GPU-pushing box from the same list has AVX2 and FMA. If a float contraction or a
@@ -16,18 +17,30 @@
 #   * every variant is compared against the baseline, so a run where nothing was rebuilt still cannot pass.
 #
 # Exit codes match the repo's harness convention: 0 all equal, 1 a disagreement, 2 the harness could not
-# run meaningfully (non-x86 host - the x86 codegen axis does not exist there, and ARM's SIMD axis is
-# covered by `tools/wasm_simd_parity.sh`).
+# run meaningfully (an architecture this file has no codegen spread for). On aarch64 the axis is 'build for
+# this machine's full ISA' against the generic baseline - the M1's NEON question, which was previously
+# answered only for x86 while gate P1.5's fourth target is ARM.
+# `tools/wasm_simd_parity.sh` covers a different axis: the wasm module's simd128, not native codegen.
 
 set -euo pipefail
 
-VARIANTS="${CPU_CODEGEN_VARIANTS:-x86-64 x86-64-v3}"
+MACHINE="$(uname -m)"
+case "$MACHINE" in
+  x86_64|amd64) DEFAULT_VARIANTS="x86-64 x86-64-v3" ;;
+  arm64|aarch64) DEFAULT_VARIANTS="native" ;;
+  *) DEFAULT_VARIANTS="" ;;
+esac
+VARIANTS="${CPU_CODEGEN_VARIANTS:-$DEFAULT_VARIANTS}"
 BASELINE_FLAGS="${CPU_CODEGEN_BASELINE:-}"
 FIXTURE="crates/assetc/tests/fixtures/knot.ron"
 WORK="target/cpu-codegen-parity"
 
-if [ "$(uname -m)" != "x86_64" ]; then
-  echo "SKIPPED the x86 codegen-level axis does not exist on $(uname -m); ARM SIMD is covered by wasm_simd_parity.sh"
+if [ "${1:-}" = "--print" ]; then
+  echo "arch $MACHINE: baseline = default rustflags, variants = [$VARIANTS]"
+  exit 0
+fi
+if [ -z "$VARIANTS" ]; then
+  echo "SKIPPED no codegen spread is defined for $MACHINE; ARM SIMD inside wasm is covered by wasm_simd_parity.sh"
   exit 2
 fi
 command -v cargo >/dev/null 2>&1 || { echo "FAIL cargo not found"; exit 2; }
@@ -79,9 +92,9 @@ done
 RUSTFLAGS="$BASELINE_FLAGS" cargo build --release -q -p engine -p assetc
 
 if [ "$FAIL" -ne 0 ]; then
-  echo "RESULT: a boot digest or compiled asset byte stream depends on x86 codegen level. That is a"
+  echo "RESULT: a boot digest or compiled asset byte stream depends on the codegen level. That is a"
   echo "        determinism defect: gate P1.5's machines differ exactly here, and ADR-017 forbids a hashed"
   echo "        value from depending on it."
   exit 1
 fi
-echo "RESULT: boot output and compiled asset bytes are identical across $(echo "$VARIANTS" | wc -w | tr -d ' ') x86 codegen levels and the baseline, hashed lines and asset serialization alike."
+echo "RESULT: on $MACHINE, boot output and compiled asset bytes are identical across $(echo "$VARIANTS" | wc -w | tr -d ' ') codegen levels [$VARIANTS] and the default baseline - hashed lines and asset serialization alike."
