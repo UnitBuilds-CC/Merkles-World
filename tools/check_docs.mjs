@@ -312,6 +312,80 @@ if (evidence) {
   }
 }
 
+// ---------- 8. gate P1.5's device register: which named targets have actually reported ----------
+// The demo's third clause is "one epoch root bit-identical across the four Bitwise Determinism Suite
+// targets", and the four targets are physical machines no runner is. Until now the only record of that
+// clause's state was prose in docs/11 - which is exactly the kind of claim this file exists to make
+// mechanical, because a paragraph can say "not met" long after the last row stopped being true, and can say
+// "met" one commit before anyone notices nobody ran it. So the register lives in docs/evidence.json as data,
+// and two rules hold it: an entry claiming agreement must carry the *current* boot digest (evidence from an
+// older code state cannot close a gate about this one), and docs/11 must state the count the register
+// actually holds.
+if (evidence) {
+  const register = evidence.gate_p1_5_targets;
+  const roadmapPath = [...text.keys()].find((f) => rel(f) === "docs/11-roadmap.md");
+  const roadmap = roadmapPath ? text.get(roadmapPath) : "";
+  const claimValue = evidence.claims?.boot_output_sha256?.value ?? "";
+  const HEX = /^[0-9a-f]{64}$/;
+  if (!Array.isArray(register)) {
+    fail(join(repoRoot, "docs", "evidence.json"), 1,
+      "gate_p1_5_targets must be an array: gate P1.5's four named targets are its evidence, so their state is data, not prose");
+  } else {
+    if (register.length < 4) {
+      fail(join(repoRoot, "docs", "evidence.json"), 1,
+        `gate_p1_5_targets lists ${register.length} targets; the gate names four (N2600, RTX 3060, Linux-Mesa, M1 browser) - a register with a row missing is how a clause quietly shrinks`);
+    }
+    let agreed = 0;
+    for (const entry of register) {
+      const label = entry?.target ?? "(unnamed entry)";
+      if (!entry?.target || typeof entry.target !== "string") {
+        fail(join(repoRoot, "docs", "evidence.json"), 1, "gate_p1_5_targets: every entry needs a target name");
+        continue;
+      }
+      if (!roadmap.includes(entry.target)) {
+        fail(join(repoRoot, "docs", "evidence.json"), 1,
+          `${entry.target}: the register names a target docs/11 does not, so either the gate changed or the register is inventing hardware`);
+      }
+      if (!entry.command) {
+        fail(join(repoRoot, "docs", "evidence.json"), 1,
+          `${entry.target}: no command recorded - an unrun target has to say what would run it`);
+      }
+      const status = entry.status;
+      if (!["not run", "agrees", "diverges"].includes(status)) {
+        fail(join(repoRoot, "docs", "evidence.json"), 1,
+          `${entry.target}: status must be "not run", "agrees" or "diverges" (got ${JSON.stringify(status)})`);
+      } else if (status === "agrees") {
+        agreed += 1;
+        if (!HEX.test(entry.boot_sha256 ?? "")) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: claims agreement with no whole-output digest - a verdict that names no bytes is the vacuous-green shape this project has now been caught in four times`);
+        } else if (entry.boot_sha256 !== claimValue) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: recorded ${entry.boot_sha256?.slice(0, 16)}… but the published boot digest is ${claimValue.slice(0, 16)}… - that run is evidence about an older code state, so it cannot close this gate`);
+        }
+        if (!/^[0-9a-f]{7,40}$/.test(entry.commit ?? "")) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: agrees without the commit it ran, so the verdict cannot be tied to a code state`);
+        }
+        if (!entry.recorded) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: agrees without a date, and a device run undated is a device run nobody can age`);
+        }
+      } else if (status === "diverges") {
+        if (!entry.note) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: diverges with no note - a divergence is the most valuable finding the register can hold, and it needs the shape of it`);
+        }
+      }
+    }
+    const phrase = `${agreed} of ${register.length} named targets have reported`;
+    if (!roadmap.includes(phrase)) {
+      fail(join(repoRoot, "docs", "11-roadmap.md"), 1,
+        `gate P1.5's row must state "${phrase}" - the count comes from docs/evidence.json's gate_p1_5_targets, so prose and register cannot disagree`);
+    }
+  }
+}
+
 // ---------- report ----------
 console.log(`docs check: ${files.length} files, ${linksChecked} local links, ` +
   `${defined.OQ.size} OQ + ${defined.SPEC.size} SPEC + ${defined.ADR.size} ADR + ` +

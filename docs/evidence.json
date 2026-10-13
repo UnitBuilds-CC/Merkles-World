@@ -71,5 +71,32 @@
       ],
       "_note_value_change": "measured by 38327470938 (all ten definitions green: the sixteen-line output, terrain-scale region cells included, is identical in native, bare V8, Chromium x3 architectures and Safari/JavaScriptCore)"
     }
-  }
+  },
+  "gate_p1_5_targets": [
+    {
+      "target": "N2600",
+      "what_it_is": "Alder Lake-N Celeron: no AVX2, no FMA - the ISA axis the x86 codegen probe fakes but does not own",
+      "command": "bash tools/s3_device_check.sh --browser --codegen",
+      "status": "not run"
+    },
+    {
+      "target": "RTX 3060",
+      "what_it_is": "Desktop x86-64 with AVX2 and FMA, and the only machine on the list with a GPU that can draw rather than compute",
+      "command": "bash tools/s3_device_check.sh --browser --codegen",
+      "status": "not run"
+    },
+    {
+      "target": "Linux-Mesa",
+      "what_it_is": "Linux userspace on Mesa drivers - the third vendor's float paths in WebGPU and in the driver's shader compiler",
+      "command": "bash tools/s3_device_check.sh --browser --codegen",
+      "status": "not run"
+    },
+    {
+      "target": "M1-browser",
+      "what_it_is": "Apple silicon Safari: WebKit's JavaScriptCore, the second WebAssembly implementation and the fourth engine family. CI's ARM64 Safari leg is an equivalent engine on a different machine, not this machine",
+      "command": "bash tools/s3_device_check.sh --browser",
+      "status": "not run"
+    }
+  ],
+  "_gate_p1_5_targets_purpose": "Gate P1.5's demo clause is 'bit-identical across the four Bitwise Determinism Suite targets', and the four targets are physical machines no CI runner is. Keeping that clause's state in prose would leave the project's most consequential 'not yet' as the one thing no check enforces, so it is data: tools/check_docs.mjs requires this register to hold all four targets docs/11 names, requires any entry claiming agreement to carry the *current* boot digest plus the commit and date it ran (a verdict about an older code state cannot close a gate about this one), and requires docs/11's P1.5 row to state the count the register actually holds. `tools/s3_device_check.sh --target <label>` prints a paste-ready record for one row."
 }

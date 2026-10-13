@@ -24,13 +24,20 @@ set -uo pipefail
 # reach.
 CODEGEN=0
 BROWSER=0
-for arg in "$@"; do
-  case "$arg" in
+TARGET=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --codegen) CODEGEN=1 ;;
     --browser) BROWSER=1 ;;
-    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen] [--browser]"; exit 0 ;;
-    *) echo "unknown option '$arg' (only --codegen, --browser and --help are recognised)" >&2; exit 2 ;;
+    --target)
+      shift
+      TARGET="${1:-}"
+      [[ -z "$TARGET" ]] && { echo "--target needs one of the names in docs/evidence.json's gate_p1_5_targets" >&2; exit 2; }
+      ;;
+    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen] [--browser] [--target <label>]"; exit 0 ;;
+    *) echo "unknown option '$1' (only --codegen, --browser, --target and --help are recognised)" >&2; exit 2 ;;
   esac
+  shift
 done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -158,6 +165,7 @@ if command -v node >/dev/null && rustup target list --installed 2>/dev/null | gr
 ' "$output" > "$native_txt"
   if cargo build --release --quiet -p engine --target wasm32-wasip1      && node --experimental-wasi-unstable-preview1 tools/wasm_parity.mjs           target/wasm32-wasip1/release/engine.wasm > "$wasm_txt" 2> target/s3_wasm.err; then
     if diff -u "$native_txt" "$wasm_txt"; then
+      WASI_RAN=1
       echo "//   wasm leg agrees with this machine's native build, line for line"
     else
       echo "//   WASM LEG DISAGREES - same binary, different engine. That is a P1.5 finding."
@@ -181,6 +189,7 @@ if (( CODEGEN )); then
     echo "//   SKIPPED: this axis is x86 codegen levels. On $(uname -m) the ISA spread is what the WASM"
     echo "//   leg above already covers, so nothing is being quietly left unchecked here."
   elif bash tools/cpu_codegen_parity.sh; then
+    CODEGEN_RAN=1
     echo "//   this machine's output does not move across x86 codegen levels"
   else
     codegen_status=$?
@@ -205,6 +214,7 @@ if (( BROWSER )); then
   echo "// browser leg (--browser)"
   printf '%s\n' "$output" > target/s3_native.txt
   if MLWS_NATIVE_OUTPUT=target/s3_native.txt bash tools/browser_parity_check.sh; then
+    BROWSER_RAN=1
     echo "//   browser leg recorded above agrees, or reports exactly which engines it skipped"
   else
     browser_status=$?
@@ -223,15 +233,54 @@ echo
 # failed" on a machine nobody could identify afterwards, so the identity travels with the verdict rather
 # than living in whoever remembers to scroll up. Digests stay where they are printed above - this line
 # deliberately restates no hash, so there is no second value to drift.
+# --target turns this machine's run into one row of gate P1.5's device register. The register is data
+# (docs/evidence.json's gate_p1_5_targets) and tools/check_docs.mjs refuses a row that claims agreement
+# without the current boot digest, the commit and a date - so the record this prints is shaped to satisfy
+# that check rather than to be retyped into prose. The label is checked against the register, because a
+# typo here is a fifth target nobody owns.
+print_record() {
+  local verdict="$1"
+  local known
+  known="$(node -e 'const r=require("./docs/evidence.json").gate_p1_5_targets;console.log(r.map(e=>e.target).join("|"))' 2>/dev/null)"
+  if [[ -z "$known" ]]; then
+    echo "// --target $TARGET: the register could not be read from docs/evidence.json - no record printed" >&2
+    return
+  fi
+  if [[ ! "|$known|" == *"|$TARGET|"* ]]; then
+    echo "// --target '$TARGET' is not a row of gate P1.5's register. Known targets: ${known//|/, }" >&2
+    # Exit, do not merely note it: this runs after the verdict line has already printed AGREES, so a mistyped
+    # label would otherwise leave a run that produced no record reporting exit 0 - and the whole reason the
+    # label is checked against the register is that a fifth target nobody owns must not be acceptible input.
+    exit 2
+  fi
+  local legs="native"
+  # Which legs ACTUALLY ran, tracked by each branch rather than inferred from the flags: a record that names
+  # a leg nobody ran is the vacuous-green shape this project keeps tripping over, and an option flag whose
+  # off value is 0 is still a non-empty string, so `${BROWSER:+,…}` would claim it everywhere.
+  (( ${WASI_RAN:-0} )) && legs="$legs,wasi"
+  (( ${BROWSER_RAN:-0} )) && legs="$legs,browser"
+  (( ${CODEGEN_RAN:-0} )) && legs="$legs,codegen"
+  echo "// register record for $TARGET - paste this object into docs/evidence.json's gate_p1_5_targets:"
+  echo "//   the label is a claim about this machine, not a fact the harness can check, so the record"
+  echo "//   carries the host and os beside the verdict and the register entry has to agree with them."
+  printf '{"target":"%s","status":"%s","boot_sha256":"%s","commit":"%s","recorded":"%s","host":"%s","os":"%s","legs":"%s","command":"bash tools/s3_device_check.sh %s"}\n' \
+    "$TARGET" "$verdict" "${digest:-none}" "${GIT_SHA:-unknown}" "$(date -u +%F)" \
+    "$(hostname 2>/dev/null || uname -n | tr -d '"')" "$(uname -srm | tr -d '"')" "$legs" \
+    "--target $TARGET$( ((CODEGEN)) && echo ' --codegen')$( ((BROWSER)) && echo ' --browser')"
+}
+
 SUMMARY="// SUMMARY: $(uname -srm) | commit $GIT_SHA | blake3 ${BLAKE3_VERSION:-?} | $(git -C "$repo_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
 if (( fail )); then
   echo "$SUMMARY | verdict: DIVERGES from the published vectors"
   echo "RESULT: this machine does NOT reproduce the published vectors. That is gate-relevant: record the"
   echo "        uname line, the rustc host triple and the digests above against spike S3 in docs/11."
+  [[ -n "$TARGET" ]] && print_record diverges
   exit 1
 fi
+
 echo "$SUMMARY | verdict: AGREES"
 echo "RESULT: this machine reproduces every published vector."
 echo "        Paste the machine line and the digests into docs/11's S3 row - the gate needs the name of"
 echo "        the hardware, not just the fact that something passed."
+[[ -n "$TARGET" ]] && print_record agrees
 exit 0
