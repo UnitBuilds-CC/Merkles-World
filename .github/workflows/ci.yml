@@ -711,3 +711,9 @@ jobs:
       # throwaway copy of the tree here and the checker must report it; a rule that cannot fail is not a rule.
       - name: docs checker proves it catches each planted violation
         run: node tools/check_docs_selftest.mjs
+
+      # The recorder is the last human step of gate P1.5's evidence chain, so its refusals are tested
+      # the same way: planted in a throwaway git repo, because a tool whose job is to say no has to be
+      # shown saying it. It also proves a --apply reaches all three files and a dry run reaches none.
+      - name: device-run recorder refuses what it claims to refuse
+        run: bash tools/record_device_run_selftest.sh

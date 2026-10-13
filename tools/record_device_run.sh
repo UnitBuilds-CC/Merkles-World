@@ -151,7 +151,9 @@ fi
 # Only docs integrity is asked to agree here. The self-test is a test of the *checker*, and it plants
 # violations into a copy of the tree - running it against a register this command has just legitimately
 # modified conflates "the prose and the register disagree" with "the checker's fixtures assumed otherwise".
-if ! node tools/check_docs.mjs >target/record_check.log 2>&1; then
+# Deliberately not target/record_check.log: on a fresh clone target/ does not exist, so the redirect would
+# fail and the restore branch would run - a false alarm from the tool meant to record the gate.
+if ! node tools/check_docs.mjs >"$(mktemp)" 2>&1; then
   echo "the validators did not pass after the write; restoring docs/evidence.json, docs/11 and README" >&2
   tail -5 target/record_check.log >&2
   git checkout -- docs/evidence.json docs/11-roadmap.md README.md
