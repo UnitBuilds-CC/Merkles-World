@@ -23,9 +23,9 @@
 //! `region * 4096 + offset`), and the only place it becomes an `f32` is here, on the way to a pixel
 //! (docs/02's float discipline, AGENTS.md §4).
 
-use crate::cull::{ray_may_hit, Enclosure};
+use crate::cull::{ray_may_hit, scene_bounds, Enclosure, SceneBounds};
 use crate::raster::{normal_to_rgb, ray_for, sky, unit, Camera, Frame, Stats};
-use crate::{normal, sdf_eval, Tree, ROOT};
+use crate::{normal, sdf_eval, sdf_eval_bnb, Tree, ROOT};
 use contracts::coords::GlobalVoxelPos;
 
 /// One region's side length in voxels, and so in world units: gate C1's `region * 4096 + offset`, quoted
@@ -130,6 +130,49 @@ pub fn plan(camera: &Camera, regions: &[Region]) -> Vec<usize> {
 /// region at cell `[0, 0, 0]` through here and through [`crate::raster::render_bnb`] and requires one
 /// image, and renders a near region with a far one present and absent and requires no pixel to move.
 pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame, Stats) {
+    march_regions(camera, regions, selected, None)
+}
+
+/// The same frame with ADR-024's descent running *inside* each region: one bound table per selected region,
+/// so a ray that cannot reach any child of that region's tree is rejected before the region is marched, and
+/// a march step may skip a subtree whose own enclosure cannot hold the surface.
+///
+/// The region-level bound was already doing the coarse half of this job, which is why the number to look at
+/// is node visits rather than evaluations: what a per-region test cannot see is the geometry *within* a
+/// cell, and that is the terrain-scale case OQ-56 pointed at. The tables are built once per frame, not once
+/// per ray, which is the whole cost this path adds.
+pub fn render_bnb(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame, Stats) {
+    let tables: Vec<SceneBounds> = selected
+        .iter()
+        .map(|&index| scene_bounds(&regions[index].tree))
+        .collect();
+    march_regions(camera, regions, selected, Some(&tables))
+}
+
+/// [`render_bnb`] with the caller's own tables, which is the form an instrument needs: pass
+/// [`crate::cull::counting_bounds`] per region and the identical frame reports the node visits the pruned
+/// walk avoided, so the saving is a measured difference instead of an argument. The tables must be one per
+/// entry of `selected`, in the same order.
+pub fn render_with_tables(
+    camera: &Camera,
+    regions: &[Region],
+    selected: &[usize],
+    tables: &[SceneBounds],
+) -> (Frame, Stats) {
+    assert_eq!(
+        tables.len(),
+        selected.len(),
+        "one bound table per selected region, in the same order"
+    );
+    march_regions(camera, regions, selected, Some(tables))
+}
+
+fn march_regions(
+    camera: &Camera,
+    regions: &[Region],
+    selected: &[usize],
+    tables: Option<&[SceneBounds]>,
+) -> (Frame, Stats) {
     let forward = unit(camera.forward);
     let right = unit(camera.right);
     let up = unit(camera.up);
@@ -168,11 +211,30 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
         for px in 0..camera.width {
             let dir = ray_for(camera, px, py, forward, right, up);
             let mut any = false;
-            for enclosure in &bounds {
-                if ray_may_hit(*enclosure, [0.0; 3], dir, camera.max_t) {
-                    any = true;
-                    break;
+            for (slot, enclosure) in bounds.iter().enumerate() {
+                if !ray_may_hit(*enclosure, [0.0; 3], dir, camera.max_t) {
+                    continue;
                 }
+                // The descent is asked in this region's own coordinates, from this region's own eye, for the
+                // same reason the samples are: a bound table is a statement about the tree's frame, not the
+                // world's. A counting table declines to answer (`prunes()` is false), so the baseline walk
+                // asks the region test and nothing deeper - which is the difference being measured.
+                if let Some(scene) = tables {
+                    let scene = &scene[slot];
+                    if scene.prunes()
+                        && !scene.may_reach_subtree(
+                            &regions[selected[slot]].tree,
+                            ROOT as usize,
+                            eyes[slot],
+                            dir,
+                            camera.surface,
+                        )
+                    {
+                        continue;
+                    }
+                }
+                any = true;
+                break;
             }
             if !any {
                 skipped += 1;
@@ -202,7 +264,16 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
                         eye[1] + dir[1] * t,
                         eye[2] + dir[2] * t,
                     ];
-                    let field = regions[index].field_at_local(local);
+                    let field = match tables {
+                        // One evaluator with an optional table, same rule as `raster`: two implementations of
+                        // A-07 that agree today are two programs tomorrow. A counting table answers the same
+                        // field as no table at all and merely declines every licence, so the two walks this
+                        // function can run differ only in what they decline to enter.
+                        Some(scene) => {
+                            sdf_eval_bnb(&regions[index].tree, &scene[slot], ROOT, local)
+                        }
+                        None => regions[index].field_at_local(local),
+                    };
                     if field < distance {
                         distance = field;
                         owner = slot;
@@ -236,6 +307,13 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
         }
     }
 
+    // Node visits are the only column a per-region bound cannot already explain, and they belong to the
+    // tables rather than the walk: sum them once, per region, at the end.
+    let visits: u64 = match tables {
+        Some(scene) => scene.iter().map(SceneBounds::visits).sum(),
+        None => 0,
+    };
+
     (
         frame,
         Stats {
@@ -243,7 +321,7 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
             hits,
             evaluations,
             skipped,
-            visits: 0,
+            visits,
             not_drawn: 0,
         },
     )

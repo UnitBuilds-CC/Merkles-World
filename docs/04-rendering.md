@@ -472,6 +472,44 @@ resolution retired "the camera-relative-placement worry" on the strength of a pr
 conclusion stands (a sub-pixel object at four cells *should* render as nothing); the precision conclusion
 did not, and the far-cell limit itself is now OQ-58.
 
+### The descent moves inside the region, and there it is worth two orders of magnitude (2026-10-13)
+
+`cull_probe` priced ADR-024's ray-level descent on a single tree; `region_cost` priced what a per-region
+bound saves across cells. Neither priced the case a real world is made of, which is the two together: a cell
+whose content is spread wide enough that **its own cover sphere swallows the frustum** — the `cull_probe`
+rows that prove 0.0% of rays empty — so the coarse test does nothing and the children are all that is left.
+`stream::render_bnb` asks the descent of each region's tree, in that region's coordinates from that region's
+eye (the same ordering rule as the fix above; a bound table is a statement about the tree's frame, not the
+world's), and `examples/stream_descent.rs` prices it against a counting table that prunes nothing. One cell,
+a 64x48 grid, 3,072 rays, r 0.8 spheres:
+
+| ridge | nodes | plain evaluations | with the descent | rays proved empty | node work avoided |
+|-------|-------|-------------------|------------------|-------------------|-------------------|
+| 9 spheres, spacing 1.2 | 17 | 229,888 | 5,632 | 0 → 2,336 | 85.6% |
+| 9 spheres, spacing 8.0 | 17 | 283,884 | 876 | 0 → 2,948 | 97.4% |
+| 33 spheres, spacing 8.0 | 65 | 283,884 | 876 | 0 → 2,948 | 96.4% |
+| 65 spheres, spacing 6.0 | 129 | 294,912 | 11,904 | 0 → 2,948 | 96.0% |
+
+Three readings, and the third is the one that changes the roadmap's arithmetic:
+
+- **The prize is bigger than node work.** A ray the cell's cover sphere permits but no child can reach is
+  proved empty *before the march starts*, so it is charged nothing: the evaluation column moves, not only
+  the visit column. On the spread ridge that is 283,884 → 876, a factor of 324, with the frame asserted
+  byte-identical in pixels and depth inside the example itself.
+- **Cost stops tracking the world and starts tracking the neighbourhood**, which is the streaming path's
+  whole claim, now priced at the node level too: 33 spheres cost exactly what 9 spread spheres cost — the
+  same 876 evaluations — because 24 of them are simply never entered.
+- **It is not free and not universal.** The tight row (spacing 1.2, where the cover sphere nearly fits) buys
+  85.6% rather than 97.4%, and every frame pays a bound table per selected region — O(nodes), built once per
+  frame rather than per ray, which is the honest cost of `stream` owning its own march loop. Nothing here is
+  a frame time: evaluations are not nanoseconds, and R1 still waits on a device (OQ-51).
+
+`tests/stream.rs::the_descent_inside_a_region_avoids_node_work_and_moves_no_pixel` states the law the
+structure has to obey, which is one-directional: it may convert permitted rays into skipped ones and may
+never take a pixel, a depth or a hit away. The first version of that test asserted the *weaker* claim —
+evaluations equal, saving confined to node visits — and failed, which is the measurement correcting the
+expectation rather than the other way round.
+
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
 ### Refinement: the same ceiling spread across frames, losslessly (2026-10-13)

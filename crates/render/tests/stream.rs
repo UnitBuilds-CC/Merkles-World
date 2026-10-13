@@ -5,8 +5,11 @@ use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_SPHERE, NODE_UNION,
 };
+use render::cull::{counting_bounds, SceneBounds};
 use render::raster::{render, render_culled, Camera};
-use render::stream::{plan, render as render_regions, Region, REGION_UNITS};
+use render::stream::{
+    plan, render as render_regions, render_bnb, render_with_tables, Region, REGION_UNITS,
+};
 use render::Tree;
 
 fn sphere(radius: f32, centre: [f32; 3]) -> Tree {
@@ -232,6 +235,111 @@ fn a_cell_a_billion_out_draws_the_same_picture_as_the_same_cell_at_zero() {
         want_stats.hits > 0,
         "the fixture has to actually show the pair, or this test proves nothing"
     );
+}
+
+#[test]
+fn the_descent_inside_a_region_avoids_node_work_and_moves_no_pixel() {
+    // ADR-024's hierarchy was only ever applied *within* one tree, and the streaming path is where a real
+    // world lives, so `render_bnb` asks the same descent of each region's own children - in that region's
+    // coordinates, from that region's eye. The case that shows it is the one the region bound is blind to:
+    // a ridge of spheres spread along x, wide enough that the cell's single cover sphere swallows the whole
+    // frustum (which is exactly what `cull_probe` measured at 0.0% on the line arrangement) while each
+    // child's own bound proves nearly everything. Nine spheres per cell, three cells, and a camera whose
+    // Nine spheres in the camera's own cell, spread along x, and a frame about one unit wide at the target:
+    // a side ray has no business walking the whole ridge.
+    let regions = [Region {
+        cell: [0, 0, 0],
+        tree: ridge(9, 2.0),
+    }];
+    let camera = camera([0.0, 0.0, -6.0], 40.0);
+    let selected = plan(&camera, &regions);
+    assert_eq!(selected.len(), 1, "the cell the camera sits in is in range");
+
+    let (plain, plain_stats) = render_regions(&camera, &regions, &selected);
+    let (bnb, bnb_stats) = render_bnb(&camera, &regions, &selected);
+    // The picture may not move. Not "may not move much": a skip that changes a pixel is a wrong skip, and
+    // the crate has already been caught once by exactly that difference showing up as one pixel and one hit.
+    assert_eq!(bnb.pixels, plain.pixels, "the descent changed the picture");
+    assert_eq!(bnb.depth, plain.depth, "the descent moved a surface");
+    assert_eq!(bnb_stats.hits, plain_stats.hits);
+    // The saving turns out to be larger than node work, and this is where that showed up: a ray the cell's
+    // own cover sphere permits but that no child can reach is now proved empty before the march starts, so
+    // it is charged nothing at all. The law the descent must obey is therefore one-directional - it may
+    // convert permitted rays into skipped ones, and may never take a hit or a pixel away - which is what
+    // these two lines plus the pixel and depth equality above say together.
+    assert!(
+        bnb_stats.evaluations <= plain_stats.evaluations,
+        "the descent charged {} evaluations against the plain walk's {} - it may only remove work",
+        bnb_stats.evaluations,
+        plain_stats.evaluations
+    );
+    assert!(
+        bnb_stats.skipped > plain_stats.skipped,
+        "a ridge wide enough that its own cover sphere is useless should have the children proving emptiness \
+         for rays the region bound merely permits: {} skipped against the plain walk's {}",
+        bnb_stats.skipped,
+        plain_stats.skipped
+    );
+
+    // The baseline that prunes nothing, so the saving is a measured difference rather than an argument.
+    let counting: Vec<SceneBounds> = selected
+        .iter()
+        .map(|&index| counting_bounds(&regions[index].tree))
+        .collect();
+    let (counted_frame, counted) = render_with_tables(&camera, &regions, &selected, &counting);
+    assert_eq!(
+        counted_frame.pixels, plain.pixels,
+        "a counting table must answer the identical field, or the comparison is comparing two renderers"
+    );
+    assert!(
+        counted.visits > 0,
+        "the baseline tallied nothing, so the ratio below would be meaningless"
+    );
+    let avoided = 1.0 - (bnb_stats.visits as f64 / counted.visits as f64);
+    assert!(
+        avoided > 0.5,
+        "a ridge wide enough for its own cover sphere to be useless should have the children carry the \
+         frame: {} avoided of {} node visits ({:.1}%)",
+        counted.visits - bnb_stats.visits,
+        counted.visits,
+        avoided * 100.0
+    );
+}
+
+/// A right-leaning chain of plain unions over `count` unit-ish spheres along x, starting at x = -8 and
+/// `spacing` apart. Plain unions because the descent's licence is theirs (a smooth union refuses it, and
+/// `tests/cull.rs` keeps that honest), and pre-order with correct `subtree_len` because the validator
+/// refuses a record that lies about its own extent - which is the point of hand-building it here rather
+/// than lowering an authored shape.
+fn ridge(count: usize, spacing: f32) -> Tree {
+    let mut nodes = Vec::new();
+    let mut params = Vec::new();
+    chain(count, spacing, -8.0, &mut nodes, &mut params);
+    Tree { nodes, params }
+}
+
+fn chain(count: usize, spacing: f32, x: f32, nodes: &mut Vec<NodeRecord>, params: &mut Vec<f32>) {
+    if count == 1 {
+        nodes.push(NodeRecord([
+            pack_kind_and_arity(NODE_SPHERE, 0),
+            1,
+            pack_first_and_flags(
+                params.len() as u16,
+                if nodes.is_empty() { FLAG_IS_ROOT } else { 0 },
+            ),
+            pack_params_len(4),
+        ]));
+        params.extend_from_slice(&[0.8, x, 0.0, 0.0]);
+        return;
+    }
+    nodes.push(NodeRecord([
+        pack_kind_and_arity(NODE_UNION, 2),
+        (2 * count - 1) as u32,
+        pack_first_and_flags(0, if nodes.is_empty() { FLAG_IS_ROOT } else { 0 }),
+        pack_params_len(0),
+    ]));
+    chain(1, spacing, x, nodes, params);
+    chain(count - 1, spacing, x + spacing, nodes, params);
 }
 
 #[test]
