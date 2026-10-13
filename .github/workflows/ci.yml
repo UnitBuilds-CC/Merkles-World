@@ -273,6 +273,7 @@ jobs:
       # one extra module - the `+simd128` build - is enough to conclude SIMD codegen cannot move a hashed or
       # printed line on this architecture. Two builds per runner would buy nothing the transitiveness doesn't.
       - name: Boot output is invariant to WASM SIMD codegen (this runner)
+        shell: bash
         run: |
           set -euo pipefail
           test -s host.txt || cargo run --release -q -p engine > host.txt
