@@ -534,8 +534,35 @@ seven ceilings from zero to twice the full cost, each one never overran, every d
 unbudgeted frame in colour and depth, `rays == drawn + not_drawn` at every level, and an unlimited ceiling
 byte-identical to the descent's frame in both buffers. What is *not* measured yet is the curve — which share
 of a streamed frame's surface survives a given ceiling, in which walk order, on content at region scale.
-That is `pop_in`'s question asked of cells rather than of one tree, and it is the next unit in this section,
-not a claim in it.
+That is `pop_in`'s question asked of cells rather than of one tree. It is now measured, and it came back
+different from the single-tree case in a way worth stating:
+
+| ceiling | order | charged | pixels drawn | rays proved empty | surface kept |
+|---------|-------|---------|--------------|-------------------|--------------|
+| 1/8 | centre-out | 13 | 22 | 21 | 0.8% |
+| 1/8 | tile-major | 13 | 1,238 | 1,237 | 0.8% |
+| 1/4 | centre-out | 129 | 43 | 29 | 11.3% |
+| 1/4 | tile-major | 129 | 1,259 | 1,245 | 11.3% |
+| 1/2 | centre-out | 343 | 106 | 60 | 37.1% |
+| 1/2 | tile-major | 343 | 1,322 | 1,276 | 37.1% |
+| 3/4 | centre-out | 564 | 158 | 75 | 66.9% |
+| 3/4 | tile-major | 564 | 1,758 | 1,675 | 66.9% |
+
+Same wide ridge (33 spheres, spacing 8.0), same 3,072-ray grid, same ceiling in each pair, fractions of that
+frame's own unbudgeted cost. **Coverage differs by 11× to 56× and the share of surface kept does not differ
+at all** - 0.8, 11.3, 37.1, 66.9 in both orders. The reason is the descent itself: it makes an off-subject
+ray cost nothing (a proved-empty ray is charged zero), so a walk that spends its ceiling on cheap tiles
+finalises most of the grid while barely touching the budget, and the expensive rays near the subject are the
+same handful whichever tile it starts from. In `pop_in`'s single-tree case, where the scene fills the frame
+and no per-region test throws the sky away, the same law produced the opposite advice - 25.1% of hits in the
+first frame centre-out against 1.4% tile-major.
+
+The practical reading for the demo: **on a streamed frame with the descent working, walk order is a decision
+about how fast the *background settles*, not about when the subject appears.** Both are worth having, and
+neither is free to guess - which is why the order stayed policy rather than becoming a default tuned to one
+fixture. `frames to finish` in the probe is derived (the grid divided by the pixels one ceiling decided), not
+measured: refining a streamed frame across frames is `raster::render_bnb_refined`'s job and the streaming
+twin of it is not built.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 

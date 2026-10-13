@@ -14,8 +14,10 @@ use contracts::sdf::{
     NODE_SPHERE, NODE_UNION,
 };
 use render::cull::counting_bounds;
-use render::raster::Camera;
-use render::stream::{plan, render, render_bnb, render_with_tables, Region, REGION_UNITS};
+use render::raster::{Budget, Camera, Frame, Scan};
+use render::stream::{
+    plan, render, render_bnb, render_budget, render_with_tables, Region, REGION_UNITS,
+};
 use render::Tree;
 
 /// A right-leaning chain of plain unions over `count` spheres along x - plain because the descent's licence
@@ -142,4 +144,89 @@ fn main() {
         "// row is the honest counter-example - where the cover sphere already fits, the hierarchy"
     );
     println!("// buys close to nothing and still costs a table per region per frame.");
+
+    // The curve docs/04 named as the next question rather than pretending to answer: what share of a
+    // *streamed* frame's surface survives a given ceiling, and how much of that is a fact about the walk
+    // order rather than about the work. Measured against the wide ridge - the case the descent exists for -
+    // and charged against its own unbudgeted cost, so the fractions mean "of what this frame actually
+    // needs", not of a budget someone picked.
+    println!();
+    println!(
+        "// the same ceiling spent across cells: wide ridge (33 spheres, spacing 8.0), one cell"
+    );
+    let wide = [Region {
+        cell: [0, 0, 0],
+        tree: ridge(33, 8.0),
+    }];
+    let wide_selected = plan(&camera, &wide);
+    let (full_frame, full_wide) = render_bnb(&camera, &wide, &wide_selected);
+    println!();
+    println!(" ceiling | order | charged | drawn pixels | rays proved empty | hits kept | frames to finish (derived)");
+    for (label, num, den) in [
+        ("1/8", 1u64, 8u64),
+        ("1/4", 1, 4),
+        ("1/2", 1, 2),
+        ("3/4", 3, 4),
+    ] {
+        let ceiling = full_wide.evaluations * num / den;
+        for (order_name, scan) in [
+            ("centre-out", Scan::CentreOut),
+            ("tile-major", Scan::TileMajor),
+        ] {
+            let (frame, stats) =
+                render_budget(&camera, &wide, &wide_selected, Budget(ceiling), scan);
+            // The example asserts its own premise: the ceiling holds, and what it drew is the full frame's
+            // own pixels rather than a near miss. An earlier version asserted neither, and both are the
+            // claims a reader would otherwise have to take on faith.
+            assert!(
+                stats.evaluations <= ceiling,
+                "a ceiling of {ceiling} was overran by the {order_name} walk: {}",
+                stats.evaluations
+            );
+            for index in 0..frame.depth.len() {
+                if frame.depth[index] == Frame::NOT_DRAWN_DEPTH {
+                    continue;
+                }
+                assert_eq!(
+                    frame.depth[index], full_frame.depth[index],
+                    "pixel {index} moved once a ceiling was applied ({order_name})"
+                );
+                assert_eq!(
+                    &frame.pixels[index * 3..index * 3 + 3],
+                    &full_frame.pixels[index * 3..index * 3 + 3]
+                );
+            }
+            let drawn = u64::from(stats.rays) - u64::from(stats.not_drawn);
+            let kept = 100.0 * stats.hits as f64 / full_wide.hits.max(1) as f64;
+            let frames = if drawn > 0 {
+                u64::from(stats.rays).div_ceil(drawn)
+            } else {
+                0
+            };
+            println!(
+                " {:>7} | {:>11} | {:>7} | {:>12} | {:>17} | {:>9} | {:>24}",
+                label,
+                order_name,
+                stats.evaluations,
+                drawn,
+                stats.skipped,
+                format!("{kept:.1}%"),
+                frames,
+            );
+        }
+    }
+    println!();
+    println!(
+        "// `frames to finish` is DERIVED, not measured: it is the grid divided by the pixels one"
+    );
+    println!("// ceiling decided, and it assumes each frame is re-budgeted at the same charge. Refining a");
+    println!("// streamed frame across frames is `raster`'s `render_bnb_refined`, and the streaming twin of");
+    println!("// it is not built yet - so that column is arithmetic on a measured number, and is labelled");
+    println!("// as such. And the pairs disagree with the expectation this file was written to confirm: at a");
+    println!("// given ceiling the two orders draw 11x to 56x different numbers of pixels while keeping the");
+    println!("// SAME share of surface (0.8, 11.3, 37.1, 66.9 in both). The descent makes an off-subject ray");
+    println!("// cost nothing, so a walk that spends its ceiling on cheap tiles finalises the grid for free,");
+    println!("// and the expensive rays near the subject are the same handful either way. `pop_in` measured");
+    println!("// the opposite advice on one tree - 25.1% of hits first frame centre-out against 1.4% - which");
+    println!("// is the difference between a scene that fills the frame and a cell that mostly isn't one.");
 }
