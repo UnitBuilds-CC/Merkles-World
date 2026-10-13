@@ -581,9 +581,13 @@ Two things follow from the same law and are stated here because they were learne
   ray and the grid takes hundreds of frames. `refine_probe` prints that progression per frame - 335 pixels
   settled by frame one (the free, proved-empty ones), then a handful more each frame after - and it is the
   reason `stream_descent`'s DERIVED `frames to finish` column is not merely imprecise: its estimate of about
-  three frames is **two orders of magnitude** below what the measured carry takes, because the derived figure
-  assumes a frame spends its ceiling evenly, when in fact the cheap pixels all arrive first and what remains
-  is precisely the expensive frontier. `stream_descent` now prints that carry **measured**, per ceiling and
+  three frames was wrong in both directions: at 1/8 the carry takes **57 frames in either walk order** where the derived
+  figure predicted 140 centre-out and 3 tile-major, and at 1/2 and 3/4 it takes 3 and 2 frames. Two facts came
+  out of measuring rather than estimating, and neither is the one expected. The frames to finish do not
+  depend on the walk order at all - 57 centre-out, 57 tile-major at the same ceiling - even though the pixels
+  settled per frame differ by 56x, so the order decides *which* pixels arrive, not how long the grid takes.
+  And the carry costs nothing extra: cumulative charge across all 57 frames is 876, exactly what the single
+  unbudgeted pass charged, asserted at every ceiling and in both orders. `stream_descent` now prints that carry **measured**, per ceiling and
   per walk order, with the convergence and the cumulative charge asserted rather than inferred.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
