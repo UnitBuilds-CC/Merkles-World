@@ -268,6 +268,16 @@ jobs:
       # bash on every runner: the Windows default shell is PowerShell, where `set -euo pipefail` is a
       # no-op and `2>&1` is a parse error - which is exactly how this step first failed trunk, on a
       # syntax difference rather than a divergent root.
+      # The `wasm` job proves SIMD-invariance once. This proves it per runner, which is the axis gate P1.5's
+      # four machines actually differ on: each OS already gets its own native-vs-default-module diff below, so
+      # one extra module - the `+simd128` build - is enough to conclude SIMD codegen cannot move a hashed or
+      # printed line on this architecture. Two builds per runner would buy nothing the transitiveness doesn't.
+      - name: Boot output is invariant to WASM SIMD codegen (this runner)
+        run: |
+          set -euo pipefail
+          test -s host.txt || cargo run --release -q -p engine > host.txt
+          bash tools/wasm_simd_parity.sh --native host.txt --only +simd128
+
       - name: Run it under a WASM engine and diff against the native build
         shell: bash
         run: |
