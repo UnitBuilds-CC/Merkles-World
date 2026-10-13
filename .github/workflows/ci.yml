@@ -195,6 +195,12 @@ jobs:
       - name: Pop-in of a re-entered region (informational)
         run: cargo run --release --example region_pop_in -p render
 
+      # OQ-50's decision packet: which voxel span contradicts the frozen region arithmetic, and
+      # whether a player could see the difference. Integers and pixel counts, no timings, so a runner
+      # can only disagree on a real change.
+      - name: Voxel span probes for OQ-50 (informational)
+        run: cargo run --release --example voxel_span_oq50 -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
