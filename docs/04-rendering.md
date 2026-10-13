@@ -570,12 +570,20 @@ Two things follow from the same law and are stated here because they were learne
   what makes the ceiling trustworthy as a gate rather than a statistic. It also means a ceiling must be
   *specified in ray charges*, not as a fraction of a frame: `full/8` of a 32×24 grid is less than one ray,
   and a caller who picks that number will watch a renderer do nothing and assume it is broken.
-- **Refinement across frames is not landed.** `render_bnb_refined` exists for one tree; the streaming twin
-  was built twice this session, tested twice, and reverted twice. The first stall was the fixture above. The
-  second got further - the depths converged and the pixel buffers did not, which is a narrow and specific
-  symptom in the resume path - so what is missing is a diagnosis watched frame by frame, not another attempt
-  written from reasoning. Until then `stream_descent`'s `frames to finish` column is labelled DERIVED, and
-  the honest statement of the transition story is: the cut exists, the carry does not.
+- **Refinement across frames is landed, and the ceiling's unit is what makes it sane.** `stream::render_budget_refined`
+  carries the pixels an earlier frame decided: they cost nothing this frame and stop being a shortfall, and the
+  converged frame is the unbudgeted one, depths *and* pixels, asserted in both walk orders by
+  `tests/stream.rs::refining_a_streamed_frame_at_one_ceiling_converges_to_the_frame_it_was_cut_from`. What took
+  two failed attempts to see is that the ceiling must be expressed in **ray charges**, not as a fraction of the
+  frame, because the worst-case gate stops the frame as soon as one more ray could not possibly fit: at
+  `4 × charge` this fixture's 768-ray grid finishes in a single frame (nothing to refine), at `full/8` it
+  affords no ray at all (nothing drawn), and at one charge per frame the gate admits exactly one non-trivial
+  ray and the grid takes hundreds of frames. `refine_probe` prints that progression per frame - 335 pixels
+  settled by frame one (the free, proved-empty ones), then a handful more each frame after - and it is the
+  reason `stream_descent`'s DERIVED `frames to finish` column is not merely imprecise: its estimate of about
+  three frames is **two orders of magnitude** below what the measured carry takes, because the derived figure
+  assumes a frame spends its ceiling evenly, when in fact the cheap pixels all arrive first and what remains
+  is precisely the expensive frontier.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 

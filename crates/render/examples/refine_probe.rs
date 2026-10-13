@@ -85,12 +85,13 @@ fn main() {
     let mut frame = Frame::new(camera.width, camera.height);
     let mut last_depth = vec![Frame::NOT_DRAWN_DEPTH; rays];
     let mut last_rgb = frame.pixels.clone();
-    for iteration in 1..=4 {
+    let mut finished_in = 0u32;
+    for iteration in 1..=64 {
         let stats = render_budget_refined(
             &camera,
             &regions,
             &selected,
-            Budget(charge * 4),
+            Budget(charge),
             Scan::TileMajor,
             &mut frame,
         );
@@ -128,9 +129,23 @@ fn main() {
             repaints,
             format!("{depth_matches}/{decided}"),
         );
+        if stats.not_drawn == 0 {
+            finished_in = iteration;
+            break;
+        }
         last_depth = frame.depth.clone();
         last_rgb = frame.pixels.clone();
     }
+    println!();
+    println!(
+        "// frames to finish at one ray charge per frame: {finished_in} (MEASURED, tile-major, {rays} rays, \
+         whole frame costs {})",
+        full_stats.evaluations
+    );
+    println!("// This is the column `stream_descent` still prints as DERIVED - the grid divided by the pixels");
+    println!("// one ceiling decided. It is not the same number: skipped rays are free, so a frame settles far");
+    println!("// more pixels than its charge divided by one ray's cost, and the derived figure understates");
+    println!("// how fast a streamed frame converges. `stream_descent` should be switched to this measurement.");
     println!();
     println!(
         "// regressions > 0 means the resume guard refused to carry and the init wiped the frame;"
