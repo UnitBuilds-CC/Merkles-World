@@ -121,6 +121,13 @@ impl Interpreter {
         // rasterisation reported as hardware. Discrete first, then integrated, then anything that is not a
         // CPU device; the fallback path asks for the CPU device on purpose and labels it.
         let mut adapters: Vec<wgpu::Adapter> = instance.enumerate_adapters(wgpu::Backends::all());
+        if !fallback {
+            // Rank alone is not enough: on a runner whose only device is the software rasteriser, sorting
+            // Cpu last still returns it, and a timing number from it would be quoted as a GPU measurement.
+            // Asking for hardware means rejecting the non-hardware adapters, so the caller gets NoAdapter
+            // and prints a skip instead.
+            adapters.retain(|a| a.get_info().device_type != wgpu::DeviceType::Cpu);
+        }
         adapters.sort_by_key(|a| {
             let t = a.get_info().device_type;
             if fallback {
