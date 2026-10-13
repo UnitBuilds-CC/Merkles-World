@@ -22,8 +22,12 @@
 //!    for a blended scene is none. Nothing displays it; that half is still the renderer workstream's.
 //! 8. the same grid is drawn a fourth time **under a ceiling** on charged evaluations, centre-out, and the
 //!    pixels the ceiling sacrificed are counted rather than left as a black guess.
+//! 9. the field is composed from **three region cells** - one compiled asset each, placed on the frozen
+//!    cell arithmetic - and compared the only way a frame spanning cells can be compared: identical hit
+//!    sets, stopped depths equal to within the march's own tolerance (OQ-57's diagnosis, measured).
+//! 10. the slab is recycled in `O(1)`.
 //!
-//! Steps 6 to 8 are CPU arithmetic on a buffer. The clause of the pitch demo they satisfy is "a rendered
+//! Steps 6 to 9 are CPU arithmetic on a buffer. The clause of the pitch demo they satisfy is "a rendered
 //! procedural scene" in the sense docs/11's gate table can check - pixels exist and are reproducible - and
 //! not in the sense a player would accept: there is no display, and gates R1 and R2 are frame times.
 //!
@@ -32,8 +36,7 @@
 //!
 //! What is NOT here, because docs/11's gate table says so and a demo must not quietly disagree with
 //! its own status page: no GPU, no window, no BVH build (the bounds are derived per node from the tree the
-//! asset compiler emitted, not from a spatial index over primitives), no macro simulation, no mod loading,
-//! and no multi-region frame. Culling and a work ceiling are here since steps 7 and 8, on the CPU path;
+//! asset compiler emitted, not from a spatial index over primitives), no macro simulation, no mod loading. Culling and a work ceiling are here since steps 7 and 8, on the CPU path;
 //! ledger compaction is a landed transform with no caller in this loop. The first clause of the pitch demo is now true in the narrow sense that something
 //! boots and completes the loop end to end, and the asset it boots with goes through the file format
 //! an author's tool would write.
@@ -330,7 +333,102 @@ fn main() {
         bnb_raster.hits,
     );
 
-    // ---- 9. the commit's cheap half: recycling the slab ----
+    // ---- 9. the same field as a world: three region cells, one frame ----
+    // A-07 has no translation node, so a cell is a separate compiled asset placed on the frozen cell
+    // arithmetic and the frame composes the cells' fields (doc 04 § Region streaming; OQ-55 asks whether the
+    // grammar should grow an instance kind). The comparison is deliberately not byte equality, because
+    // OQ-57's diagnosis showed byte equality is not a claim that can be true at region distance: composing
+    // cells changes the trajectory, so a stopped depth moves by units in the last place - 7202.292 against
+    // 7202.295, three `f32` steps at that magnitude, inside the 1e-2 tolerance the march defines a hit by.
+    // What has to hold exactly is the **hit set**, and that is what is asserted.
+    use assetc::Shape;
+    let ridge = compile_shape(
+        Shape::RoundedBox {
+            half: [900.0, 120.0, 900.0],
+            r: 200.0,
+        },
+        "engine boot ridge",
+    )
+    .0;
+    let hill = compile_shape(
+        Shape::Sphere {
+            r: 500.0,
+            centre: [0.0, 0.0, 0.0],
+        },
+        "engine boot hill",
+    )
+    .0;
+    let cells = [
+        render::stream::Region {
+            cell: [1, 0, 0],
+            tree: tree.clone(),
+        },
+        render::stream::Region {
+            cell: [2, 0, 0],
+            tree: ridge,
+        },
+        render::stream::Region {
+            cell: [3, 0, 0],
+            tree: hill,
+        },
+    ];
+    let world_camera = render::raster::Camera {
+        origin: [0.0, 0.0, 0.0],
+        forward: [1.0, 0.0, 0.0],
+        right: [0.0, 1.0, 0.0],
+        up: [0.0, 0.0, 1.0],
+        max_t: 16_384.0,
+        surface: 1e-2,
+        ..probe_camera()
+    };
+    let planned = render::stream::plan(&world_camera, &cells);
+    let (world_frame, world_stats) = render::stream::render(&world_camera, &cells, &planned);
+    let terrain = &cells[1..];
+    let terrain_plan = render::stream::plan(&world_camera, terrain);
+    let (terrain_frame, terrain_stats) =
+        render::stream::render(&world_camera, terrain, &terrain_plan);
+    assert_eq!(
+        planned.len(),
+        cells.len(),
+        "a range of four cells must reach all three, or this is not a world"
+    );
+    assert_eq!(
+        world_stats.hits, terrain_stats.hits,
+        "the prop-scale hero cell added or removed surface, which OQ-57's diagnosis says it must not:          {} vs {}",
+        world_stats.hits, terrain_stats.hits
+    );
+    let mut hit_set_mismatch = 0usize;
+    let mut worst_depth_diff = 0.0f32;
+    for index in 0..world_frame.depth.len() {
+        let world_hit = world_frame.depth[index] != render::raster::Frame::NO_HIT;
+        let terrain_hit = terrain_frame.depth[index] != render::raster::Frame::NO_HIT;
+        if world_hit != terrain_hit {
+            hit_set_mismatch += 1;
+        } else if world_hit {
+            worst_depth_diff =
+                worst_depth_diff.max((world_frame.depth[index] - terrain_frame.depth[index]).abs());
+        }
+    }
+    assert_eq!(
+        hit_set_mismatch, 0,
+        "composition changed which pixels have surface at all"
+    );
+    assert!(
+        worst_depth_diff <= 4.0 * world_camera.surface,
+        "a stopped depth may move by the trajectory's last places, not by a tenth of a voxel: worst          {worst_depth_diff}"
+    );
+    println!(
+        "region world     : {} cells {:+} units apart, all planned - {} of {} rays found surface, {} charged evaluations, {} proved empty by their bounds; dropping the prop-scale cell leaves the hit set identical and moves no stopped depth by more than {worst_depth_diff:.3} at distances up to {:+} units, which is what comparing frames across cells means (OQ-57; A-07 has no instance node: OQ-55)",
+        cells.len(),
+        render::stream::REGION_UNITS,
+        world_stats.hits,
+        world_stats.rays,
+        world_stats.evaluations,
+        world_stats.skipped,
+        3.0 * render::stream::REGION_UNITS,
+    );
+
+    // ---- 10. the commit's cheap half: recycling the slab ----
     slab.reset();
     println!(
         "after commit     : slab reset to {} records in O(1), capacity unchanged at {}",
@@ -353,7 +451,7 @@ fn main() {
 /// mean *after they have been through the wire*, which is the kind of gap that shows up as a wrong
 /// picture rather than a failed test.
 fn scene_tree() -> render::Tree {
-    use assetc::{lower, reader, writer, Shape};
+    use assetc::Shape;
     let hero = Shape::Union {
         a: Box::new(Shape::RoundedBox {
             half: [0.35, 0.35, 0.9],
@@ -398,29 +496,46 @@ fn scene_tree() -> render::Tree {
         a: Box::new(hero),
         b: Box::new(spread),
     };
+    let (tree, node_count, depth, byte_len) = compile_shape(authored, "engine boot scene");
+    println!(
+        "scene source     : authored shape lowered by assetc ({node_count} nodes, depth {depth}), compiled to {byte_len} bytes and loaded by assetc::reader",
+    );
+    tree
+}
+
+/// The one path content takes here: authored `Shape` -> `assetc::lower` -> `ShapeAsset` **bytes** ->
+/// `assetc::reader::from_bytes` -> `render::Tree`, with the records asserted unchanged by the trip. The
+/// demo's own scene and the region cells in step 9 all arrive this way, which is what makes "the runtime
+/// parses nothing" (AGENTS.md §3) a statement about the binary rather than about a test.
+///
+/// It prints nothing, so a scene that exists to fill a neighbouring cell cannot silently change the
+/// published boot output.
+fn compile_shape(authored: assetc::Shape, label: &str) -> (render::Tree, usize, u32, usize) {
+    use assetc::{lower, reader, writer};
     match lower(&authored) {
         Ok(asset) => {
             let node_count = asset.tree.nodes.len();
             let depth = asset.depth;
-            let bytes = writer::to_bytes(&asset, "engine boot scene");
+            let bytes = writer::to_bytes(&asset, label);
             let loaded =
-                reader::from_bytes(&bytes).expect("the engine's own compiled asset must load back");
+                reader::from_bytes(&bytes).expect("an authored shape must compile and load back");
             assert_eq!(
                 loaded.nodes, asset.tree.nodes,
                 "loading must not reinterpret a node"
             );
             assert_eq!(loaded.params, asset.tree.params, "nor the pool");
-            assert_eq!(loaded.depth, depth);
-            println!(
-                "scene source     : authored shape lowered by assetc ({node_count} nodes, depth {depth}), compiled to {} bytes and loaded by assetc::reader",
-                bytes.len()
-            );
-            render::Tree {
-                nodes: loaded.nodes,
-                params: loaded.params,
-            }
+            assert_eq!(loaded.depth, depth, "and not the derived depth either");
+            (
+                render::Tree {
+                    nodes: loaded.nodes,
+                    params: loaded.params,
+                },
+                node_count,
+                depth,
+                bytes.len(),
+            )
         }
-        Err(error) => panic!("the engine's own scene must lower: {error:?}"),
+        Err(error) => panic!("{label} must lower: {error:?}"),
     }
 }
 

@@ -149,6 +149,16 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
         "the boot must draw the frame under a stated ceiling and report the cut:
 {output}"
     );
+    // And across cells: the multi-region frame must report the comparison that is true at region
+    // distance - the hit set identical, the stopped depths agreeing to within the tolerance - rather than
+    // claiming byte equality the arithmetic cannot deliver.
+    assert!(
+        output.contains("region world")
+            && output.contains("hit set identical")
+            && output.contains("cells +4096 units apart"),
+        "the boot must compose region cells into one frame and say how it compared them:
+{output}"
+    );
     // The two culled paths must be reported as different measurements, because that difference is the
     // demo's own evidence for ADR-024: a scene of one compact object has a tight single bound and nothing
     // for a hierarchy to do, so the spread objects are what make the columns disagree. Pinned to the line

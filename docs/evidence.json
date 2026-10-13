@@ -3,10 +3,10 @@
   "_updated": "2026-10-12",
   "claims": {
     "boot_output_sha256": {
-      "value": "167a0cade1327d0eb62adeecf7e20bfe5693083be3bdd93e702c9c40be73d394",
-      "what": "SHA-256 of the whole fifteen-line output of `cargo run -p engine` (fourteen before the demo's budget line arrived), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
+      "value": "a651b7f33e2ac0c64ca2488049d9697a080d81200c9187904cbedd24fdb4c662",
+      "what": "SHA-256 of the whole sixteen-line output of `cargo run -p engine` (fifteen before the region-cell line arrived, fourteen before the budget line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
-      "first_measured_at": "38322714045",
+      "first_measured_at": "pending its own green run (the previous value was measured by 38325029983)",
       "superseded": [
         {
           "value": "15c1e8af1b523d7382f705a6ffe6a19e7d3ef4dbfc4c585fd4ead8931c139cf3",
@@ -31,6 +31,10 @@
         {
           "value": "649eff38a5529b1bd01616e029d10e13b0654f08c5d193a7d76b8962b1c25a79",
           "why": "the boot grew a fifteenth line: the demo frame is now also drawn under a ceiling (half the hierarchy render's charged work, centre-out), printing 1475 pixels drawn, 1597 left undrawn and 599 of 605 hits kept. No hashed value moved - the ledger lines are the same digests, and the budgeted frame is asserted pixel-for-pixel equal to the unbudgeted one wherever it drew."
+        },
+        {
+          "value": "167a0cade1327d0eb62adeecf7e20bfe5693083be3bdd93e702c9c40be73d394",
+          "why": "the boot grew a sixteenth line: the field is now composed from three region cells and the line reports the comparison that holds at region distance (identical hit set, stopped depths within 0.005 out to 12,288 units). No hashed value moved; the ledger lines are the same digests."
         }
       ],
       "cited_in": [
@@ -38,7 +42,7 @@
         "docs/04-rendering.md",
         "docs/13-risks-open-questions.md"
       ],
-      "_note_value_change": "measured by 38322714045 (all ten job definitions green: native, bare V8, Chromium x3 architectures and Safari/JavaScriptCore all print the fifteen-line output with the demo budget line in it)"
+      "_note_value_change": "printed by the boot on this trunk"
     }
   }
 }
