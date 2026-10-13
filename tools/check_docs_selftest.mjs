@@ -36,6 +36,11 @@ function validate() {
 const registerUnderTest = JSON.parse(readFileSync(at('docs/evidence.json'), 'utf8')).gate_p1_5_targets;
 const agreedPristine = registerUnderTest.filter((row) => row.status === 'agrees').length;
 const totalPristine = registerUnderTest.length;
+// Row handles are derived from the register under test: this suite used to hardcode indices and the four old
+// labels, so the day the target list was amended it crashed on index 2. A test that assumes the shape of the
+// thing it guards is the same bug as a count that assumes no device has reported.
+const rowAt = (j, i) => j.gate_p1_5_targets[i % j.gate_p1_5_targets.length];
+const labelAt = (i) => registerUnderTest[i % registerUnderTest.length].target;
 const countRight = `${agreedPristine} of ${totalPristine} named targets have reported`;
 const countWrong = `${agreedPristine + 1} of ${totalPristine} named targets have reported`;
 
@@ -58,7 +63,7 @@ const CASES = [
     expects: "older code state",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      Object.assign(j.gate_p1_5_targets[0], {
+      Object.assign(rowAt(j, 0), {
         status: "agrees",
         boot_sha256: "7c71da7ca50774da36def063e24b4848ff345c9116cdea2221e3fba619bd50af",
         commit: "0".repeat(40),
@@ -72,7 +77,7 @@ const CASES = [
     expects: "no whole-output digest",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      j.gate_p1_5_targets[1].status = "agrees";
+      rowAt(j, 1).status = "agrees";
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
@@ -83,7 +88,9 @@ const CASES = [
       const j = JSON.parse(PRISTINE.evidence);
       const current = j.claims.boot_output_sha256.value;
       // legs present and honest, so the only thing missing is the commit - the legs rule fires earlier.
-      Object.assign(j.gate_p1_5_targets[2], { status: "agrees", boot_sha256: current, recorded: "2026-10-13", legs: "native,wasi" });
+      const noCommit = rowAt(j, 1);
+      Object.assign(noCommit, { status: "agrees", boot_sha256: current, recorded: "2026-10-13", legs: "native,wasi" });
+      delete noCommit.commit;
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
@@ -92,7 +99,7 @@ const CASES = [
     expects: "diverges with no note",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      j.gate_p1_5_targets[3].status = "diverges";
+      rowAt(j, 3).status = "diverges";
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
@@ -110,7 +117,7 @@ const CASES = [
     expects: "names a target docs/11 does not",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      j.gate_p1_5_targets[0].target = "Pentium-4";
+      rowAt(j, 0).target = "Pentium-4";
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
@@ -119,7 +126,7 @@ const CASES = [
     expects: "an unrun target has to say what would run it",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      delete j.gate_p1_5_targets[1].command;
+      delete rowAt(j, 1).command;
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
@@ -128,28 +135,32 @@ const CASES = [
     expects: "agrees with no legs recorded",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      Object.assign(j.gate_p1_5_targets[0], {
+      Object.assign(rowAt(j, 0), {
         status: "agrees",
         boot_sha256: j.claims.boot_output_sha256.value,
         commit: "0".repeat(40),
         recorded: "2026-10-13",
       });
+      delete rowAt(j, 0).legs;
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
   {
-    name: "the M1-browser row agreeing with no browser leg",
+    name: "a browser-named row agreeing without a browser leg",
     expects: "no browser leg",
     mutate() {
-      const j = JSON.parse(PRISTINE.evidence);
-      Object.assign(j.gate_p1_5_targets[3], {
+      const j2 = JSON.parse(PRISTINE.evidence);
+      // One assignment sets the whole row: the rules are an else-if chain, so an earlier missing field would
+      // otherwise mask the browser rule and this case would pass by proving nothing.
+      Object.assign(j2.gate_p1_5_targets[1], {
+        target: "M1-browser",
         status: "agrees",
-        boot_sha256: j.claims.boot_output_sha256.value,
+        boot_sha256: j2.claims.boot_output_sha256.value,
         commit: "0".repeat(40),
         recorded: "2026-10-13",
         legs: "native,wasi",
       });
-      write("docs/evidence.json", JSON.stringify(j, null, 2));
+      write("docs/evidence.json", JSON.stringify(j2, null, 2));
     },
   },
   {
@@ -157,7 +168,7 @@ const CASES = [
     expects: "does not include native",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      Object.assign(j.gate_p1_5_targets[1], {
+      Object.assign(rowAt(j, 1), {
         status: "agrees",
         boot_sha256: j.claims.boot_output_sha256.value,
         commit: "0".repeat(40),
@@ -189,7 +200,7 @@ const CASES = [
     expects: "must be \"not run\", \"agrees\" or \"diverges\"",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      j.gate_p1_5_targets[0].status = "probably fine";
+      rowAt(j, 0).status = "probably fine";
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },

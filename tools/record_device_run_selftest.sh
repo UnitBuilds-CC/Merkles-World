@@ -34,6 +34,9 @@ git -c user.name=recorder-selftest -c user.email=recorder@invalid \
 
 # Use a commit that exists in this throwaway history: the recorder now refuses one that does not.
 HEAD_SHA="$(git rev-parse HEAD)"
+# Labels come from the register under test for the same reason the counts do: the target list is data now.
+LABEL_A="$(node -e 'console.log(require("./docs/evidence.json").gate_p1_5_targets[0].target)')"
+LABEL_B="$(node -e 'console.log(require("./docs/evidence.json").gate_p1_5_targets[1 % require("./docs/evidence.json").gate_p1_5_targets.length].target)')"
 
 # The digest this copy publishes, and the count its prose currently claims.
 published="$(node -e 'console.log(require("./docs/evidence.json").claims.boot_output_sha256.value)')"
@@ -71,8 +74,8 @@ echo "// recorder self-test (register currently claims: $claim)"
 
 # 1. a stale digest must be refused, and nothing may change
 zero64="0000000000000000000000000000000000000000000000000000000000000000"
-stale_record="$(good N2600 native,wasi | sed "s/$published/$zero64/")"
-out="$(record N2600 "$stale_record" --apply)"
+stale_record="$(good "$LABEL_A" native,wasi | sed "s/$published/$zero64/")"
+out="$(record "$LABEL_A" "$stale_record" --apply)"
 expect "an agrees record citing a digest other than the published one is refused" 1 "$out" "not the published"
 if [[ "$(git status --porcelain -- docs/evidence.json docs/11-roadmap.md README.md | wc -l)" != 0 ]]; then
   status=1
@@ -80,8 +83,8 @@ if [[ "$(git status --porcelain -- docs/evidence.json docs/11-roadmap.md README.
 fi
 
 # 2. the fourth target without a browser leg must be refused
-out="$(record M1-browser "$(good M1-browser native,wasi)" --apply)"
-expect "M1-browser is refused when the browser leg never ran" 1 "$out" "needs a browser leg"
+out="$(record "$LABEL_A" "$(good "$LABEL_A" wasi,browser)" --apply)"
+expect "a record whose legs never computed a root is refused" 1 "$out" "legs must include native"
 if [[ "$(git status --porcelain -- docs/evidence.json docs/11-roadmap.md README.md | wc -l)" != 0 ]]; then
   status=1
   echo "  NOT AS EXPECTED: a refused record left files changed"
@@ -96,12 +99,12 @@ out="$(record N2600 '{not json' --apply)"
 expect "a malformed record is refused" 1 "$out" "not valid JSON"
 # 4b. a commit that is not in this clone's history must be refused: a verdict pinned to an unreadable SHA
 #     cannot be re-checked, and the device run is exactly the sort of thing a mistyped SHA would invalidate.
-ghost_record="$(good N2600 native,wasi | sed "s/$HEAD_SHA/0000000000000000000000000000000000000000/")"
-out="$(record N2600 "$ghost_record" --apply)"
+ghost_record="$(good "$LABEL_A" native,wasi | sed "s/$HEAD_SHA/0000000000000000000000000000000000000000/")"
+out="$(record "$LABEL_A" "$ghost_record" --apply)"
 expect "a record citing a commit absent from history is refused" 1 "$out" "not in this clone's history"
 
 # 5. --apply with a valid record must land in all three files, and keep docs integrity passing
-out="$(record 'RTX 3060' "$(good 'RTX 3060' native,wasi)" --apply)"
+out="$(record "$LABEL_B" "$(good "$LABEL_B" native,wasi)" --apply)"
 expect "a valid record is accepted with --apply" 0 "$out" "recorded"
 node tools/check_docs.mjs >selftest.out 2>&1
 expect "the register and both prose sites still satisfy docs integrity" 0 "$?" "no findings"
@@ -109,18 +112,18 @@ if ! grep -qF '"status": "agrees"' docs/evidence.json; then
   status=1
   echo "  NOT AS EXPECTED: the register row was not written"
 fi
-if ! grep -qF "1 of 4 named targets have reported" README.md; then
+if ! grep -qF "2 of 2 named targets have reported" README.md; then
   status=1
   echo "  NOT AS EXPECTED: README's count did not move"
 fi
-if ! grep -qF "1 of 4 named targets have reported" docs/11-roadmap.md; then
+if ! grep -qF "2 of 2 named targets have reported" docs/11-roadmap.md; then
   status=1
   echo "  NOT AS EXPECTED: docs/11's count did not move"
 fi
 
 # 6. a dry run must accept the validation and change nothing
 git checkout -- . >/dev/null 2>&1
-out="$(record 'Linux-Mesa' "$(good 'Linux-Mesa' native,wasi,browser)")"
+out="$(record "$LABEL_B" "$(good "$LABEL_B" native,wasi,browser)")"
 expect "a dry run validates and reports it rolled back" 0 "$out" "dry run"
 if [[ "$(git status --porcelain -- docs/evidence.json docs/11-roadmap.md README.md | wc -l)" != 0 ]]; then
   status=1

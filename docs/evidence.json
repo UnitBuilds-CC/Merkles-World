@@ -7,7 +7,10 @@
       "value": "194 tests in 30 suites",
       "what": "The workspace's measured test total, as `cargo test -q` reports it summed across the per-suite lines. It is on the README's front page, which is the place most likely to be read and the place that drifted furthest once - a status board saying '32 tests' while the suite held 183 is a public lie, not a stale number.",
       "measured_by": "`cargo test -q` - the sum of the `test result: ok.` lines",
-      "cited_in": ["README.md", "docs/11-roadmap.md"]
+      "cited_in": [
+        "README.md",
+        "docs/11-roadmap.md"
+      ]
     },
     "boot_output_sha256": {
       "value": "db71f8a0bf5818d66a8faab4ac32f093b3c18637e3888a9c853dd47ee3083af8",
@@ -74,29 +77,25 @@
   },
   "gate_p1_5_targets": [
     {
-      "target": "N2600",
-      "what_it_is": "Alder Lake-N Celeron: no AVX2, no FMA - the ISA axis the x86 codegen probe fakes but does not own",
-      "command": "bash tools/s3_device_check.sh --browser --codegen",
-      "status": "not run"
+      "target": "buildbox-Linux-x86_64",
+      "kind": "device",
+      "what_it_is": "Ubuntu 24.04 server, AMD Ryzen 5 5500 (AVX2+FMA), glibc, its own LLVM 21 toolchain - a fourth execution environment no CI image or workstation represents",
+      "command": "bash tools/s3_device_check.sh --browser --target buildbox-Linux-x86_64",
+      "status": "agrees",
+      "boot_sha256": "db71f8a0bf5818d66a8faab4ac32f093b3c18637e3888a9c853dd47ee3083af8",
+      "commit": "403d77348221feac25bcd8277ac9baf8c8852706",
+      "recorded": "2026-10-13",
+      "host": "buildbox",
+      "os": "Linux 6.8.0-142-generic x86_64",
+      "legs": "native"
     },
     {
-      "target": "RTX 3060",
-      "what_it_is": "Desktop x86-64 with AVX2 and FMA, and the only machine on the list with a GPU that can draw rather than compute",
-      "command": "bash tools/s3_device_check.sh --browser --codegen",
-      "status": "not run"
-    },
-    {
-      "target": "Linux-Mesa",
-      "what_it_is": "Linux userspace on Mesa drivers - the third vendor's float paths in WebGPU and in the driver's shader compiler",
-      "command": "bash tools/s3_device_check.sh --browser --codegen",
-      "status": "not run"
-    },
-    {
-      "target": "M1-browser",
-      "what_it_is": "Apple silicon Safari: WebKit's JavaScriptCore, the second WebAssembly implementation and the fourth engine family. CI's ARM64 Safari leg is an equivalent engine on a different machine, not this machine",
-      "command": "bash tools/s3_device_check.sh --browser",
+      "target": "RTX3050-laptop-Windows",
+      "kind": "device",
+      "what_it_is": "The other real machine: Windows x86-64 with an RTX 3050 6GB, i.e. an Ampere GPU on a driver stack that can present one (the 1070 box is on nouveau, so no nvidia-smi and no usable Vulkan)",
+      "command": "bash tools/s3_device_check.sh --browser --codegen --target RTX3050-laptop-Windows",
       "status": "not run"
     }
   ],
-  "_gate_p1_5_targets_purpose": "Gate P1.5's demo clause is 'bit-identical across the four Bitwise Determinism Suite targets', and the four targets are physical machines no CI runner is. Keeping that clause's state in prose would leave the project's most consequential 'not yet' as the one thing no check enforces, so it is data: tools/check_docs.mjs requires this register to hold all four targets docs/11 names, requires any entry claiming agreement to carry the *current* boot digest plus the commit and date it ran (a verdict about an older code state cannot close a gate about this one), and requires docs/11's P1.5 row to state the count the register actually holds. `tools/s3_device_check.sh --target <label>` prints a paste-ready record for one row."
+  "_gate_p1_5_targets_purpose": "Gate P1.5's demo clause named four machines the project's owner does not have - an AVX2-less N2600, an RTX 3060 desktop, a Linux-Mesa box and an M1 browser - so it looked like a test awaiting a result while being unclosable in principle. Amended 2026-10-13 to the two devices that exist. The axes neither can express are named rather than dropped: the no-AVX2 Celeron axis is carried by CI's blake3/pure scalar-vector leg and tools/cpu_codegen_parity.sh (baseline versus -Ctarget-cpu=x86-64-v3), and Apple-silicon JavaScriptCore by the roots-in-JavaScriptCore job on the ARM64 runner. Those are proxies for a compiler and an engine, not for silicon. A device row may read agrees only with a resolvable commit, the current whole-output digest and the legs that actually ran."
 }

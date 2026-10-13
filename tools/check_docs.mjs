@@ -331,9 +331,9 @@ if (evidence) {
     fail(join(repoRoot, "docs", "evidence.json"), 1,
       "gate_p1_5_targets must be an array: gate P1.5's four named targets are its evidence, so their state is data, not prose");
   } else {
-    if (register.length < 4) {
+    if (register.length < 2) {
       fail(join(repoRoot, "docs", "evidence.json"), 1,
-        `gate_p1_5_targets lists ${register.length} targets; the gate names four (N2600, RTX 3060, Linux-Mesa, M1 browser) - a register with a row missing is how a clause quietly shrinks`);
+        `gate_p1_5_targets lists ${register.length} targets; the gate names two real devices (buildbox-Linux-x86_64, RTX3050-laptop-Windows) - a register with a row missing is how a clause quietly shrinks. Shrinking below two needs the roadmap row amended first, not the register edited`);
     }
     let agreed = 0;
     for (const entry of register) {
