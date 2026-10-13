@@ -113,6 +113,68 @@ Steps per ray on a CPU are not nanoseconds per frame on a GPU, and there is no W
 BVH, and no `assetc` to emit an asset yet - so those stay targets, and this file says so instead of
 quoting the reference implementation's speed as if it were the renderer's.
 
+### The WGSL interpreter agrees — having first disagreed (2026-10-12)
+
+`crates/gpu` holds A-07's master interpreter in WGSL, and `cargo run --release -p gpu --example
+agreement` uploads the engine's own five-node boot scene and compares the two implementations at
+1,521 fixed sample points on a device. On the `Microsoft Basic Render Driver [Dx12, Cpu]` adapter the
+maximum deviation was **0.000000000 world units** — not "close", identical, which is what you want
+from two `f32` evaluators of the same formulas. CI, on two different vendors, is the more interesting
+measurement (run `38268554246`): the Windows runner, also on the software adapter, reproduced the exact
+zero, while **ARM64 macOS on Metal differed by 0.000000238 world units** at a point 2.44 units from the
+surface — a relative 1e-7, which is one fused-multiply-add being contracted by one compiler and not the
+other. The 1e-4 tolerance is written to pass that and fail the 0.042 divergence above, and the reason it
+can be that loose without becoming weak is docs/02: nothing here is hashed, so a vendor-level `f32`
+difference is a shading nuance rather than a desync. The Linux runner printed its SKIP and exited 0. CI runs it on every gate job; the x86-64 Linux runner
+has no adapter and the step prints a SKIP and exits 0, so a missing device can never read as
+agreement, and an adapter that refuses to open a device is a hard failure rather than a skip.
+
+It disagreed first, and the reason is the whole point of writing it twice. The shader's smooth union
+used the cubic blend that circulates in the SDF literature — `h³ · k / 6` — while
+`crates/render::smin` is quadratic, `h² · k / 4`. Both are valid smooth minimums, both keep the
+1-Lipschitz bound that makes a march step a guaranteed-empty sphere, and both read as "the" formula.
+At `[-2.52, -1.48, -2.70]`-adjacent sample `…-1.48…` inside the blend region they differed by
+**0.042 world units**, about 4% of a voxel, which in a shipped frame is a surface in the wrong place
+and in a mod is two machines disagreeing about one shape. The shader now mirrors the reference
+expression for expression, including the `k <= 0` collapse to a plain `min`. A device-free text guard
+pins the three constants so the regression cannot come back on a runner with no GPU: `h * h * k *
+0.25` present, `1.0 / 6.0` absent, the zero-radius guard present.
+
+Two more things came out of running it rather than reading the docs. The interpreter needs five
+storage buffers, and `Limits::downlevel_defaults()` allows four per stage — so the header moved to a
+uniform binding, which is also the only shape that survives a WebGL-class backend, and that is a
+constraint on the real renderer, not on a test. And a storage buffer cannot be mapped at all, so
+results are copied into a `COPY_DST | MAP_READ` staging buffer before the CPU can look at them;
+reading back is a two-buffer operation on every path that wants to check itself.
+
+One scene is a demo, so the check became a gate: `examples/agreement.rs` builds **one tree per
+implemented kind** — five leaves, four binaries, four space-folding unaries — and compares 729 fixed
+sample points for each. A single union-of-three exercises three arms and hides ten, and the arms that
+hide are the ones worth checking: the unaries fold space, so they need their own point per stack frame
+in a walker that has no recursion.
+
+| Kind | Max deviation, GPU vs CPU |
+|---|---|
+| sphere, rounded box, cylinder, torus, plane | 0.000000 |
+| union, smooth union, subtract, intersect | 0.000000 |
+| repeat, mirror, bend | 0.000000 |
+| **twist** | **0.000001** |
+
+Twelve of thirteen agree to the last bit, and the thirteenth is the interesting one: `twist` is the
+only arm that calls `sin`/`cos`, and it is the only arm with any deviation at all — 1e-6 world units,
+the GPU's transcendental and libm's disagreeing by about a millionth. That is docs/02's float
+discipline measured rather than asserted: a transcendental is fine in the renderer precisely because a
+root never sees it, and the same property is why this comparison needs a tolerance instead of an
+`==`. The other twelve agreeing exactly is the same fact pointing the other way — add, multiply and
+`sqrt` are IEEE-determined, so a march's step counts can be and are reproducible across machines.
+
+What is still missing, stated so none of the above is over-read: the shader covers thirteen kinds —
+the whole implemented set — but `Noise` is refused on both sides (it needs docs/02's lattice hash and
+OQ-45's payload meaning) and a material node has no WGSL arm, which is A-07's shape/material split
+holding rather than a gap in it. There is no GPU march, no BVH and no culling, so gates R1 and R2 are
+untouched by any of this, and none of these distances is hashed: presentation agreeing with
+presentation is a contract check, not gate P1.5 or R4 evidence (ADR-017).
+
 ### The raster probe: the first frame-cost shape, on a CPU (2026-10-12)
 
 `crates/render::raster` turns a tree into a pixel grid: a pinhole camera with an explicit image-plane

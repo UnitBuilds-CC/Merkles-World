@@ -223,12 +223,24 @@ jobs:
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
       - name: Spike S7 macro propagation (informational)
         run: cargo run --release --example s7_propagation -p engine
+      # A-07 has two implementations now, so the contract's real claim is testable: the WGSL master
+      # interpreter and crates/render must compute the same distances. Exits 0 with a printed SKIP where
+      # no adapter exists (the Linux runner) and 1 where a device disagrees, so silence never reads as
+      # agreement. Not gate R1: a software adapter validates the shader, it does not measure a frame.
+      - name: A-07 WGSL vs CPU agreement (skips where the runner has no device)
+        run: cargo run --release -p gpu --example agreement
 
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.
       - name: Raster probe and node-cost sweep (informational)
         run: cargo run --release --example raster_probe -p render
+
+      # Spike S9 (what does wgpu cost) and the S6 question hiding behind it (is there any device in a
+      # runner at all). Printed, never asserted: a CPU rasteriser in a CI log can validate WGSL against
+      # the CPU reference, which is a real gate, but it cannot measure a frame budget, which is not.
+      - name: GPU adapter probe (informational)
+        run: cargo run -p gpu
 
       # The engine asserts docs/03's published vectors itself, so running it is a gate check rather
       # than a smoke test: a wrong digest anywhere in slab -> commit -> read -> march exits non-zero.
