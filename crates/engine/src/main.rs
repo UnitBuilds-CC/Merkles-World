@@ -499,6 +499,67 @@ fn main() {
         world_stats.skipped,
     );
 
+    // Step 9b: the carry, performed inside the binary. A ceiling that crops a frame is not a transition -
+    // the next frame has to keep what the last one settled - so the demo refines one streamed frame at a
+    // fixed ceiling until nothing is short of, and requires the settled frame to be the very picture the
+    // unbudgeted march found. The ceiling is stated in **ray charges** (`max_steps + 1`) rather than as a
+    // fraction of the frame, because that is the unit the gate is spent in: a fraction can silently afford
+    // not even one ray, which is the mistake `OQ-59` was - two reverted attempts before the fixture was
+    // read as a defect.
+    let charge = u64::from(world_camera.max_steps) + 1;
+    let mut carried = render::raster::Frame::new(world_camera.width, world_camera.height);
+    let mut carry_frames = 0u32;
+    let mut carry_charge = 0u64;
+    let mut carry_skipped = 0u32;
+    let mut settled_first = 0u32;
+    loop {
+        carry_frames += 1;
+        let stats = render::stream::render_budget_refined(
+            &world_camera,
+            &cells,
+            &planned,
+            render::raster::Budget(charge),
+            render::raster::Scan::CentreOut,
+            &mut carried,
+        );
+        assert!(
+            stats.evaluations <= charge,
+            "frame {carry_frames} of the demo's carry breached its ceiling of {charge}: {}",
+            stats.evaluations
+        );
+        carry_charge += stats.evaluations;
+        carry_skipped += stats.skipped;
+        if carry_frames == 1 {
+            settled_first = stats.rays - stats.not_drawn;
+        }
+        if stats.not_drawn == 0 || carry_frames >= 4096 {
+            break;
+        }
+    }
+    assert!(
+        carry_frames < 4096,
+        "the demo's carry never settled the grid - {} frames at a ceiling of {charge}",
+        carry_frames
+    );
+    assert_eq!(
+        carried.depth, descent_frame.depth,
+        "the carried frame settled to depths the unbudgeted march never produced"
+    );
+    assert_eq!(
+        carried.pixels, descent_frame.pixels,
+        "the carried frame settled to a different picture than the unbudgeted march"
+    );
+    println!(
+        "stream carry     : {} rays refined at a {}-charge ceiling settle in {} frames ({} after the first frame, {} charged, {} proved empty), against {} charged for the single pass - and the settled frame is pixel-for-pixel the picture the unbudgeted march found, so a ceiling in the demo is a transition rather than a crop (R3, ADR-024)",
+        world_stats.rays,
+        charge,
+        carry_frames,
+        settled_first,
+        carry_charge,
+        carry_skipped,
+        descent_stats.evaluations,
+    );
+
     // ---- 10. the commit's cheap half: recycling the slab ----
     slab.reset();
     println!(

@@ -194,7 +194,7 @@ proved empty, because a 2.1-unit sphere around a scene fills a camera that close
 quoted above print `178880 … 668 of 3072`: two rays moved back across the line when a skip began testing
 the bound grown by the marcher's hit tolerance (see the third-layer section below), and they are the boot's
 own grazing cases. The shape of the line is unchanged, the numbers in it are measured, and the whole
-fifteen-line output hashes to `167a0cade1327d0e…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current: `594a8b1cc9add7d2…`)
+fifteen-line output hashes to `167a0cade1327d0e…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current: `3c67db5f51644de6…`)
 `8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`)
 value), which both the docs gate and CI check rather than believe.
 
@@ -589,6 +589,26 @@ Two things follow from the same law and are stated here because they were learne
   And the carry costs nothing extra: cumulative charge across all 57 frames is 876, exactly what the single
   unbudgeted pass charged, asserted at every ceiling and in both orders. `stream_descent` now prints that carry **measured**, per ceiling and
   per walk order, with the convergence and the cumulative charge asserted rather than inferred.
+
+The demo now performs the carry itself, as step 9b of `cargo run -p engine`: one streamed frame of the
+shipped three-cell world is refined at a ceiling of **one ray charge** (`max_steps + 1` = 97) until nothing
+is short of, and the settled frame is asserted inside the binary to be pixel-for-pixel and depth-for-depth
+the picture the unbudgeted descent march found. Measured on that world: **813 frames**, cumulative charge
+**57,665 — exactly the single pass's**, with 2,260 rays proved empty along the way. Two things came out of
+running it on real content rather than on the synthetic ridge.
+
+- **The total work is free; the wall of frames is not.** Refinement adds no charged work whatsoever - the
+  figure lands on the single pass's number to the unit - but it takes 813 frames to place the picture, so a
+  ceiling is a statement about *latency to a complete frame*, which is the thing a pitch demo is judged on,
+  not about cost.
+- **The ceiling is charged before the reachability test, so free rays are not harvested.** The boot's frame
+  has 2,260 rays the bounds can prove empty at zero cost, yet frame one settles a single ray: the gate asks
+  "can the next ray afford its worst case?" before asking "does this ray hit anything?", and once the
+  answer is no the frame stops - leaving thousands of zero-cost pixels uncollected. Reordering those two
+  questions is sound (a proved-empty ray charges nothing, so the ceiling cannot be breached by it) and would
+  turn 813 frames into something like `3072 - 2260` over the same charge, but it changes the *prefix*
+  property the budget tests pin - which pixels are drawn at a given ceiling - so it is a decision to make
+  with those tests in hand, not a quiet edit. It is filed as **OQ-60**.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 

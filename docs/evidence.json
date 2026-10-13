@@ -10,11 +10,15 @@
       "cited_in": ["README.md", "docs/11-roadmap.md"]
     },
     "boot_output_sha256": {
-      "value": "594a8b1cc9add7d2fdbbef56bad507cdf4ce53977e274e785f9100b23c3b32f0",
-      "what": "SHA-256 of the whole sixteen-line output of `cargo run -p engine` (fifteen before the region-cell line arrived, fourteen before the budget line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
+      "value": "3c67db5f51644de6b20290cbffa0bac0a3c5bb404fe1e1b74e4162f72e5f1f0f",
+      "what": "SHA-256 of the whole seventeen-line output of `cargo run -p engine` (sixteen before the stream-carry line arrived, fifteen before the region-cell line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
       "first_measured_at": "38327470938",
       "superseded": [
+        {
+          "value": "594a8b1cc9add7d2fdbbef56bad507cdf4ce53977e274e785f9100b23c3b32f0",
+          "why": "step 9b of the boot now performs the carry: one streamed frame refined at a 97-charge ceiling settles all 3,072 rays in 813 frames for exactly the single pass's 57,665 charged evaluations, and the settled frame is asserted pixel-for-pixel the picture the unbudgeted descent march found. A printed line grew, so the whole-output bytes moved; no hashed value did - EPOCH_0, REGIONS, SLOT_TABLE and the re-entered REGION_0 still agree with doc 03, and the WASM leg still matches native line for line"
+        },
         {
           "value": "d66eff197a7e40ca57a00b9559455ac68bee81a57c352b4698c9d131e61c1eb6",
           "why": "the region line now also prints what the descent charges - 174,881 evaluations against 57,665 with each region's own children asked, and 1,039 rays proved empty against 2,260. The whole-output bytes move; no hashed value does: EPOCH_0, REGIONS, SLOT_TABLE and the re-entered REGION_0 still agree with doc 03, and the WASM leg still matches the native build line for line"
