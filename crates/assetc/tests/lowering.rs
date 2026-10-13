@@ -7,6 +7,7 @@
 //! recomputes them independently), the root is flagged once, and the refusals refuse.
 
 use assetc::{lower, LowerError, Shape};
+
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_ROUNDED_BOX, NODE_SMOOTH_UNION, NODE_SPHERE, NODE_UNION,
@@ -102,25 +103,28 @@ fn the_root_is_flagged_once_and_nothing_claims_a_material() {
 
 #[test]
 fn refusals_refuse_before_any_byte_exists() {
-    assert_eq!(
-        lower(&Shape::Mirror {
-            axis: 7,
-            child: Box::new(Shape::Sphere {
-                r: 1.0,
-                centre: [0.0; 3]
-            }),
+    let axis = lower(&Shape::Mirror {
+        axis: 7,
+        child: Box::new(Shape::Sphere {
+            r: 1.0,
+            centre: [0.0; 3],
         }),
-        Err(LowerError::BadAxis),
-        "an out-of-range axis is refused, not clamped into a different shape"
-    );
+    })
+    .unwrap_err(); // an out-of-range axis is refused, not clamped into a different shape
+    assert_eq!(axis.error, LowerError::BadAxis);
     assert_eq!(
-        lower(&Shape::Sphere {
-            r: f32::NAN,
-            centre: [0.0; 3]
-        }),
-        Err(LowerError::NonFiniteParameter),
-        "NaN travels a distance field into every pixel and raises nothing"
+        axis.location(),
+        "Mirror",
+        "and the author is told which shape"
     );
+
+    let nan = lower(&Shape::Sphere {
+        r: f32::NAN,
+        centre: [0.0; 3],
+    })
+    .unwrap_err(); // NaN travels a distance field into every pixel and raises nothing
+    assert_eq!(nan.error, LowerError::NonFiniteParameter);
+    assert_eq!(nan.location(), "Sphere");
 
     let mut deep = Shape::Sphere {
         r: 0.5,
@@ -132,7 +136,9 @@ fn refusals_refuse_before_any_byte_exists() {
             child: Box::new(deep),
         };
     }
-    assert!(matches!(lower(&deep), Err(LowerError::TooDeep { .. })));
+    let too_deep = lower(&deep).unwrap_err(); // a 20-deep tiling is refused
+    assert!(matches!(too_deep.error, LowerError::TooDeep { .. }));
+    assert_eq!(too_deep.location(), "Repeat");
 }
 
 #[test]
@@ -159,4 +165,61 @@ fn subtracts_argument_order_belongs_to_the_keeper() {
         sdf_eval(&asset.tree, render::ROOT, [0.0, 0.0, -0.3]) > 0.0,
         "below it, removed"
     );
+}
+#[test]
+fn a_refusal_names_the_authored_route_not_the_record_index() {
+    // AS3's whole point is that the message is actionable in the file. Node 4 is a fact about the
+    // compiled output; `Union.b.Mirror.a.Sphere` is a fact about what the author wrote, and only one of
+    // those two can be fixed without opening the file and reading it back.
+    let nested = Shape::Union {
+        a: Box::new(Shape::Sphere {
+            r: 1.0,
+            centre: [0.0, 0.0, 0.0],
+        }),
+        b: Box::new(Shape::Mirror {
+            axis: 2,
+            child: Box::new(Shape::Subtract {
+                kept: Box::new(Shape::Sphere {
+                    r: f32::NAN,
+                    centre: [0.0, 0.0, 0.0],
+                }),
+                cutter: Box::new(Shape::Sphere {
+                    r: 0.5,
+                    centre: [1.0, 0.0, 0.0],
+                }),
+            }),
+        }),
+    };
+    let refusal = lower(&nested).unwrap_err(); // a NaN two levels down is refused
+    assert_eq!(refusal.error, LowerError::NonFiniteParameter);
+    assert_eq!(
+        refusal.location(),
+        "Union.b.Mirror.child.Subtract.kept.Sphere"
+    );
+    let message = refusal.to_string();
+    assert!(
+        message.contains("Union.b.Mirror.child.Subtract.kept") && message.contains("non-finite"),
+        "the sentence has to carry both the place and the reason: {message}"
+    );
+
+    // The watch loop surfaces the same sentence, because that is what an agent editing the file reads.
+    let dir = std::env::temp_dir().join(format!("assetc-span-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a temp dir for the bad authoring file");
+    let input = dir.join("bad.ron");
+    let output = dir.join("bad.bin");
+    let _ = std::fs::remove_file(&output);
+    let text = ron::to_string(&nested).expect("the shape is writable as RON");
+    std::fs::write(&input, text).expect("the file is writable");
+    let compiled =
+        assetc::watch::Watch::default().observe(input.to_str().unwrap(), output.to_str().unwrap());
+    match compiled {
+        assetc::watch::Outcome::Failed(reason) => {
+            assert!(
+                reason.contains("schema violation") && reason.contains("Subtract.kept.Sphere"),
+                "the reload loop must report the authored route: {reason}"
+            );
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(!output.exists(), "a refused shape writes nothing");
 }

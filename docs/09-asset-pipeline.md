@@ -201,7 +201,7 @@ that question rather than papered over by a passing test suite.
 |------|------|--------|
 | AS1 | `pig.ron` → `.bin` → GPU buffer with zero runtime parse, hot-reloaded | ADR-014 |
 | AS2 | Identical `.bin` bytes from identical source on two machines (deterministic serialization). **Measured 2026-10-12:** CI compiles `sphere.ron` and `knot.ron` on x86-64 Linux, x86-64 Windows and ARM64 macOS and the following job fails unless the digests agree (`4f9da1a4…`, `52b85b4b…` on all three at `38302996493`). `knot.ron` exists for this gate: twelve nodes, depths to five, and values a parser is entitled to round differently - 0.1, 0.3, -0.0, 1e7 - plus the union ordering `order::rebalance` derives from `f32` sort keys. | OQ-30 |
-| AS3 | Schema violation fails the build with a span-accurate message | doc 12 agent loop |
+| AS3 | Schema violation fails the build with a span-accurate message | doc 12 agent loop. **Advanced 2026-10-13:** syntax failures already carry byte spans from the parser (`1:32-1:33: Expected opening \`(\``), and semantic refusals now carry the **authored route** - `Union.b.Mirror.child.Subtract.kept.Sphere carries a non-finite parameter (NaN or infinite)` - because a shape can be perfectly well-formed RON and still be refused, and the walker knows where. `tests/lowering.rs` pins the route for three refusals and asserts the reload loop reports the same sentence and writes nothing. What is *not* done: a byte span for semantic violations, which needs RON's spanned deserialization (a dependency decision), so the gate stays open on that half. |
 | AS4 | A `.mpack` loads with no allocation churn and no parse step | ADR-015 |
 | AS5 | An over-budget SDF is rejected at compile time | doc 04 budget |
 

@@ -132,7 +132,7 @@ fn compile_bytes(input: &str, text: &str) -> Result<(Vec<u8>, crate::budget::Cos
     }
     let asset = match lower(&authored) {
         Ok(asset) => asset,
-        Err(error) => return Err(format!("refused by the compiler: {error:?}")),
+        Err(refusal) => return Err(format!("schema violation: {refusal}")),
     };
     let cost = crate::budget::cost_of(&asset);
     let label = std::path::Path::new(input)

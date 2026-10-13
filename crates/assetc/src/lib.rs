@@ -119,6 +119,63 @@ pub enum LowerError {
     Unlowerable,
 }
 
+/// A lowering refusal plus **where in the authored tree** it happened.
+///
+/// This is doc 09's gate AS3: a schema violation has to fail the build with a message an agent can act on
+/// without opening the file and guessing. The parser already supplies byte spans for *syntax* failures
+/// (`1:32-1:33: Expected opening \`(\``), but a shape can be perfectly well-formed RON and still be
+/// refused - a NaN radius, an axis of 7, a tree past the depth cap - and those failures come out of the
+/// walker, which knows the position and would otherwise throw it away.
+///
+/// `path` is the authored route, not the record index: `Union.a.Mirror` is something an author can find in
+/// the file, whereas node 3 is a fact about the compiled output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub error: LowerError,
+    pub path: Vec<&'static str>,
+}
+
+impl Refusal {
+    fn at(path: &[&'static str], error: LowerError) -> Self {
+        Refusal {
+            error,
+            path: path.to_vec(),
+        }
+    }
+
+    /// The authored location, as it would be typed: `Union.a.Mirror`.
+    #[must_use]
+    pub fn location(&self) -> String {
+        if self.path.is_empty() {
+            "the root shape".to_string()
+        } else {
+            self.path.join(".")
+        }
+    }
+}
+
+impl core::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let here = self.location();
+        match &self.error {
+            LowerError::TooDeep { depth } => write!(
+                f,
+                "{here} is {depth} levels deep, past the grammar's cap of {MAX_TREE_DEPTH}"
+            ),
+            LowerError::BadAxis => write!(f, "{here} has an axis outside 0..=2"),
+            LowerError::NonFiniteParameter => {
+                write!(f, "{here} carries a non-finite parameter (NaN or infinite)")
+            }
+            LowerError::Unlowerable => {
+                write!(
+                    f,
+                    "{here} is a kind the evaluator refuses, so no asset can be emitted"
+                )
+            }
+        }
+    }
+}
+
 /// A lowered asset: a tree the evaluator can run, plus the header fields the envelope needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
@@ -135,6 +192,36 @@ impl Asset {
             .nodes
             .iter()
             .any(|record| record.flags() & (FLAG_HAS_MATERIAL | FLAG_IS_ROOT) == FLAG_HAS_MATERIAL)
+    }
+}
+
+/// The author-facing name of a shape, used in refusal paths.
+fn label(shape: &Shape) -> &'static str {
+    match shape {
+        Shape::Sphere { .. } => "Sphere",
+        Shape::RoundedBox { .. } => "RoundedBox",
+        Shape::Plane { .. } => "Plane",
+        Shape::Union { .. } => "Union",
+        Shape::SmoothUnion { .. } => "SmoothUnion",
+        Shape::Subtract { .. } => "Subtract",
+        Shape::Intersect { .. } => "Intersect",
+        Shape::Repeat { .. } => "Repeat",
+        Shape::Mirror { .. } => "Mirror",
+    }
+}
+
+/// The authored field a child sits in, so a path reads the way the file is written.
+fn edge(shape: &Shape, index: usize) -> &'static str {
+    match shape {
+        Shape::Subtract { .. } => match index {
+            0 => "kept",
+            _ => "cutter",
+        },
+        Shape::Repeat { .. } | Shape::Mirror { .. } => "child",
+        _ => match index {
+            0 => "a",
+            _ => "b",
+        },
     }
 }
 
@@ -156,12 +243,15 @@ fn kind_of(shape: &Shape) -> u16 {
 
 /// Parameters and children, per shape. Kept beside `kind_of` so the parameter meanings the evaluator
 /// documents and the bytes that carry them cannot drift apart quietly.
-fn parts(shape: &Shape) -> Result<(Vec<f32>, Vec<&Shape>), LowerError> {
-    let finite = |values: &[f32]| -> Result<(), LowerError> {
+fn parts<'s>(
+    shape: &'s Shape,
+    path: &[&'static str],
+) -> Result<(Vec<f32>, Vec<&'s Shape>), Refusal> {
+    let finite = |values: &[f32]| -> Result<(), Refusal> {
         if values.iter().all(|value| value.is_finite()) {
             Ok(())
         } else {
-            Err(LowerError::NonFiniteParameter)
+            Err(Refusal::at(path, LowerError::NonFiniteParameter))
         }
     };
     Ok(match shape {
@@ -191,43 +281,48 @@ fn parts(shape: &Shape) -> Result<(Vec<f32>, Vec<&Shape>), LowerError> {
         }
         Shape::Mirror { axis, child } => {
             if *axis > 2 {
-                return Err(LowerError::BadAxis);
+                return Err(Refusal::at(path, LowerError::BadAxis));
             }
             (vec![*axis as f32], vec![child.as_ref()])
         }
     })
 }
 
-fn depth_of(shape: &Shape) -> Result<u32, LowerError> {
-    let (_, kids) = parts(shape)?;
+fn depth_of(shape: &Shape, path: &mut Vec<&'static str>) -> Result<u32, Refusal> {
+    let (_, kids) = parts(shape, path)?;
     let mut deepest = 0u32;
-    for kid in kids {
-        deepest = deepest.max(depth_of(kid)?);
+    for (index, &kid) in kids.iter().enumerate() {
+        path.push(edge(shape, index));
+        path.push(label(kid));
+        deepest = deepest.max(depth_of(kid, path)?);
+        path.pop();
+        path.pop();
     }
     Ok(1 + deepest)
 }
 
 /// Lower into pre-order records: parent first, children left to right, `subtree_len` derived from the
 /// children's own spans so the layout is computed rather than asserted.
-pub fn lower(root: &Shape) -> Result<Asset, LowerError> {
+pub fn lower(root: &Shape) -> Result<Asset, Refusal> {
     let root = &order::rebalance(root);
-    let depth = depth_of(root)?;
+    let mut path = vec![label(root)];
+    let depth = depth_of(root, &mut path)?;
     if depth > MAX_TREE_DEPTH {
-        return Err(LowerError::TooDeep { depth });
+        return Err(Refusal::at(&path, LowerError::TooDeep { depth }));
     }
     let kind = kind_of(root);
     if !is_known_kind(kind) || arity_of(kind) == usize::MAX {
-        return Err(LowerError::Unlowerable);
+        return Err(Refusal::at(&path, LowerError::Unlowerable));
     }
     let mut params: Vec<f32> = Vec::new();
     let mut nodes: Vec<NodeRecord> = Vec::new();
-    emit(root, &mut params, &mut nodes)?;
+    emit(root, &mut params, &mut nodes, &mut path)?;
     if nodes.is_empty() {
-        return Err(LowerError::Unlowerable);
+        return Err(Refusal::at(&path, LowerError::Unlowerable));
     }
     nodes[0].0[2] |= (FLAG_IS_ROOT as u32) << 16;
     let tree = Tree { nodes, params };
-    render::validate(&tree).map_err(|_| LowerError::Unlowerable)?;
+    render::validate(&tree).map_err(|_| Refusal::at(&path, LowerError::Unlowerable))?;
     Ok(Asset { tree, depth })
 }
 
@@ -235,10 +330,11 @@ fn emit(
     shape: &Shape,
     params: &mut Vec<f32>,
     nodes: &mut Vec<NodeRecord>,
-) -> Result<(), LowerError> {
+    path: &mut Vec<&'static str>,
+) -> Result<(), Refusal> {
     let kind = kind_of(shape);
     let arity = arity_of(kind) as u16;
-    let (payload, kids) = parts(shape)?;
+    let (payload, kids) = parts(shape, path)?;
     let first = params.len() as u16;
     params.extend_from_slice(&payload);
 
@@ -251,8 +347,12 @@ fn emit(
     ]));
 
     let mut span = 1usize;
-    for kid in kids {
-        emit(kid, params, nodes)?;
+    for (index, &kid) in kids.iter().enumerate() {
+        path.push(edge(shape, index));
+        path.push(label(kid));
+        emit(kid, params, nodes, path)?;
+        path.pop();
+        path.pop();
         // The child at `head + span` has finished its own subtree, so its span is final.
         span += nodes[head + span].subtree_len() as usize;
     }
