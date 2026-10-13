@@ -560,9 +560,22 @@ first frame centre-out against 1.4% tile-major.
 The practical reading for the demo: **on a streamed frame with the descent working, walk order is a decision
 about how fast the *background settles*, not about when the subject appears.** Both are worth having, and
 neither is free to guess - which is why the order stayed policy rather than becoming a default tuned to one
-fixture. `frames to finish` in the probe is derived (the grid divided by the pixels one ceiling decided), not
-measured: refining a streamed frame across frames is `raster::render_bnb_refined`'s job and the streaming
-twin of it is not built.
+fixture.
+
+Two things follow from the same law and are stated here because they were learned the hard way, twice.
+
+- **A ceiling below one ray's worst case draws nothing, and that is correct.** The cut is decided against
+  `max_steps + 1` before the ray starts, so a budget smaller than that cannot afford a single ray: the frame
+  stays entirely at `NOT_DRAWN_*` and charges zero. This is not a degenerate corner to paper over - it is
+  what makes the ceiling trustworthy as a gate rather than a statistic. It also means a ceiling must be
+  *specified in ray charges*, not as a fraction of a frame: `full/8` of a 32×24 grid is less than one ray,
+  and a caller who picks that number will watch a renderer do nothing and assume it is broken.
+- **Refinement across frames is not landed.** `render_bnb_refined` exists for one tree; the streaming twin
+  was built twice this session, tested twice, and reverted twice. The first stall was the fixture above. The
+  second got further - the depths converged and the pixel buffers did not, which is a narrow and specific
+  symptom in the resume path - so what is missing is a diagnosis watched frame by frame, not another attempt
+  written from reasoning. Until then `stream_descent`'s `frames to finish` column is labelled DERIVED, and
+  the honest statement of the transition story is: the cut exists, the carry does not.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 

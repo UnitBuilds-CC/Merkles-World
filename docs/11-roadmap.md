@@ -229,7 +229,7 @@ zero knowledge of pigs or wood.
 | Workstream | Deliverable | Gates |
 |------------|-------------|-------|
 | Ledger & slabs | epoch roots, event log, compaction, tiering | P1.1–P1.7 (P1.7 named 2026-10-12 for the persistence half of OQ-47; the visibility half stays open with the renderer) |
-| Renderer | master SDF interpreter, BVH, budget pass, region streaming | R1–R5 (the last three have CPU implementations now: the bound hierarchy, `raster::Scan` ceilings and `stream` over region cells; none of them is a frame time until OQ-51 lands a device) |
+| Renderer | master SDF interpreter, BVH, budget pass, region streaming | R1–R5 (the last three have CPU implementations now: the bound hierarchy, `raster::Scan` ceilings, `stream` over region cells with a ceiling of its own (`stream::render_budget`, curve measured in doc 04) - but the streamed **carry** across frames is not landed, which is [OQ-59](13-risks-open-questions.md); none of them is a frame time until OQ-51 lands a device) |
 | Macro sim | field schema, rule library, Δt catch-up | SM1–SM6 (needs S7 ✅) |
 | Circuits | graph compiler, combinational solve, stateful nodes | E1–E6 (needs OQ-02 ✅) |
 | Physics/audio/anim | gradient collision, sphere-traced occlusion, domain deformation | PH1–DE1 |
