@@ -17,8 +17,15 @@ targets = [
 all-features = true
 
 [advisories]
-# Nothing to ignore: an empty list is the honest state, and a future entry must carry a reason.
-ignore = []
+# `paste` is flagged as no longer maintained (the branch CI reported it as one advisory error alongside the licence line).
+# Ignored by crate name under the `unmaintained` knob rather than by an invented RUSTSEC id: cargo-deny keys that list
+# on crate names, and guessing an identifier would be fabricating the evidence for a waiver. Drop this line if the
+# crate ever leaves the graph - `paste` arrives through wgpu's dependency tree, so it is OQ-51's cost, not a
+# finding about this repository's own code.
+ignore = [],
+unmaintained = [
+    "paste",
+]
 
 [bans]
 # Duplicate versions are a determinism hazard specifically when the duplicated crate hashes
@@ -61,6 +68,12 @@ allow = [
     # copyleft one - but this is OQ-43 territory, so it is flagged for ratification rather than
     # treated as settled: revert this line and the trunk goes back to a policy question.
     "Unicode-3.0",
+    # hexf-parse (a naga dependency, reached through wgpu's SPIR-V/DXIL paths that
+    # wgpu-core-deps-windows-linux-android enables) is CC0-1.0, a public-domain dedication
+    # rather than a licence with obligations. Allowed by the OQ-51 decision to admit wgpu;
+    # it cannot be feature-trimmed away, as the spike branch proved. Reverting this line
+    # returns trunk to a policy question, which is the point of recording it here.
+    "CC0-1.0",
 ]
 
 [licenses.private]

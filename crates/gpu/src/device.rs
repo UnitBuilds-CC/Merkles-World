@@ -101,7 +101,11 @@ impl Interpreter {
         adapters.sort_by_key(|a| {
             let t = a.get_info().device_type;
             if fallback {
-                if t == wgpu::DeviceType::Cpu { 0 } else { 1 }
+                if t == wgpu::DeviceType::Cpu {
+                    0
+                } else {
+                    1
+                }
             } else {
                 match t {
                     wgpu::DeviceType::DiscreteGpu => 0,
