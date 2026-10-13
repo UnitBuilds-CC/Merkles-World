@@ -92,14 +92,26 @@ impl Interpreter {
 
     async fn open_with(fallback: bool) -> Result<Interpreter, OpenError> {
         let instance = wgpu::Instance::default();
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::None,
-                compatible_surface: None,
-                force_fallback_adapter: fallback,
-            })
-            .await
-            .map_err(|_| OpenError::NoAdapter)?;
+        // Chosen by device_type, not by request_adapter's power preference: with HighPerformance this still
+        // returned the Microsoft Basic Render Driver (a Cpu adapter) on a machine that enumerated a discrete
+        // GPU and an iGPU, so a "GPU" agreement or frame curve measured that way would be software
+        // rasterisation reported as hardware. Discrete first, then integrated, then anything that is not a
+        // CPU device; the fallback path asks for the CPU device on purpose and labels it.
+        let mut adapters: Vec<wgpu::Adapter> = instance.enumerate_adapters(wgpu::Backends::all());
+        adapters.sort_by_key(|a| {
+            let t = a.get_info().device_type;
+            if fallback {
+                if t == wgpu::DeviceType::Cpu { 0 } else { 1 }
+            } else {
+                match t {
+                    wgpu::DeviceType::DiscreteGpu => 0,
+                    wgpu::DeviceType::IntegratedGpu => 1,
+                    wgpu::DeviceType::Cpu => 3,
+                    _ => 2,
+                }
+            }
+        });
+        let adapter = adapters.into_iter().next().ok_or(OpenError::NoAdapter)?;
         let info = adapter.get_info();
         let adapter_name = format!("{} [{:?}, {:?}]", info.name, info.backend, info.device_type);
         let (device, queue) = adapter
