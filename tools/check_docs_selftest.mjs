@@ -33,6 +33,12 @@ function validate() {
   return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+const registerUnderTest = JSON.parse(readFileSync(at('docs/evidence.json'), 'utf8')).gate_p1_5_targets;
+const agreedPristine = registerUnderTest.filter((row) => row.status === 'agrees').length;
+const totalPristine = registerUnderTest.length;
+const countRight = `${agreedPristine} of ${totalPristine} named targets have reported`;
+const countWrong = `${agreedPristine + 1} of ${totalPristine} named targets have reported`;
+
 const PRISTINE = {
   evidence: read("docs/evidence.json"),
   roadmap: read("docs/11-roadmap.md"),
@@ -163,16 +169,19 @@ const CASES = [
   },
   {
     name: "docs/11 stating a count the register does not hold",
-    expects: ['must state "0 of 4 named targets have reported"', "docs/11-roadmap.md"],
+    // Derived from the copy under test rather than hardcoded at 0 and 1: with the numbers fixed, these two
+    // cases became silent no-ops the moment a device run landed and the register genuinely reported 1 of 4 -
+    // the violation they plant would have been the truth, so the suite would have failed CI for nothing.
+    expects: [`must state "${countRight}"`, "docs/11-roadmap.md"],
     mutate() {
-      write("docs/11-roadmap.md", PRISTINE.roadmap.replace("0 of 4 named targets have reported", "1 of 4 named targets have reported"));
+      write("docs/11-roadmap.md", PRISTINE.roadmap.replace(countRight, countWrong));
     },
   },
   {
     name: "README stating a count the register does not hold",
-    expects: ['must state "0 of 4 named targets have reported"', "README.md"],
+    expects: [`must state "${countRight}"`, "README.md"],
     mutate() {
-      write("README.md", PRISTINE.readme.replace("0 of 4 named targets have reported", "1 of 4 named targets have reported"));
+      write("README.md", PRISTINE.readme.replace(countRight, countWrong));
     },
   },
   {
