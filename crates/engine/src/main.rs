@@ -153,7 +153,7 @@ fn main() {
 
     // ---- 3b. gate P1.6, both halves, in the binary: find the divergent voxel, then reconcile a lag ----
     // Detection has been tested since it landed, but never demonstrated where a wrong answer would be
-    // visible; repair is the half that was deferred, because choosing a winner is OQ-46's causal question.
+    // visible; repair is the half that was deferred, because choosing a winner is OQ-61's causal question.
     // What needs no such rule is the boring case - a peer that missed an append - and that is the case two
     // single-player machines actually hit when one is behind. Three distinct voxels, one of them the
     // far corner the coordinate contract is most likely to get wrong.
@@ -207,7 +207,7 @@ fn main() {
         "catch_up claimed convergence while the walk still finds a divergence"
     );
     println!(
-        "peer reconcile   : a lagging peer missing 1 of 3 appends diverged at voxel ({}, {}, {}) and reconciled to the leader's root {} - detection and repair in the binary, and a payload clash would come back Disagrees for OQ-46 rather than be merged (P1.6)",
+        "peer reconcile   : a lagging peer missing 1 of 3 appends diverged at voxel ({}, {}, {}) and reconciled to the leader's root {} - detection and repair in the binary, and a payload clash would come back Disagrees for OQ-61 rather than be merged (P1.6)",
         found.x,
         found.y,
         found.z,

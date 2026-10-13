@@ -15,7 +15,7 @@
 //!
 //! **Why a rank comes in from the caller.** "The record that would have won" is causal order, and the
 //! ledger deliberately does not own causal order: commit-pipeline step 2 is the Lamport question
-//! ([OQ-46](../../../docs/13-risks-open-questions.md)) and with one writer it is append order. Inside a
+//! ([OQ-61](../../../docs/13-risks-open-questions.md)) and with one writer it is append order. Inside a
 //! `#![no_std]` crate with no allocator there is a second reason: an in-place `sort_unstable` cannot keep
 //! ties in their original order, because `sort` (stable) needs allocation. So a compaction takes ranks
 //! explicitly — the same `u32` the commit path would have used as `append` — and that is why a total

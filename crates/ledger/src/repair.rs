@@ -8,12 +8,12 @@
 //! forbids — which is what makes the answer a voxel coordinate rather than an offset.
 //!
 //! What it deliberately is not: a merge. [`first_divergence`] locates the divergence, and deciding which
-//! payload wins when two sides hold different ones at the same voxel is the causal question ([OQ-46]) that
+//! payload wins when two sides hold different ones at the same voxel is the causal question ([OQ-61]) that
 //! [ADR-004] defers with multiplayer. [`catch_up`] does the one piece that needs no such rule: a peer that
 //! is simply **behind** - every record it holds the leader also holds, and the leader holds more. Adopting
 //! the leader's records there cannot overwrite a competing write, because there is no voxel where the two
 //! disagree. Anything else comes back as [`CatchUp::Disagrees`] or [`CatchUp::NotBehind`] for the caller to
-//! treat as OQ-46's problem, not this module's.
+//! treat as OQ-61's problem, not this module's.
 //!
 //! Today's caller is single-player, so a hit in the walk still means the replay was not deterministic and
 //! belongs in A-09's determinism-violation band rather than in a merge.
@@ -143,7 +143,7 @@ pub enum CatchUp {
     /// is the digest both sides now produce - reported, not assumed, because agreeing about the root *is*
     /// the agreement the caller wanted.
     CaughtUp { applied: u32, root: Root },
-    /// A voxel carries a different winning payload on each side. Which one survives is [OQ-46]'s causal
+    /// A voxel carries a different winning payload on each side. Which one survives is [OQ-61]'s causal
     /// question, and this module's answer is to name the position and stop.
     Disagrees {
         x: u16,
@@ -154,7 +154,7 @@ pub enum CatchUp {
     },
     /// Not a lag in this direction: the other side holds records this one lacks. Swapping the arguments
     /// turns a `NotBehind` into a `CaughtUp` when one side is simply ahead; a `NotBehind` both ways is a
-    /// shared history that has diverged in its records, which is OQ-46's problem too.
+    /// shared history that has diverged in its records, which is OQ-61's problem too.
     NotBehind,
     /// The destination was shorter than the leader's record set. Refused rather than truncated: an adopted
     /// prefix that roots to something would be a wrong state that looks reconciled.
