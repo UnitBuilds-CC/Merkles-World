@@ -150,6 +150,13 @@ jobs:
       - name: A-10 root vectors on the scalar hash path (S3 proxy)
         run: cargo test -p ledger --features blake3/pure
 
+      # OQ-60's curve: frames needed to settle a streamed frame at ceilings of 1, 2, 4, 8 and 16 ray
+      # charges, with the cumulative charge asserted equal to the single pass on every row. Integer columns
+      # only, so the three runners can differ on nothing but a regression - and the zero-ceiling row is the
+      # sub-ray law, which is the failure a caller is most likely to hit and least likely to expect.
+      - name: Frames to settle a streamed frame, by ceiling (informational)
+        run: cargo run --release --example refine_probe -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
