@@ -246,6 +246,35 @@ pub fn render_budget(
     budget: Budget,
     scan: Scan,
 ) -> (Frame, Stats) {
+    let mut frame = Frame::new(camera.width, camera.height);
+    let stats = budget_in(camera, regions, selected, budget, scan, &mut frame, false);
+    (frame, stats)
+}
+
+/// [`render_budget`] with the shortfall kept: pixels an earlier frame already decided are carried, cost
+/// nothing this frame, and stop being a shortfall, while the rest of the grid is spent from the same ceiling
+/// in the same order. One shared `march_ray` under it, because two copies of the composite march is the fork
+/// that would show up as "the refined frame disagrees with the full one".
+pub fn render_budget_refined(
+    camera: &Camera,
+    regions: &[Region],
+    selected: &[usize],
+    budget: Budget,
+    scan: Scan,
+    frame: &mut Frame,
+) -> Stats {
+    budget_in(camera, regions, selected, budget, scan, frame, true)
+}
+
+fn budget_in(
+    camera: &Camera,
+    regions: &[Region],
+    selected: &[usize],
+    budget: Budget,
+    scan: Scan,
+    frame: &mut Frame,
+    resume: bool,
+) -> Stats {
     let tables: Vec<SceneBounds> = selected
         .iter()
         .map(|&index| scene_bounds(&regions[index].tree))
@@ -256,15 +285,25 @@ pub fn render_budget(
     let up = unit(camera.up);
     let rays = (camera.width * camera.height) as usize;
 
-    let mut frame = Frame::new(camera.width, camera.height);
-    frame.pixels.clear();
-    frame.pixels.resize(rays * 3, 0);
-    let sentinel = Frame::NOT_DRAWN_RGB;
-    for (index, byte) in frame.pixels.iter_mut().enumerate() {
-        *byte = sentinel[index % 3];
+    // Resuming keeps whatever is already drawn, provided the frame belongs to this grid - a size change is a
+    // new frame, and mixing pixels from two grids would be a torn image that looks like a render.
+    let carry_on = resume
+        && frame.width == camera.width
+        && frame.height == camera.height
+        && frame.depth.len() == rays
+        && frame.pixels.len() == rays * 3;
+    frame.width = camera.width;
+    frame.height = camera.height;
+    if !carry_on {
+        frame.pixels.clear();
+        frame.pixels.resize(rays * 3, 0);
+        let sentinel = Frame::NOT_DRAWN_RGB;
+        for (index, byte) in frame.pixels.iter_mut().enumerate() {
+            *byte = sentinel[index % 3];
+        }
+        frame.depth.clear();
+        frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
     }
-    frame.depth.clear();
-    frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
 
     let charge = ray_charge(camera);
     let tiles_x = camera.width.div_ceil(TILE);
@@ -279,12 +318,17 @@ pub fn render_budget(
         let ty = tile / tiles_x;
         for py in ty * TILE..((ty + 1) * TILE).min(camera.height) {
             for px in tx * TILE..((tx + 1) * TILE).min(camera.width) {
+                let at = (py * camera.width + px) as usize;
+                if carry_on && frame.depth[at] != Frame::NOT_DRAWN_DEPTH {
+                    // Paid for in an earlier frame: it costs nothing now and is no longer a shortfall.
+                    decided += 1;
+                    continue;
+                }
                 if spent + charge > budget.0 {
                     not_drawn = rays as u32 - decided;
                     break 'tiles;
                 }
                 let dir = ray_for(camera, px, py, forward, right, up);
-                let at = (py * camera.width + px) as usize;
                 let marched = march_ray(
                     camera,
                     regions,
@@ -294,7 +338,7 @@ pub fn render_budget(
                     Some(&tables),
                     dir,
                 );
-                write_pixel(&mut frame, at, &marched.rgb);
+                write_pixel(frame, at, &marched.rgb);
                 frame.depth[at] = marched.depth;
                 spent += marched.charged;
                 decided += 1;
@@ -308,17 +352,14 @@ pub fn render_budget(
         }
     }
 
-    (
-        frame,
-        Stats {
-            rays: rays as u32,
-            hits,
-            evaluations: spent,
-            skipped,
-            visits: tables.iter().map(SceneBounds::visits).sum(),
-            not_drawn,
-        },
-    )
+    Stats {
+        rays: rays as u32,
+        hits,
+        evaluations: spent,
+        skipped,
+        visits: tables.iter().map(SceneBounds::visits).sum(),
+        not_drawn,
+    }
 }
 
 /// What a frame needs from each selected region, computed once rather than once per ray. Both the plain

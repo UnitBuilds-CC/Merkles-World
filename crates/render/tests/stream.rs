@@ -8,8 +8,8 @@ use contracts::sdf::{
 use render::cull::{counting_bounds, SceneBounds};
 use render::raster::{render, render_culled, Budget, Camera, Frame, Scan};
 use render::stream::{
-    plan, render as render_regions, render_bnb, render_budget, render_with_tables, Region,
-    REGION_UNITS,
+    plan, render as render_regions, render_bnb, render_budget, render_budget_refined,
+    render_with_tables, Region, REGION_UNITS,
 };
 use render::Tree;
 
@@ -236,6 +236,109 @@ fn a_cell_a_billion_out_draws_the_same_picture_as_the_same_cell_at_zero() {
         want_stats.hits > 0,
         "the fixture has to actually show the pair, or this test proves nothing"
     );
+}
+
+#[test]
+fn refining_a_streamed_frame_at_one_ceiling_converges_to_the_frame_it_was_cut_from() {
+    // A ceiling that cuts is only useful to a demo if the next frame keeps what the last one drew: that is
+    // what turns a cropped picture into a transition. Refine one streamed grid at a fixed ceiling until
+    // nothing is short of, in both walk orders, and require that the per-frame charge never breaches it,
+    // that a pixel decided once is never short of again, that every decided depth equals the unbudgeted
+    // frame's, and that the converged frame needs no more work than the single pass did.
+    //
+    // The ceiling is stated in RAY CHARGES (`max_steps + 1`) rather than as a fraction of the frame, and
+    // this test's first two versions are the reason: the descent makes an off-subject ray free, so this
+    // fixture's whole 768-ray grid costs 228 against a charge of 97 - `full/8` cannot afford one ray at all
+    // (it draws nothing, forever), and `4 * charge` affords the entire frame in one pass (so there is no
+    // refinement to measure). Between those two sits the only honest fixture: one charge per frame.
+    let regions = [Region {
+        cell: [0, 0, 0],
+        tree: ridge(9, 8.0),
+    }];
+    let camera = camera([0.0, 0.0, -6.0], 40.0);
+    let selected = plan(&camera, &regions);
+    let (full, full_stats) = render_bnb(&camera, &regions, &selected);
+    let charge = u64::from(camera.max_steps) + 1;
+    assert!(
+        full_stats.evaluations > charge,
+        "the fixture's premise: a frame that costs less than one ray cannot be cut, let alone refined (it \
+         costs {}, one ray is {charge})",
+        full_stats.evaluations
+    );
+
+    for (name, scan) in [
+        ("centre-out", Scan::CentreOut),
+        ("tile-major", Scan::TileMajor),
+    ] {
+        let ceiling = Budget(charge);
+        let mut frame = Frame::new(camera.width, camera.height);
+        let mut frames = 0u32;
+        let mut cumulative = 0u64;
+        let mut decided_last = 0u32;
+        loop {
+            frames += 1;
+            let stats =
+                render_budget_refined(&camera, &regions, &selected, ceiling, scan, &mut frame);
+            assert!(
+                stats.evaluations <= ceiling.0,
+                "{name}: frame {frames} charged {} against a ceiling of {}",
+                stats.evaluations,
+                ceiling.0
+            );
+            cumulative += stats.evaluations;
+            let decided = stats.rays - stats.not_drawn;
+            assert!(
+                decided >= decided_last,
+                "{name}: frame {frames} un-drew {} pixels",
+                decided_last - decided
+            );
+            decided_last = decided;
+            for index in 0..frame.depth.len() {
+                if frame.depth[index] == Frame::NOT_DRAWN_DEPTH {
+                    continue;
+                }
+                assert_eq!(
+                    frame.depth[index], full.depth[index],
+                    "{name}: pixel {index} moved by frame {frames} of a refinement"
+                );
+            }
+            if stats.not_drawn == 0 || frames > 512 {
+                break;
+            }
+        }
+        assert!(
+            frames > 1,
+            "{name}: a one-charge ceiling finished the grid in one frame, so nothing was ever cut"
+        );
+        assert_eq!(
+            frame.depth, full.depth,
+            "{name}: {frames} frames of refinement did not converge to the unbudgeted depths"
+        );
+        assert_eq!(frame.pixels, full.pixels);
+        assert!(
+            cumulative <= full_stats.evaluations,
+            "{name}: refinement charged {cumulative} against the single pass's {}",
+            full_stats.evaluations
+        );
+    }
+
+    // The sub-ray law, pinned rather than narrated: a ceiling below one ray's worst case draws nothing, so
+    // the cut refuses to start rather than half-marching a ray to look productive.
+    let (tiny, tiny_stats) = render_budget(
+        &camera,
+        &regions,
+        &selected,
+        Budget(u64::from(camera.max_steps)),
+        Scan::TileMajor,
+    );
+    assert_eq!(tiny_stats.evaluations, 0, "a sub-ray ceiling charged work");
+    assert_eq!(
+        tiny_stats.not_drawn, tiny_stats.rays,
+        "nothing was affordable, so every pixel should still be short of"
+    );
+    for depth in tiny.depth {
+        assert_eq!(depth, Frame::NOT_DRAWN_DEPTH);
+    }
 }
 
 #[test]
