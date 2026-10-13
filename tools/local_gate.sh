@@ -50,6 +50,11 @@ if [[ $fail -eq 0 ]]; then
   step "docs integrity" node tools/check_docs.mjs
   step "docs checker self-test" node tools/check_docs_selftest.mjs
   step "AS2 gate logic" bash tools/check_as2_gate.sh
+  # The whole-output digest. This is the check that a stale manifest taught the project it needed: a citation
+  # edit inside the boot's own printed line moved the digest, and every local check passed because no hashed
+  # vector had changed and every citing file still agreed with the stale value. CI's browser leg caught it.
+  # So the local gate asks the same question of the same bytes before a push, not after.
+  step "boot output digest" bash tools/check_boot_digest.sh
 fi
 
 echo
