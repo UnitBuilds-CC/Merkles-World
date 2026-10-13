@@ -39,6 +39,17 @@ pub struct Interpreter {
     adapter: String,
 }
 
+/// One timed bench pass. Two modes, because queueing work and waiting for it are different costs.
+#[derive(Debug, Clone)]
+pub struct Bench {
+    pub adapter: String,
+    pub points: usize,
+    pub dispatches: usize,
+    pub evaluations: usize,
+    pub ms_submit_only_total: f64,
+    pub ms_per_pass_with_read: f64,
+}
+
 /// One distance comparison.
 pub struct Agreement {
     pub adapter: String,
@@ -79,6 +90,18 @@ pub fn node_bytes(tree: &Tree) -> Vec<u8> {
 impl Interpreter {
     /// Open a device, preferring the fallback (software) adapter so the check runs on the same
     /// architecture in CI and on a laptop, and only then trying the machine's own GPU.
+    /// Open the machine's own GPU and nothing else, for the measurements where the software adapter
+    /// would report a different quantity than the one being asked about.
+    ///
+    /// [`Interpreter::open`] deliberately tries the fallback adapter first, because the agreement check wants
+    /// the same result on every CI architecture and on a laptop. A *timing* run wants the opposite: the
+    /// Microsoft Basic Render Driver is a CPU rasteriser, and queueing work to it measures submission cost and
+    /// software maths, not a frame on the device gate R1 names. So the two entry points differ on purpose
+    /// rather than one of them being wrong.
+    pub fn open_hardware() -> Result<Interpreter, OpenError> {
+        pollster::block_on(Self::open_with(false))
+    }
+
     pub fn open() -> Result<Interpreter, OpenError> {
         for fallback in [true, false] {
             match pollster::block_on(Self::open_with(fallback)) {
@@ -272,6 +295,125 @@ impl Interpreter {
             }
         }
         Ok(worst)
+    }
+
+    /// Time repeated dispatches of the master interpreter over one fixed grid.
+    ///
+    /// Two numbers on purpose, because they measure different things and only one of them resembles a frame:
+    /// `ms_submit_only` is what a thread pays to queue the work, `ms_per_pass_with_read` is end-to-end until
+    /// the distances are back in CPU memory, which is what anything that consumes them waits on. Reported per
+    /// pass and per evaluation, never as a verdict against gate R1: R1 is a *march* with culling and a BVH on
+    /// a mid-range GPU, and this is one field evaluation per pixel on a tree of a few nodes.
+    pub fn bench(
+        &self,
+        tree: &Tree,
+        points: &[Vec3],
+        dispatches: usize,
+        read_dispatches: usize,
+    ) -> Result<Bench, String> {
+        if points.is_empty() || dispatches == 0 {
+            return Err("nothing to bench".to_string());
+        }
+        let storage = wgpu::BufferUsages::STORAGE;
+        let nodes = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("bench-nodes"),
+                contents: &node_bytes(tree),
+                usage: storage,
+            });
+        let pool = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("bench-pool"),
+                contents: &bytes_of_f32(&tree.params),
+                usage: storage,
+            });
+        let mut query_bytes = Vec::with_capacity(points.len() * 16);
+        for point in points {
+            query_bytes.extend_from_slice(&bytes_of_f32(point));
+            query_bytes.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let queries = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("bench-queries"),
+                contents: &query_bytes,
+                usage: storage,
+            });
+        let header_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("bench-header"),
+                contents: &bytes_of_u32(&u32_le_header(points.len(), STACK_DEPTH)),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let size = (points.len() * 4) as u64;
+        let distances = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bench-distances"),
+            size,
+            usage: storage | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bench-staging"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[
+                entry(0, &nodes),
+                entry(1, &pool),
+                entry(2, &queries),
+                entry(3, &header_buf),
+                entry(4, &distances),
+            ],
+        });
+        let workgroups = points.len().div_ceil(64) as u32;
+        let submit = |me: &Self| {
+            let mut encoder = me
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                pass.set_pipeline(&me.pipeline);
+                pass.set_bind_group(0, &bind, &[]);
+                pass.dispatch_workgroups(workgroups, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&distances, 0, &staging, 0, size);
+            me.queue.submit([encoder.finish()]);
+        };
+
+        // The closure borrows `bind`/`staging`, so the clock is started and stopped around plain loops
+        // rather than inside a helper that would have to own them.
+        let start = std::time::Instant::now();
+        for _ in 0..dispatches {
+            submit(self);
+        }
+        let submit_only = start.elapsed().as_secs_f64() * 1000.0;
+        // Drain the queue before the second mode, or the read-back timings would absorb the work the
+        // first mode queued and both numbers would describe the same interval.
+        let _ = self.read(&staging, size)?;
+
+        let start = std::time::Instant::now();
+        let read_dispatches = read_dispatches.min(dispatches).max(1);
+        for _ in 0..read_dispatches {
+            submit(self);
+            self.read(&staging, size)?;
+        }
+        let with_read = start.elapsed().as_secs_f64() * 1000.0 / read_dispatches as f64;
+
+        Ok(Bench {
+            adapter: self.adapter.clone(),
+            points: points.len(),
+            dispatches,
+            evaluations: points.len() * dispatches,
+            ms_submit_only_total: submit_only,
+            ms_per_pass_with_read: with_read,
+        })
     }
 
     fn read(&self, buffer: &wgpu::Buffer, size: u64) -> Result<Vec<u8>, String> {

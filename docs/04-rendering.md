@@ -314,6 +314,33 @@ Three readings, in order of usefulness:
   that is measured here: one thread, a CPU, four nodes, no BVH, no culling, no shader. The example
   exists to give spike S1 a curve to compare the WGSL marcher against, not to substitute for it.
 
+### The first number off a real GPU, and it is a design verdict rather than a pass (2026-10-13)
+
+`cargo run --release -p gpu --example frame_curve` measures the one quantity that exists on a device today:
+the A-07 WGSL master interpreter, **one field evaluation per pixel**, on a three-node tree, on a
+**GeForce MX250 over Vulkan** (`open_hardware()` exists precisely because `open()` prefers the software
+adapter — right for the agreement check, wrong for a timing). Two columns, because they are two different
+costs and only one of them bounds a frame:
+
+| grid | points | ms/pass submit-only | ms/pass with read-back |
+|---|---|---|---|
+| 128x128 | 16,384 | 0.189 | 0.886 |
+| 512x512 | 262,144 | 0.083 | 12.743 |
+| 1920x1080 | 2,073,600 | 0.137 | **91.350** |
+
+Submit-only is how fast a thread hands work to the queue; on a device queue that is nearly free and says
+nothing about latency. The read-back column adds the 8 MiB copy-and-map this harness pays so a CPU can look at
+the result. That column is the finding: **~91 ms to complete and retrieve one 1080p evaluation pass, against
+R1's whole 16.67 ms frame budget** — so a renderer that produces distances on the GPU and brings them back
+each frame cannot meet R1 on this class of hardware no matter what the shader does. The design consequence is
+to consume the field on the device (a march in the same queue, results never copied out per frame), which is
+also what ADR-012's WGSL renderer has always implied.
+
+What this is **not**: not a march (the CPU reference measured ~45.5 evaluations per pixel), not culled, not a
+mid-range dGPU (docs/04's bar), and not hashed or comparable across machines — timings never are (ADR-017, and
+R4 is informational by rule). **R1 stays unmet and R2 unmeasured**: R2 needs continuous terrain editing inside a
+running frame loop, which needs the edit-to-geometry step OQ-50 still gates.
+
 ### A frame can be drawn into memory the caller owns (2026-10-12)
 
 AGENTS.md §3 bans allocation churn during gameplay frames and doc 09 promises AS4's "no allocation

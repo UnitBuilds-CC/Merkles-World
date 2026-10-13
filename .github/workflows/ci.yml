@@ -230,6 +230,12 @@ jobs:
       - name: A-07 WGSL vs CPU agreement (skips where the runner has no device)
         run: cargo run --release -p gpu --example agreement
 
+      # The GPU timing probe. Printed, never asserted: timings are not gate evidence (ADR-017) and this
+      # machine's device is below docs/04's bar. It runs because the alternative is a quoted number with no
+      # run behind it, and it skips out loud where a runner has no hardware adapter.
+      - name: GPU field-evaluation curve (informational)
+        run: cargo run --release -p gpu --example frame_curve
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.
