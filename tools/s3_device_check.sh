@@ -4,6 +4,7 @@
 #   ./tools/s3_device_check.sh
 #   ./tools/s3_device_check.sh --codegen
 #   ./tools/s3_device_check.sh --browser
+#   ./tools/s3_device_check.sh --preflight
 #
 # Gate P1.5 asks for byte-identical epoch roots on four *named* targets - N2600, RTX 3060, Linux-Mesa and
 # an M1 browser - and CI's three runners are none of them. The blocker was never a missing test, it was
@@ -24,18 +25,20 @@ set -uo pipefail
 # reach.
 CODEGEN=0
 BROWSER=0
+PREFLIGHT=0
 TARGET=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --codegen) CODEGEN=1 ;;
     --browser) BROWSER=1 ;;
+    --preflight) PREFLIGHT=1 ;;
     --target)
       shift
       TARGET="${1:-}"
       [[ -z "$TARGET" ]] && { echo "--target needs one of the names in docs/evidence.json's gate_p1_5_targets" >&2; exit 2; }
       ;;
-    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen] [--browser] [--target <label>]"; exit 0 ;;
-    *) echo "unknown option '$1' (only --codegen, --browser, --target and --help are recognised)" >&2; exit 2 ;;
+    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen] [--browser] [--preflight] [--target <label>]"; exit 0 ;;
+    *) echo "unknown option '$1' (only --codegen, --browser, --preflight, --target and --help are recognised)" >&2; exit 2 ;;
   esac
   shift
 done
@@ -78,7 +81,15 @@ fi
 
 echo "// machine"
 uname -a || true
-command -v rustc >/dev/null && rustc -vV | sed -n 's/^/rustc: /p; s/host: /host: /p' || echo "rustc: not found"
+# The header lines are what docs/11 asks a device run to paste, so they should read cleanly: the previous
+# form printed `rustc -vV` with every line re-prefixed, which duplicated the host line and emitted
+# "rustc: binary: rustc". Version and host are the two that identify a machine.
+if command -v rustc >/dev/null 2>&1; then
+  echo "rustc: $(rustc --version 2>/dev/null)"
+  echo "host:  $(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
+else
+  echo "rustc: not found"
+fi
 # The commit and the hasher's pinned version belong in the record. Gate P1.5's row asks which machine
 # reproduced the vectors, and a machine without a code state is only half an answer: the same Celeron on a
 # different commit is a different claim, and the blake3 line is what an ISA-portability question turns on.
@@ -96,6 +107,54 @@ echo "//   REGIONS   $expected_regions"
 echo "//   REGION_0  $expected_region0"
 echo "//   SLOT_TABLE $expected_slots"
 echo
+
+# --- preflight: what CAN this machine check, before anything expensive starts ---------------------
+# The N2600 is the slowest box on gate P1.5's list, and a release build is the expensive part of this
+# command. Discovering afterwards that there is no node, or that the WASI target was never installed, spends
+# the compile to learn the legs will be skipped anyway - so say it first, in two seconds, with the fix.
+if (( PREFLIGHT )); then
+  echo "// preflight (nothing built)"
+  ok=1
+  if command -v cargo >/dev/null 2>&1; then
+    echo "//   cargo: $(cargo -V)  -> native leg possible"
+  else
+    echo "//   cargo: MISSING -> the native leg, which is the gate, cannot run at all. Install Rust."
+    ok=0
+  fi
+  if command -v rustc >/dev/null 2>&1; then
+    echo "//   rustc: $(rustc --version)"
+    rustup target list --installed 2>/dev/null | grep -q wasm32-wasip1 \
+      && echo "//   wasm32-wasip1: installed -> WASI leg possible" \
+      || echo "//   wasm32-wasip1: MISSING -> install with 'rustup target add wasm32-wasip1'"
+  fi
+  command -v node >/dev/null 2>&1 \
+    && echo "//   node: $(node --version) -> browser leg possible if a browser is present" \
+    || echo "//   node: MISSING -> the browser leg and the WASI leg cannot run"
+  found=""
+  for candidate in "google-chrome" "chromium" "/c/Program Files/Google/Chrome/Application/chrome.exe" \
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"; do
+    if [[ -x "$candidate" ]] || command -v "$candidate" >/dev/null 2>&1; then found="$candidate"; break; fi
+  done
+  if [[ -n "$found" ]]; then
+    echo "//   browser binary: $found"
+  else
+    echo "//   browser binary: none of chrome/chromium found"
+  fi
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    command -v safaridriver >/dev/null 2>&1 \
+      && echo "//   safaridriver: present (needs Safari's Develop > Allow Remote Automation once)" \
+      || echo "//   safaridriver: MISSING - JavaScriptCore, the engine M1-browser names, cannot be driven"
+  fi
+  (command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1) \
+    && echo "//   sha256: available -> whole-output digest will be compared" \
+    || echo "//   sha256: MISSING -> the output cannot be hashed, so the manifest comparison is lost"
+  echo "//   vectors read from docs/03: EPOCH_0, REGIONS, SLOT_TABLE, REGION_0 (all four extracted above)"
+  if (( ok )); then
+    echo "RESULT: preflight found enough to run the gate's native leg here."
+    exit 0
+  fi
+  exit 2
+fi
 
 if ! command -v cargo >/dev/null; then
   echo "cargo is not on PATH; the native leg cannot be built" >&2
