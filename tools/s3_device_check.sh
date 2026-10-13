@@ -3,6 +3,7 @@
 #
 #   ./tools/s3_device_check.sh
 #   ./tools/s3_device_check.sh --codegen
+#   ./tools/s3_device_check.sh --browser
 #
 # Gate P1.5 asks for byte-identical epoch roots on four *named* targets - N2600, RTX 3060, Linux-Mesa and
 # an M1 browser - and CI's three runners are none of them. The blocker was never a missing test, it was
@@ -22,11 +23,13 @@ set -uo pipefail
 # vectors it checks against are the same ones, so the default path remains the gate and this is extra
 # reach.
 CODEGEN=0
+BROWSER=0
 for arg in "$@"; do
   case "$arg" in
     --codegen) CODEGEN=1 ;;
-    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen]"; exit 0 ;;
-    *) echo "unknown option '$arg' (only --codegen and --help are recognised)" >&2; exit 2 ;;
+    --browser) BROWSER=1 ;;
+    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen] [--browser]"; exit 0 ;;
+    *) echo "unknown option '$arg' (only --codegen, --browser and --help are recognised)" >&2; exit 2 ;;
   esac
 done
 
@@ -186,6 +189,30 @@ if (( CODEGEN )); then
     else
       echo "//   CODEGEN AXIS DISAGREES: same source, different x86 ISA level. On a machine without AVX2"
       echo "//   and FMA (the N2600) versus one with them (the RTX 3060 box), that is a P1.5 finding."
+      fail=1
+    fi
+  fi
+fi
+
+if (( BROWSER )); then
+  echo
+  # Gate P1.5's fourth named target is a *browser*, and until now the device harness had no leg for one:
+  # the CI jobs drive both engines (`browser-execute` on Chromium-family, `browser-jsc` on Safari), so the
+  # capability was proven and the missing thing was a command a person holding an M1 Mac could run. Opt-in
+  # for the same reason as --codegen: it needs node, the WASI target and a browser binary, and a leg that
+  # cannot run has to say so rather than being quietly absent from the record. The verdict is against THIS
+  # machine's native boot, so it does not depend on the published digest being current.
+  echo "// browser leg (--browser)"
+  printf '%s\n' "$output" > target/s3_native.txt
+  if MLWS_NATIVE_OUTPUT=target/s3_native.txt bash tools/browser_parity_check.sh; then
+    echo "//   browser leg recorded above agrees, or reports exactly which engines it skipped"
+  else
+    browser_status=$?
+    if [[ $browser_status -eq 2 ]]; then
+      echo "//   BROWSER LEG DID NOT RUN (status 2: no node, no module, no reference or no drivable"
+      echo "//   engine). This is not a gate result and gate P1.5's browser clause stays open."
+    else
+      echo "//   BROWSER LEG DISAGREES with this machine's native build. That is a P1.5 finding."
       fail=1
     fi
   fi
