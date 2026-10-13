@@ -77,7 +77,11 @@ const CASES = [
     expects: "no whole-output digest",
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
-      rowAt(j, 1).status = "agrees";
+      // Delete, do not assign: once both devices had reported, row 1 already said `agrees` with a digest, so
+      // setting the status again planted nothing and the case passed by proving nothing.
+      const noDigest = rowAt(j, 1);
+      noDigest.status = "agrees";
+      delete noDigest.boot_sha256;
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },

@@ -94,7 +94,13 @@
       "kind": "device",
       "what_it_is": "The other real machine: Windows x86-64 with an RTX 3050 6GB, i.e. an Ampere GPU on a driver stack that can present one (the 1070 box is on nouveau, so no nvidia-smi and no usable Vulkan)",
       "command": "bash tools/s3_device_check.sh --browser --codegen --target RTX3050-laptop-Windows",
-      "status": "not run"
+      "status": "agrees",
+      "boot_sha256": "db71f8a0bf5818d66a8faab4ac32f093b3c18637e3888a9c853dd47ee3083af8",
+      "commit": "7a60d5079b72fadecebdb1d09fccbb159ae1df55",
+      "recorded": "2026-10-13",
+      "host": "Ian-Asus",
+      "os": "MINGW64_NT-10.0-26200 3.6.5-22c95533.x86_64 x86_64",
+      "legs": "native,wasi,browser,codegen"
     }
   ],
   "_gate_p1_5_targets_purpose": "Gate P1.5's demo clause named four machines the project's owner does not have - an AVX2-less N2600, an RTX 3060 desktop, a Linux-Mesa box and an M1 browser - so it looked like a test awaiting a result while being unclosable in principle. Amended 2026-10-13 to the two devices that exist. The axes neither can express are named rather than dropped: the no-AVX2 Celeron axis is carried by CI's blake3/pure scalar-vector leg and tools/cpu_codegen_parity.sh (baseline versus -Ctarget-cpu=x86-64-v3), and Apple-silicon JavaScriptCore by the roots-in-JavaScriptCore job on the ARM64 runner. Those are proxies for a compiler and an engine, not for silicon. A device row may read agrees only with a resolvable commit, the current whole-output digest and the legs that actually ran."
