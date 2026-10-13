@@ -215,6 +215,18 @@ jobs:
       - name: Boot output is invariant to WASM SIMD codegen
         run: bash tools/wasm_simd_parity.sh
 
+      # The same question for the x86 machines in gate P1.5, which differ in real ISA: the N2600 has no AVX2
+      # and no FMA, a desktop box from the same list has both. `-Ctarget-cpu` asks it without owning the
+      # silicon - baseline vs `x86-64-v3` for the boot's output digest and for the compiled asset bytes. The
+      # harness exits 2 on an empty boot or a failed build rather than hashing nothing against nothing,
+      # because an earlier version of this check passed vacuously and that is the failure mode to design out.
+      - name: Boot and asset bytes are invariant to x86 codegen level
+        env:
+          # Two full release rebuilds is the cost; the baseline already targets the v1
+          # ISA, so the informative spread is one step up to AVX2+FMA.
+          CPU_CODEGEN_VARIANTS: x86-64-v3
+        run: bash tools/cpu_codegen_parity.sh
+
       - name: Run the engine under a WASM engine and diff it against the host build
         run: |
           set -euo pipefail
