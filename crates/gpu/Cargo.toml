@@ -11,6 +11,7 @@ description = "docs/04's WGSL half: the A-07 master interpreter on a device, che
 contracts = { path = "../../contracts" }
 render = { path = "../render" }
 wgpu = "27"
+env_logger = "0.11"
 pollster = "0.4"
 naga = { version = "27", features = ["wgsl-in"] }
 

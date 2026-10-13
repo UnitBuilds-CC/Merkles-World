@@ -6,6 +6,9 @@
 //! this Windows laptop the same code enumerates seven adapters across Vulkan, Dx12 and Gl.
 
 fn main() {
+    // wgpu logs a backend that failed to initialise at warn level, and silently drops it. Without a logger
+    // installed in this process that is invisible, which is how "0 adapters" got here with no explanation.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     println!(
         "// compiled-in backends = {:?}",
         wgpu::Instance::enabled_backend_features()
