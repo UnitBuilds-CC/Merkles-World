@@ -264,6 +264,30 @@ exist is a renderer** - no GPU, no window, no BVH - **nor gate P1.5's fourth tar
 
 ## The Bitwise Determinism Suite
 
+**Axes checked on every push, as of 2026-10-13.** Three architectures native; the whole engine executed as a
+`wasm32-wasip1` module under Node's WASI on each of them; the same module inside bare V8, inside Chromium, and
+inside WebKit/JavaScriptCore driven by real `safaridriver` on an ARM64 Apple-silicon runner; the hasher on
+`blake3`'s scalar (`pure`) build; the module compiled with WASM SIMD on and off; and the native binaries built
+at the default x86 target and again at `x86-64-v3` (AVX2 + FMA), which is the ISA gap between gate P1.5's
+Celeron and its desktop box. Every one of those agrees on the 17-line boot block, digest
+`3c67db5f51644de6…`, and on the compiled asset bytes. None of them is the device: the four named machines are
+still the unmet clause.
+
+**Guards against passing vacuously**, because three of the four holes below were in harness code written this
+session and each had already produced, or nearly produced, a green that meant nothing. A pinned expectation
+(an expected digest read from doc 03 or `docs/evidence.json`) cannot pass vacuously - an empty run hashes to a
+constant that simply fails the pin - so only the *peer-comparison* legs needed new rules, and they are now: an
+empty asset or empty module output is a failure; two fixtures that hash identically is a failure, since one
+byte stream compared twice proves one thing and claims two; the empty-input digest
+`e3b0c442…` is refused on both sides of any comparison; and every native reference must contain the boot's
+closing marker, because two legs agreeing about truncated output is agreement without a boot.
+`tools/check_as2_gate.sh` carries negative cases for each rule it enforces, so the guards are demonstrated
+rather than trusted. The one bug class these rules did not catch was in the harness itself: a filename built
+by `tr -d '+-'` collapsed the SIMD-on and SIMD-off builds onto the same file, so the three-way check hashed one
+module twice - green, and structurally incapable of failing. Verify a harness by running it and reading the
+paths it prints, not by the colour of the check.
+
+
 The name AGENTS.md §4 and [ADR-017](decisions.md) cite as the acceptance test for anything another
 machine must see. It is not a new test framework — it is the set of gates that must all be green
 before a value may be called canonical. It groups gates that already exist — the canonical test
