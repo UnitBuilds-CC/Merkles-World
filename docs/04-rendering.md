@@ -392,6 +392,49 @@ avoid **nothing** - so a blanket skip and a dead skip both fail. The ray-level h
 stays unbuyable, and doc 09 can now say precisely what an author gets: a proved skip inside each blend, and
 no hierarchy through one.
 
+### A far cell rounds geometry away, and the streaming path had the subtraction backwards (2026-10-13)
+
+Gate R5 says a camera can zoom to 1e-6 world units on a pig snout with no polygonation. The test the crate
+had for it (`scene.rs::scale_changes_little_but_precision`) marches the scene **at the origin**, which is
+the easy case and not the claim: the claim is about a feature a billion units from world zero.
+`examples/deep_zoom.rs` now runs one snout - a body sphere of r 1.0 with a bump of r 0.02 in front of it -
+through a 64x64 grid at `surface = 1e-6`, four ways, and compares every pixel's hit depth against the local
+baseline. Measured on x86-64 Windows:
+
+| regime | hits of 4,096 | max depth delta | mean normal angle (rad) | worst normal angle (rad) |
+|--------|---------------|-----------------|-------------------------|--------------------------|
+| local (the origin) | 4,096 | 0.000000 | 0.000193 | 0.000846 |
+| far, camera-relative | 4,096 | 0.000000 | 0.000193 | 0.000846 |
+| far, absolute | 4,096 | 0.004965 | 0.071092 | 0.145554 |
+| far, region cell (244,140) | 4,096 | 0.000000 | not shaded | see below |
+
+Row 3 is docs/02's rule stated as a price: the same shape at the same distance from its camera, with the
+world coordinate carried into the field instead of cancelled out of it, reports depths three-and-a-half
+thousandths off and normals a quarter-radian wrong at their worst. The number to watch is the **normal**,
+not the depth - a polygonated snout still reports a plausible distance, which is exactly why "the depth
+looks fine" is not R5's evidence.
+
+Row 4 is the finding, and it was a bug in shipping code at the time of writing. `stream` placed its samples
+by forming the world point from the absolute camera position and subtracting the cell origin afterwards,
+which is row 3's order with an extra step. At cell 244,140 the cell origin is 999,997,440 and the `f32` ulp
+there is 64 world units, so `camera.origin + dir * t` for any `t` under 32 rounded back to
+`camera.origin` exactly and the subtraction returned a flat zero: the snout collapsed along the axis the
+cell lay on and **1,280 of 4,096 pixels missed** (2,816 hits, 0.034 depth delta). The fix is the ordering
+docs/02 already required - `Region::relative_origin` subtracts the cell from the eye *first*, where IEEE-754
+gives the difference exactly for two floats of comparable magnitude (Sterbenz), and `t` accumulates in the
+region's own frame; `enclosure_relative` does the same one level up, so no bound is ever a world coordinate.
+After that, row 4 is row 2: all 4,096 pixels hit and every depth matches the local baseline bit for bit.
+`tests/stream.rs::a_cell_a_billion_out_draws_the_same_picture_as_the_same_cell_at_zero` pins it as pixels,
+depth, charged work and hit count.
+
+Two things this does **not** settle. R5 is a claim about an image on a display; what is measured here is the
+reference evaluator's numerics on one machine, with the WGSL twin's own cross-vendor agreement (PR #1,
+~2.4e-7) as the other half. And the correction lands on [OQ-56](13-risks-open-questions.md), whose
+resolution retired "the camera-relative-placement worry" on the strength of a probe that only went to
+12,288 units - a distance where the ulp is 0.00049 and this ordering mistake is invisible. The angular-size
+conclusion stands (a sub-pixel object at four cells *should* render as nothing); the precision conclusion
+did not, and the far-cell limit itself is now OQ-58.
+
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
 ### Refinement: the same ceiling spread across frames, losslessly (2026-10-13)
@@ -694,4 +737,4 @@ ring-recycled across epochs, so nothing is allocated mid-frame.
 | R2 | Frame time stable while a player continuously edits terrain for 10 minutes | doc 03 tiering |
 | R3 | Region entry after LRU eviction shows prior edits with no visible pop-in | gate P1.4. **The work half is measured 2026-10-13** (`examples/pop_in.rs`): with `render_bnb_refined` spending a ceiling across frames, the demo region is fully drawn in 5 frames at a ceiling of 1/4 the culled frame's cost, and its first frame keeps 25.1% of the hits — centre-out. Same ceiling, corner-first order: 9 frames, first frame 1.4%. "No visible" still needs a display (OQ-51); what no longer needs one is the number. |
 | R4 | Frame hash of a scripted camera path is identical across `wgpu` backends | **informational only** — must not gate shipping, per ADR-017 |
-| R5 | Zoom to 1e-6 world units on a pig snout with no polygonation | ADR-011's central claim |
+| R5 | Zoom to 1e-6 world units on a pig snout with no polygonation | ADR-011's central claim. `examples/deep_zoom.rs` measures the numerics at four coordinate regimes (the far camera-relative frame is bit-identical to the local one; the absolute one is 0.146 rad off in its worst normal) and found the streaming path's subtraction order in the process - see § A far cell rounds geometry away. Still not met as a gate: it is a claim about a displayed image, and there is no device yet (OQ-51) |

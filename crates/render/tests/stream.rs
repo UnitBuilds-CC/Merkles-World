@@ -190,6 +190,51 @@ fn streaming_costs_the_neighbourhood_rather_than_the_world() {
 }
 
 #[test]
+fn a_cell_a_billion_out_draws_the_same_picture_as_the_same_cell_at_zero() {
+    // Gate C1's coordinate arithmetic puts a region origin at `cell * 4096`, so a deep world reaches world
+    // coordinates an `f32` can only hold in steps of 64 units at 10^9. Docs/02's rule - the camera is the
+    // origin of the arithmetic - is what keeps a shape that small from being rounded away, and the earlier
+    // order (form the world point, subtract the cell afterwards) did exactly that: `examples/deep_zoom.rs`
+    // measured 1,280 of 4,096 pixels of a snout deleted at a 1e-6 tolerance. This is that claim as a test,
+    // with the shape moved a whole billion units along x and the requirement that nothing may move: same
+    // bytes, same depths, same charged work.
+    let cell = (1.0e9_f32 / REGION_UNITS) as i64;
+    let local = [Region {
+        cell: [0, 0, 0],
+        tree: pair([0.0, 0.0, 0.0]),
+    }];
+    let far = [Region {
+        cell: [cell, 0, 0],
+        tree: pair([0.0, 0.0, 0.0]),
+    }];
+    let origin = far[0].origin();
+    let local_camera = camera([0.0, 0.0, -6.0], 40.0);
+    let far_camera = camera([origin[0], 0.0, -6.0], 40.0);
+    assert_eq!(
+        far_camera.origin[0] - origin[0],
+        0.0,
+        "the fixture's premise: a camera sitting on its cell must have an exact relative origin"
+    );
+
+    let (want, want_stats) = render_regions(&local_camera, &local, &plan(&local_camera, &local));
+    let (got, got_stats) = render_regions(&far_camera, &far, &plan(&far_camera, &far));
+    assert_eq!(
+        got.pixels, want.pixels,
+        "a far cell shaded differently - the sample lost digits on the way to the field"
+    );
+    assert_eq!(
+        got.depth, want.depth,
+        "a far cell's surface moved, which is the same loss reported as geometry"
+    );
+    assert_eq!(got_stats.evaluations, want_stats.evaluations);
+    assert_eq!(got_stats.hits, want_stats.hits);
+    assert!(
+        want_stats.hits > 0,
+        "the fixture has to actually show the pair, or this test proves nothing"
+    );
+}
+
+#[test]
 fn a_distant_region_shows_up_at_the_angular_size_it_actually_has() {
     // What the demo attempt really ran into (OQ-56, resolved by this test rather than by a theory): nothing
     // was broken. A 1.6-unit sphere four cells away subtends about 0.0004 radians, and this camera's

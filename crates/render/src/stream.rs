@@ -51,16 +51,36 @@ impl Region {
         ]
     }
 
-    /// This region's enclosure moved into world space. A scene with no bound stays unbounded: streaming may
-    /// not invent one, for the same reason `cull` refuses to.
-    pub fn enclosure(&self) -> Enclosure {
+    /// The camera's position expressed in this region's own coordinates, which is the only far-away
+    /// arithmetic in this module that is exact: for two `f32` of comparable magnitude the difference is
+    /// representable, so IEEE-754 returns it without rounding (Sterbenz). Subtracting afterwards does not
+    /// work, because the point being subtracted from has already been rounded to the cell's `f32` ulp -
+    /// 64 world units at 10^9 - and `examples/deep_zoom.rs` measured what that costs: 1,280 of 4,096
+    /// pixels of a snout deleted from the frame.
+    #[inline]
+    pub fn relative_origin(&self, camera_origin: [f32; 3]) -> [f32; 3] {
         let origin = self.origin();
+        [
+            camera_origin[0] - origin[0],
+            camera_origin[1] - origin[1],
+            camera_origin[2] - origin[2],
+        ]
+    }
+
+    /// This region's enclosure expressed with the eye at the origin, which is the form `plan` and `render`
+    /// need. The tree's own centre is a small number, so it moves by way of the exact relative origin
+    /// (`centre - relative_origin` places it in camera space) rather than by way of the cell's absolute
+    /// position, which would round the shape's centre to the cell's ulp before the camera ever saw it.
+    /// A scene with no bound stays unbounded: streaming may not invent one, for the same reason `cull`
+    /// refuses to.
+    pub fn enclosure_relative(&self, camera_origin: [f32; 3]) -> Enclosure {
+        let relative = self.relative_origin(camera_origin);
         match crate::cull::scene_enclosure(&self.tree) {
             Enclosure::Bounded { centre, radius } => Enclosure::Bounded {
                 centre: [
-                    centre[0] + origin[0],
-                    centre[1] + origin[1],
-                    centre[2] + origin[2],
+                    centre[0] - relative[0],
+                    centre[1] - relative[1],
+                    centre[2] - relative[2],
                 ],
                 radius,
             },
@@ -68,19 +88,12 @@ impl Region {
         }
     }
 
-    /// The field at a world point, in this region's own coordinates.
+    /// The field at a point already expressed in this region's coordinates. Getting there by way of a world
+    /// point is the mistake `relative_origin` exists to prevent, so this takes the local point and nothing
+    /// else.
     #[inline]
-    pub fn field_at(&self, world: [f32; 3]) -> f32 {
-        let origin = self.origin();
-        sdf_eval(
-            &self.tree,
-            ROOT,
-            [
-                world[0] - origin[0],
-                world[1] - origin[1],
-                world[2] - origin[2],
-            ],
-        )
+    pub fn field_at_local(&self, local: [f32; 3]) -> f32 {
+        sdf_eval(&self.tree, ROOT, local)
     }
 }
 
@@ -94,19 +107,14 @@ impl Region {
 pub fn plan(camera: &Camera, regions: &[Region]) -> Vec<usize> {
     let mut selected = Vec::new();
     for (index, region) in regions.iter().enumerate() {
-        let Enclosure::Bounded { centre, radius } = region.enclosure() else {
+        let Enclosure::Bounded { centre, radius } = region.enclosure_relative(camera.origin) else {
             // No bound means no proof of irrelevance: it is in the frame, always.
             selected.push(index);
             continue;
         };
-        let to_centre = [
-            centre[0] - camera.origin[0],
-            centre[1] - camera.origin[1],
-            centre[2] - camera.origin[2],
-        ];
-        // `length - radius <= max_t` is "some point of this sphere is within the ray range". The
-        // normalisation below is not part of the test; it keeps `length` from being read as a direction.
-        let length = crate::length(to_centre);
+        // Already camera-relative, so the centre's length is the distance from the eye - and it stayed
+        // exact, because the cell's origin cancelled before any of these numbers grew.
+        let length = crate::length(centre);
         if length - radius <= camera.max_t + camera.surface {
             selected.push(index);
         }
@@ -137,9 +145,23 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
     // Grown by the marcher's hit tolerance, exactly as `raster` grows the enclosures it tests: a ray that
     // grazes a region - passing within `surface` of its sphere but outside it - is a hit as far as the march
     // is concerned, and a skip that disagrees with the marcher is a missing pixel rather than a saving.
+    // Both are camera-relative: the eye is the origin of the arithmetic (docs/02), so no number in the
+    // bounds below is a world coordinate, and none of them has to survive a subtraction afterwards.
     let bounds: Vec<Enclosure> = selected
         .iter()
-        .map(|&index| regions[index].enclosure().grown(camera.surface))
+        .map(|&index| {
+            regions[index]
+                .enclosure_relative(camera.origin)
+                .grown(camera.surface)
+        })
+        .collect();
+    // The eye, in each region's own coordinates. Exact by the same argument as `relative_origin`, and the
+    // reason the march can accumulate `t` here at all: at a far cell the alternative - build the world point,
+    // subtract the cell afterwards - rounds the sample to the cell's ulp (64 units at 10^9) and deletes
+    // surface, which `examples/deep_zoom.rs` measured at 1,280 of 4,096 pixels.
+    let eyes: Vec<[f32; 3]> = selected
+        .iter()
+        .map(|&index| regions[index].relative_origin(camera.origin))
         .collect();
 
     for py in 0..camera.height {
@@ -147,7 +169,7 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
             let dir = ray_for(camera, px, py, forward, right, up);
             let mut any = false;
             for enclosure in &bounds {
-                if ray_may_hit(*enclosure, camera.origin, dir, camera.max_t) {
+                if ray_may_hit(*enclosure, [0.0; 3], dir, camera.max_t) {
                     any = true;
                     break;
                 }
@@ -161,30 +183,35 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
             let mut t = 0.0f32;
             let mut steps = 0u32;
             let mut hit_t = Frame::NO_HIT;
-            let mut hit_point = camera.origin;
+            // The hit point stays in the coordinates of whichever region owned it, because that is where
+            // its gradient has to be tapped and where it is still precise.
+            let mut hit_local = [0.0f32; 3];
             // Which region owns the surface, so the gradient is tapped in that region's coordinates and
             // against that region's tree. Guessing "the first one" would shade a neighbouring region's
             // surface with this one's field - a plausible normal, and wrong.
             let mut hit_region = usize::MAX;
             let mut hit_steps = 0u32;
             while t < camera.max_t && steps < camera.max_steps {
-                let point = [
-                    camera.origin[0] + dir[0] * t,
-                    camera.origin[1] + dir[1] * t,
-                    camera.origin[2] + dir[2] * t,
-                ];
                 let mut distance = f32::MAX;
                 let mut owner = 0usize;
+                let mut owner_local = [0.0f32; 3];
                 for (slot, &index) in selected.iter().enumerate() {
-                    let field = regions[index].field_at(point);
+                    let eye = eyes[slot];
+                    let local = [
+                        eye[0] + dir[0] * t,
+                        eye[1] + dir[1] * t,
+                        eye[2] + dir[2] * t,
+                    ];
+                    let field = regions[index].field_at_local(local);
                     if field < distance {
                         distance = field;
                         owner = slot;
+                        owner_local = local;
                     }
                 }
                 if distance.abs() < camera.surface {
                     hit_t = t;
-                    hit_point = point;
+                    hit_local = owner_local;
                     hit_region = owner;
                     hit_steps = steps;
                     break;
@@ -203,12 +230,7 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
             hits += 1;
             evaluations += u64::from(hit_steps) + 1;
             let region = &regions[selected[hit_region]];
-            let n = normal(
-                &region.tree,
-                ROOT,
-                local_of(region, hit_point),
-                camera.surface * 16.0,
-            );
+            let n = normal(&region.tree, ROOT, hit_local, camera.surface * 16.0);
             push(&mut frame.pixels, &normal_to_rgb(n));
             frame.depth.push(hit_t);
         }
@@ -225,18 +247,6 @@ pub fn render(camera: &Camera, regions: &[Region], selected: &[usize]) -> (Frame
             not_drawn: 0,
         },
     )
-}
-
-/// The world point expressed in the region that owns the hit, so the gradient is tapped in that region's
-/// own coordinates.
-#[inline]
-fn local_of(region: &Region, world: [f32; 3]) -> [f32; 3] {
-    let origin = region.origin();
-    [
-        world[0] - origin[0],
-        world[1] - origin[1],
-        world[2] - origin[2],
-    ]
 }
 
 fn push(pixels: &mut Vec<u8>, rgb: &[u8; 3]) {
