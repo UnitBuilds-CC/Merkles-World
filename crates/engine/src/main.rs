@@ -559,7 +559,10 @@ fn main() {
             .chunks_exact((world_frame.width * 3) as usize)
         {
             for _ in 0..scale {
-                for pixel in source_row.chunks_exact(3) {
+                // `as_chunks` rather than `chunks_exact(3)`: CI's clippy is newer than this laptop's and
+                // red-trunked the constant-size form on all three architectures - the same toolchain lag
+                // that caught a `chunks_exact_mut` here earlier - so the lint's own suggestion is what ships.
+                for pixel in source_row.as_chunks::<3>().0 {
                     for _ in 0..scale {
                         bytes.extend_from_slice(pixel);
                     }
