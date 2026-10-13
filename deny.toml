@@ -17,12 +17,13 @@ targets = [
 all-features = true
 
 [advisories]
-# `paste` arrives through wgpu's tree and is reported as no longer maintained. cargo-deny 0.20 has
-# no [advisories].unmaintained key (it rejected that shape outright), and its ignore list accepts crate
-# names, so the waiver is by name - deliberately not by an invented RUSTSEC id, which would be
-# fabricating the identifier that justifies the exception. Remove this entry if paste leaves the graph.
+# `paste` arrives through wgpu's tree and is reported unmaintained: RUSTSEC-2024-0436. The id is taken
+# from cargo-deny's own CI output, not guessed - an invented identifier would be fabricating the evidence
+# a waiver exists to record. A crate-name entry here was tried first and cargo-deny read it as a yanked-
+# crate waiver (warning: not detected), so the id is the only form that matches what it actually flags.
+# Drop this line if paste leaves the graph; its absence is the signal, not a cleanup task.
 ignore = [
-    "paste",
+    "RUSTSEC-2024-0436",
 ]
 
 [bans]
