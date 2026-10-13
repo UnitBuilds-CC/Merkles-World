@@ -610,6 +610,20 @@ running it on real content rather than on the synthetic ridge.
   property the budget tests pin - which pixels are drawn at a given ceiling - so it is a decision to make
   with those tests in hand, not a quiet edit. It is filed as **OQ-60**. The shape of the trade is measured now (`examples/refine_probe.rs`): on a grid whose whole frame costs 876 against a charge of 97, ceilings of 1, 2, 4, 8 and 16 charges settle it in 125, 9, 3, 2 and 1 frames - every row charging exactly the same 876 in total, asserted - while a sub-charge ceiling never settles at all. Frame one at a single charge takes 22 pixels of 3,072 even though 96.0% of the grid is proved free, which is option (a)'s whole prize: the same work, a much better first frame.
 
+The pop-in question got the same machinery, and it needed its own denominator (`examples/region_pop_in.rs`).
+P1.4's clause is about the picture a re-entered region contributes, so the instrument attributes pixels by
+rendering the composite with and without that cell and differencing the depths: a 400-unit hill one cell away
+owns **70 of 3,072 pixels (2.3%)** - OQ-56's angular-size lesson returning in demo form. At a one-charge
+ceiling the first frame settles 8 pixels centre-out or 224 tile-major, and **not one of them belongs to the
+arriving region, in either order**; its own footprint reaches 50% at frame 41 centre-out against 75
+tile-major, completes at 76 against 110, and the whole frame is complete at 111.
+
+So two things hold that the frame-average numbers hid. "The frame is done" is the wrong question, because
+what arrives first is the cheap, provably-empty majority. And the walk order that made *no* difference to
+frames-to-finish in `stream_descent` makes roughly a **2x** difference to the arriving region's own surface -
+which is the reason OQ-60's reorder should be judged on a region-attributed measure rather than a frame
+average: the two disagree about what a good first frame is.
+
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
 ### Refinement: the same ceiling spread across frames, losslessly (2026-10-13)

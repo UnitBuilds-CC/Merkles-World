@@ -157,6 +157,13 @@ jobs:
       - name: Frames to settle a streamed frame, by ceiling (informational)
         run: cargo run --release --example refine_probe -p render
 
+      # Gate P1.4's clause is about the picture: when a re-entered region's own surface arrives. The
+      # instrument attributes pixels to the region by differencing the frame with and without it, then
+      # reports the frames in which that footprint fills - the numbers the row in doc 11 quotes. Integers
+      # and percentages, no timings, so the runners can only disagree on a real regression.
+      - name: Pop-in of a re-entered region (informational)
+        run: cargo run --release --example region_pop_in -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
