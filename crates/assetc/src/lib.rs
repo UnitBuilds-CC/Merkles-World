@@ -18,6 +18,7 @@ use contracts::sdf::{
     arity_of, is_known_kind, pack_first_and_flags, pack_kind_and_arity, pack_params_len,
     NodeRecord, FLAG_HAS_MATERIAL, FLAG_IS_ROOT, MAX_TREE_DEPTH,
 };
+pub mod budget;
 pub mod order;
 
 /// The dev-profile reload loop: recompile on change, replace atomically, keep the last good asset on failure.

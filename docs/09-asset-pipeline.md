@@ -84,13 +84,23 @@ A-07's `MAX_TREE_DEPTH` - because a loader that guesses at a malformed asset sho
 world instead of an error. The last two are the envelope's own stated purpose: `grammar_version` and
 `depth` are carried *to be compared before anything is walked*, and both are, in that order - the kind
 table decides what every later byte means, and the depth decides whether the marcher can budget the
-tree at all. Note what the depth check is not: AS5's gate is `assetc` rejecting an over-budget tree at
-*compile* time, which needs a per-tree budget the docs do not yet define.
+tree at all. Note what the depth check is not: AS5's gate is `assetc` rejecting an over-budget tree at *compile* time, which needs a per-tree budget
+the docs do not yet define. **The mechanism exists** (`crates/assetc/src/budget.rs`):
+`assetc in.ron out.bin --budget nodes=32,depth=8,evaluations=6144[,steps=96]` reads the cost off the
+*compiled* records - nodes, depth, pool entries, and how many of them are unbounded kinds that defeat
+the ray early-out - and refuses on every clause the shape trips at once. A refusal behaves exactly like
+a compile failure: the asset on disk is untouched, the watch loop's fingerprint does not advance, so a
+later edit that fits is recompiled rather than dismissed as unchanged. The per-ray ceiling is doc 04's
+cost law, `steps x nodes`, and `tests/budget.rs` checks that it actually bounds: a 25-record mixed tree
+marched as a real 32x24 frame measured 88 evaluations per ray against the 2,400 the bound allows -
+27.3x of headroom, loose in the safe direction rather than tight enough to be a prediction. **The number
+is still not chosen here**: setting a default budget means setting a frame-cost claim, and gate R1 is a
+GPU statement with no GPU behind it yet.
 
 What still keeps AS1-AS5 open: `engine <asset.bin>` boots from a file the compiler wrote - the test
 writes one with `assetc::writer` and checks the boot reports that file's own header and marches the
 surface the file describes - but there is no GPU upload, no watch or hot-reload mode, the authoring
-file schema is not bound to a named format version, and nothing rejects an over-budget SDF at compile
+file schema is not bound to a named format version, and AS5's ceiling flag exists and refuses without writing, but no default budget is set (the number is the owner's call, so the gate stays open rather than passing on a made-up threshold: nothing rejects an over-budget SDF at compile
 time. The headless WGSL check (S6, OQ-41) is still what stands between an authored tree and a drawn
 one.
 

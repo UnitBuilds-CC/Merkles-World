@@ -23,13 +23,18 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match Command::parse(&args) {
         None => {
-            eprintln!("usage: assetc <input.ron> <output.bin>");
+            eprintln!("usage: assetc <input.ron> <output.bin> [--budget nodes=N,depth=D,evaluations=E[,steps=S]]");
             eprintln!("       assetc watch [--once] [--interval <ms>] <input.ron> <output.bin>");
             std::process::exit(2);
         }
-        Some(Command::Build { input, output }) => {
+        Some(Command::Build {
+            input,
+            output,
+            budget,
+            steps,
+        }) => {
             let mut watcher = Watch::default();
-            match watcher.observe(&input, &output) {
+            match watcher.observe_with(&input, &output, budget.map(|limit| (limit, steps))) {
                 Outcome::Rebuilt { nodes, depth } => {
                     println!("{input} -> {output}: {nodes} node(s), depth {depth}");
                 }
@@ -79,6 +84,8 @@ enum Command {
     Build {
         input: String,
         output: String,
+        budget: Option<assetc::budget::Budget>,
+        steps: u32,
     },
     Watch {
         input: String,
@@ -97,12 +104,33 @@ impl Command {
             let (Some(input), Some(output)) = (args.first(), args.get(1)) else {
                 return None;
             };
-            if args.len() > 2 {
+            let mut budget = None;
+            let mut steps = DEFAULT_STEP_BUDGET;
+            let mut positional = 2usize;
+            let mut index = 2usize;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--budget" => {
+                        index += 1;
+                        let (parsed, parsed_steps) =
+                            args.get(index).map(String::as_str).and_then(parse_budget)?;
+                        budget = Some(parsed);
+                        steps = parsed_steps;
+                    }
+                    _ => return None,
+                }
+                index += 1;
+                positional = index;
+            }
+            if positional != args.len() {
                 return None;
             }
+            let _ = positional;
             return Some(Command::Build {
                 input: input.clone(),
                 output: output.clone(),
+                budget,
+                steps,
             });
         }
         let mut once = false;
@@ -131,6 +159,40 @@ impl Command {
             interval_ms,
         })
     }
+}
+
+/// The raster's own default, so a budget stated without a step count means "at the step budget the CPU
+/// reference actually marches at" rather than silently assuming one.
+const DEFAULT_STEP_BUDGET: u32 = 96;
+
+/// `--budget nodes=32,depth=8,evaluations=6144[,steps=96]`.
+///
+/// Every clause but `steps` is required, on purpose: an evaluation ceiling is meaningless without the step
+/// count it is stated against, and defaulting it silently would let two people write the same flag with
+/// different meanings.
+fn parse_budget(raw: &str) -> Option<(assetc::budget::Budget, u32)> {
+    let mut nodes: Option<u32> = None;
+    let mut depth: Option<u32> = None;
+    let mut evaluations: Option<u64> = None;
+    let mut steps = DEFAULT_STEP_BUDGET;
+    for part in raw.split(',') {
+        let (key, value) = part.split_once('=')?;
+        match key.trim() {
+            "nodes" => nodes = Some(value.trim().parse::<u32>().ok()?),
+            "depth" => depth = Some(value.trim().parse::<u32>().ok()?),
+            "evaluations" => evaluations = Some(value.trim().parse::<u64>().ok()?),
+            "steps" => steps = value.trim().parse::<u32>().ok()?,
+            _ => return None,
+        }
+    }
+    Some((
+        assetc::budget::Budget {
+            max_nodes: nodes?,
+            max_depth: depth?,
+            max_evaluations_per_ray: evaluations?,
+        },
+        steps,
+    ))
 }
 
 const DEFAULT_INTERVAL_MS: u64 = 50;

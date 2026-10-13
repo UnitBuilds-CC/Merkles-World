@@ -43,6 +43,22 @@ pub struct Watch {
 impl Watch {
     /// Observe `input` once, replacing `output` if and only if it changed and compiles.
     pub fn observe(&mut self, input: &str, output: &str) -> Outcome {
+        self.observe_with(input, output, None)
+    }
+
+    /// The same observation with doc 09's AS5 ceiling applied (gate AS5's mechanism, not its number).
+    ///
+    /// A budget violation is reported exactly like a compile failure: the asset on disk is untouched, the
+    /// fingerprint does not advance, and a later edit that fits is recompiled rather than dismissed as
+    /// unchanged. That is not a convenience - an over-budget shape that still replaced the file would make
+    /// the compiler's answer depend on which edit happened to be saved last.
+    ///
+    pub fn observe_with(
+        &mut self,
+        input: &str,
+        output: &str,
+        budget: Option<(crate::budget::Budget, u32)>,
+    ) -> Outcome {
         let text = match std::fs::read_to_string(input) {
             Ok(text) => text,
             Err(error) => return Outcome::Failed(format!("cannot read: {error}")),
@@ -52,10 +68,21 @@ impl Watch {
             return Outcome::Unchanged;
         }
         // Ordered deliberately: nothing below may touch the output file before this returns Ok.
-        let bytes = match compile_bytes(input, &text) {
-            Ok(bytes) => bytes,
+        let (bytes, cost) = match compile_bytes(input, &text) {
+            Ok(compiled) => compiled,
             Err(reason) => return Outcome::Failed(reason),
         };
+        if let Some((budget, steps)) = budget {
+            let failures = crate::budget::violations(&cost, &budget, steps);
+            if !failures.is_empty() {
+                let list = failures
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<String>>()
+                    .join("; ");
+                return Outcome::Failed(format!("over budget {cost:?}: {list}"));
+            }
+        }
         let summary = match from_bytes(&bytes) {
             Ok(asset) => (asset.nodes.len(), asset.depth),
             // Unreachable for bytes this module just wrote, and if it ever happened the write should not
@@ -92,7 +119,7 @@ pub fn fingerprint(text: &str) -> u64 {
 }
 
 /// Compile already-read authoring text into asset bytes.
-fn compile_bytes(input: &str, text: &str) -> Result<Vec<u8>, String> {
+fn compile_bytes(input: &str, text: &str) -> Result<(Vec<u8>, crate::budget::Cost), String> {
     let authored: Shape = match ron::from_str(text) {
         Ok(authored) => authored,
         Err(error) => return Err(format!("not a valid authoring file: {error}")),
@@ -107,12 +134,13 @@ fn compile_bytes(input: &str, text: &str) -> Result<Vec<u8>, String> {
         Ok(asset) => asset,
         Err(error) => return Err(format!("refused by the compiler: {error:?}")),
     };
+    let cost = crate::budget::cost_of(&asset);
     let label = std::path::Path::new(input)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "asset".to_string());
-    Ok(to_bytes(&asset, &label))
+    Ok((to_bytes(&asset, &label), cost))
 }
 
 /// Write `bytes` to a sibling temporary path, then rename over `path`.
