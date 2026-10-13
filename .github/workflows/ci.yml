@@ -494,6 +494,18 @@ jobs:
           (cd "$out" && sha256sum sphere.bin knot.bin) \
             | sed -E 's/^([0-9a-f]{64}) [^A-Za-z0-9._-]*/\1  /' > asset-digest.txt
           wc -c "$out/sphere.bin" "$out/knot.bin"
+          # A gate that compares digests across machines is worthless if all of them can agree on nothing.
+          # `sha256sum` of an empty file is a constant (e3b0c442...), so a compiler that exits 0 while
+          # writing zero bytes would make every architecture agree and AS2 would pass on thin air. Sizes are
+          # therefore asserted, not printed, and the two fixtures must not collapse onto one byte stream.
+          test -s "$out/sphere.bin" || { echo "sphere.bin is empty"; exit 1; }
+          test -s "$out/knot.bin" || { echo "knot.bin is empty"; exit 1; }
+          if grep -q '^e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' asset-digest.txt; then
+            echo "an asset hashed to the empty-input digest"; exit 1
+          fi
+          if [ "$(awk 'NR==1{print $1} NR==2{print $1}' asset-digest.txt | sort -u | wc -w | tr -d ' ')" != "2" ]; then
+            echo "sphere.bin and knot.bin serialised identically - one of the fixtures is not being compiled"; exit 1
+          fi
           cat asset-digest.txt
       - name: Publish this architecture's digest
         uses: actions/upload-artifact@v4
@@ -527,6 +539,14 @@ jobs:
             lines=$(awk 'END { print NR }' "$file")
             if [ "$lines" != 2 ]; then
               echo "^^^ $file should carry one digest per fixture (2), found $lines" >&2
+              exit 1
+            fi
+            if grep -q '^e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$file"; then
+              echo "^^^ $file contains the empty-input digest - a machine agreed on nothing" >&2
+              exit 1
+            fi
+            if [ "$(awk '{print $1}' "$file" | sort -u | wc -w | tr -d ' ')" != "2" ]; then
+              echo "^^^ $file reports one byte stream for two fixtures - the comparison would prove nothing" >&2
               exit 1
             fi
           done

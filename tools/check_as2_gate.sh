@@ -22,6 +22,16 @@ compare_body() {
       echo "^^^ $file should carry one digest per fixture (2), found $lines" >&2
       exit 1
     fi
+    # Agreement is worthless if there is nothing to agree on: the empty-input digest is a constant, and
+    # two fixtures hashing alike means only one byte stream was ever compared.
+    if grep -q '^e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$file"; then
+      echo "^^^ $file contains the empty-input digest - a machine agreed on nothing" >&2
+      exit 1
+    fi
+    if [ "$(awk '{print $1}' "$file" | sort -u | wc -w | tr -d ' ')" != "2" ]; then
+      echo "^^^ $file reports one byte stream for two fixtures - the comparison would prove nothing" >&2
+      exit 1
+    fi
   done
   pairs=$(printf '%s\n' "$files" \
     | while read -r file; do
@@ -65,11 +75,21 @@ C='4f9da1a4d4b45090a0a6cd84c9b376a6fd75bb9accbea8469302d50448ed925e  sphere.bin
 eeeeeb4b13e5429ac74af3f986dc9a1a6f6923e30216b82ebb1dcd3081df633a  knot.bin'
 # One asset only - a truncated digest file.
 D='4f9da1a4d4b45090a0a6cd84c9b376a6fd75bb9accbea8469302d50448ed925e  sphere.bin'
+# Every machine agreed - on nothing. Two zero-byte assets hash to the empty-input digest, which is a
+# constant, so an agreement built on it proves nothing and has to be refused.
+E='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  sphere.bin
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  knot.bin'
+# Both fixtures produced the same byte stream: two names, one comparison, so a compiler that ignores its
+# input would still "agree across machines".
+S='4f9da1a4d4b45090a0a6cd84c9b376a6fd75bb9accbea8469302d50448ed925e  sphere.bin
+4f9da1a4d4b45090a0a6cd84c9b376a6fd75bb9accbea8469302d50448ed925e  knot.bin'
 
 failures=0
 run_case "three machines agree, one using the Windows mode marker" "$A" "$B" "$A" 0 || failures=$((failures + 1))
 run_case "one machine serialised a different knot asset" "$A" "$A" "$C" 1 || failures=$((failures + 1))
 run_case "one machine published a truncated digest" "$A" "$A" "$D" 1 || failures=$((failures + 1))
+run_case "every machine agreed on empty assets" "$A" "$E" "$E" 1 || failures=$((failures + 1))
+run_case "the two fixtures hashed identically on every machine" "$S" "$S" "$S" 1 || failures=$((failures + 1))
 
 echo
 if [ "$failures" = 0 ]; then
