@@ -207,6 +207,14 @@ jobs:
       - name: Build the engine as a WASI command module
         run: cargo build --release --target wasm32-wasip1 -p engine
 
+      # Gate P1.5's machines differ on WebAssembly SIMD, which changes how blake3's compression and the
+      # evaluator's float loops compile. This builds the module twice - `+simd128` and `-simd128` - runs both,
+      # and requires the 17-line boot block to equal the native one, hashed lines and presentation lines
+      # alike. The harness exits 1 on disagreement and 2 when it cannot run, so a missing dependency can never
+      # read as a pass; it was checked against a deliberate one-digit tamper before being wired in here.
+      - name: Boot output is invariant to WASM SIMD codegen
+        run: bash tools/wasm_simd_parity.sh
+
       - name: Run the engine under a WASM engine and diff it against the host build
         run: |
           set -euo pipefail
