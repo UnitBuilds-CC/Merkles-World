@@ -90,6 +90,7 @@ run_case "one machine serialised a different knot asset" "$A" "$A" "$C" 1 || fai
 run_case "one machine published a truncated digest" "$A" "$A" "$D" 1 || failures=$((failures + 1))
 run_case "every machine agreed on empty assets" "$A" "$E" "$E" 1 || failures=$((failures + 1))
 run_case "the two fixtures hashed identically on every machine" "$S" "$S" "$S" 1 || failures=$((failures + 1))
+run_case "one machine published no digest file at all" "$A" "-" "$A" 1 || failures=$((failures + 1))
 
 echo
 if [ "$failures" = 0 ]; then
