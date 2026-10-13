@@ -142,6 +142,14 @@ jobs:
       - name: Descent inside a region (informational)
         run: cargo run --release --example stream_descent -p render
 
+      # Gate P1.5's four targets include an SSE2-only Celeron (the N2600), and blake3 chooses its
+      # implementation at runtime from CPU features. `pure` compiles the scalar path only, so this leg runs
+      # the published A-10 root vectors through the code the old machine will actually execute. Weaker than
+      # the device - it is not that hardware - but it turns "we hope SIMD and portable agree" into something
+      # checked on every push rather than something S3 has to discover.
+      - name: A-10 root vectors on the scalar hash path (S3 proxy)
+        run: cargo test -p ledger --features blake3/pure
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
