@@ -455,6 +455,15 @@ Three thresholds come out of that table, and the renderer is not the thing that 
   is not what ran out at cell 244,140, the *coordinates* were, and camera-relative arithmetic is what makes
   1e-6 a reachable number a billion units from origin instead of an impossible one.
 
+The sweep runs in CI on all three architectures (`Deep zoom, four coordinate regimes`, beside
+`region_cost`, run `38332751812`), and the three runners print **the same table digit for digit** — the
+region-cell row reads 4,096 hits and 0.000000 delta on x86-64 Linux, x86-64 Windows and ARM64 macOS alike,
+as does the deepest row at world 1.0995e12. That is worth stating precisely because it is easy to over-claim:
+these are presentation floats, nothing hashes them (AGENTS §4), so their agreement is **not** a P1.5 clause
+and adds no device to S3's list. What it does establish is narrower and useful — the ordering rule is
+compiler-independent, so a WGSL twin has no rounding excuse for disagreeing, and the geometry-loss bug above
+was a real bug rather than one machine's arithmetic.
+
 Two things this does **not** settle. R5 is a claim about an image on a display; what is measured here is the
 reference evaluator's numerics on one machine, with the WGSL twin's own cross-vendor agreement (PR #1,
 ~2.4e-7) as the other half. And the correction lands on [OQ-56](13-risks-open-questions.md), whose
