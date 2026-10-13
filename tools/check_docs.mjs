@@ -379,9 +379,19 @@ if (evidence) {
       }
     }
     const phrase = `${agreed} of ${register.length} named targets have reported`;
-    if (!roadmap.includes(phrase)) {
-      fail(join(repoRoot, "docs", "11-roadmap.md"), 1,
-        `gate P1.5's row must state "${phrase}" - the count comes from docs/evidence.json's gate_p1_5_targets, so prose and register cannot disagree`);
+    // The count has to appear in every place the gate's status is stated, not just the roadmap: README's
+    // front page is the file most likely to be read and, this project's own evidence note says, the one that
+    // drifted furthest once - a status board saying "32 tests" while the suite held 183.
+    for (const wanted of ["docs/11-roadmap.md", "README.md"]) {
+      const key = [...text.keys()].find((f) => rel(f) === wanted);
+      if (!key) {
+        fail(join(repoRoot, "docs", "evidence.json"), 1, `${wanted}: not found, so the register's count cannot be cross-checked against it`);
+        continue;
+      }
+      if (!text.get(key).includes(phrase)) {
+        fail(key, 1,
+          `gate P1.5's status here must state "${phrase}" - the count comes from docs/evidence.json's gate_p1_5_targets, so prose and register cannot disagree`);
+      }
     }
   }
 }
