@@ -394,6 +394,22 @@ no hierarchy through one.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
+### Refinement: the same ceiling spread across frames, losslessly (2026-10-13)
+
+`render_bnb_refined` is the budget pass made incremental — pixels already in the frame stay, the ceiling is
+spent only on what is still `NOT_DRAWN_DEPTH`, and the walk resumes where the last frame's ceiling stopped.
+The property that makes that legitimate is asserted, not assumed: finishing a frame over several passes
+produces **the same image byte for byte** as one pass at no ceiling, and the cumulative hits end exactly at
+the single pass's (`tests/budget.rs`, which also checks that each pass respects its ceiling and that
+coverage strictly grows). A budget that changed the picture would be a rendering mode, not a schedule.
+
+That turns R3/P1.4's pop-in from an unanswerable question into a countable one. At a ceiling of 1/4 of the
+culled frame's charged work, the demo region is complete in **5 frames**, with the first frame already
+holding **25.1%** of the hits under `Scan::CentreOut`; the same ceiling with `Scan::TileMajor` takes **9
+frames** and its first frame holds **1.4%**. Order is not a detail of the cut, it is the difference between
+a subject appearing immediately and a subject arriving last. What is still not answered is the word
+"visible": that needs a display, and the display needs the device decision (OQ-51).
+
 ### 1080p measured, derived, and what a ceiling buys at that resolution (2026-10-13)
 
 `cargo run --release --example frame_cost -p render` runs the demo's own eleven-record scene at three
@@ -676,6 +692,6 @@ ring-recycled across epochs, so nothing is allocated mid-frame.
 |------|------|-----------------|
 | R1 | 1080p/60 with 500 culled entities in scene | **invented target** — the transcript's own "60 FPS" is aspirational; set from spike S1 |
 | R2 | Frame time stable while a player continuously edits terrain for 10 minutes | doc 03 tiering |
-| R3 | Region entry after LRU eviction shows prior edits with no visible pop-in | gate P1.4 |
+| R3 | Region entry after LRU eviction shows prior edits with no visible pop-in | gate P1.4. **The work half is measured 2026-10-13** (`examples/pop_in.rs`): with `render_bnb_refined` spending a ceiling across frames, the demo region is fully drawn in 5 frames at a ceiling of 1/4 the culled frame's cost, and its first frame keeps 25.1% of the hits — centre-out. Same ceiling, corner-first order: 9 frames, first frame 1.4%. "No visible" still needs a display (OQ-51); what no longer needs one is the number. |
 | R4 | Frame hash of a scripted camera path is identical across `wgpu` backends | **informational only** — must not gate shipping, per ADR-017 |
 | R5 | Zoom to 1e-6 world units on a pig snout with no polygonation | ADR-011's central claim |

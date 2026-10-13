@@ -491,6 +491,35 @@ pub fn render_bnb_budget_in(
     scan: Scan,
     frame: &mut Frame,
 ) -> Stats {
+    budget_walk(tree, camera, budget, scan, frame, false)
+}
+
+/// The budget pass made incremental: pixels already in `frame` stay, the ceiling is spent only on what is
+/// still [`Frame::NOT_DRAWN_DEPTH`], and the walk keeps going where the last frame's ceiling stopped.
+///
+/// This is what makes a ceiling usable for a *transition* rather than only for a rejection: a region that
+/// just came back from `M_cold` (gate P1.4) or a scene that just changed can be paid for over several
+/// frames, and the property that has to hold is that finishing the job produces the same picture as doing
+/// it at once - which `tests/budget.rs` asserts byte for byte, because anything else would mean the
+/// budget changes what is seen and not merely how much of it is ready yet.
+pub fn render_bnb_refined(
+    tree: &Tree,
+    camera: &Camera,
+    budget: Budget,
+    scan: Scan,
+    frame: &mut Frame,
+) -> Stats {
+    budget_walk(tree, camera, budget, scan, frame, true)
+}
+
+fn budget_walk(
+    tree: &Tree,
+    camera: &Camera,
+    budget: Budget,
+    scan: Scan,
+    frame: &mut Frame,
+    resume: bool,
+) -> Stats {
     let bounds = crate::cull::scene_bounds(tree);
     let enclosure = bounds.enclosure_of(crate::ROOT as usize);
     let forward = unit(camera.forward);
@@ -498,16 +527,25 @@ pub fn render_bnb_budget_in(
     let up = unit(camera.up);
     let rays = (camera.width * camera.height) as usize;
 
+    // Resuming keeps whatever is already drawn, provided the frame belongs to this grid; a size change is a
+    // new frame, and mixing pixels from two grids would be a torn image that looks like a render.
+    let carry_on = resume
+        && frame.width == camera.width
+        && frame.height == camera.height
+        && frame.depth.len() == rays
+        && frame.pixels.len() == rays * 3;
     frame.width = camera.width;
     frame.height = camera.height;
-    frame.pixels.clear();
-    frame.pixels.resize(rays * 3, 0);
-    let sentinel = Frame::NOT_DRAWN_RGB;
-    for (index, byte) in frame.pixels.iter_mut().enumerate() {
-        *byte = sentinel[index % 3];
+    if !carry_on {
+        frame.pixels.clear();
+        frame.pixels.resize(rays * 3, 0);
+        let sentinel = Frame::NOT_DRAWN_RGB;
+        for (index, byte) in frame.pixels.iter_mut().enumerate() {
+            *byte = sentinel[index % 3];
+        }
+        frame.depth.clear();
+        frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
     }
-    frame.depth.clear();
-    frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
 
     let charge = ray_charge(camera);
     let mut spent = 0u64;
@@ -523,6 +561,12 @@ pub fn render_bnb_budget_in(
         {
             for py in ty * TILE..((ty + 1) * TILE).min(camera.height) {
                 for px in tx * TILE..((tx + 1) * TILE).min(camera.width) {
+                    let at = (py * camera.width + px) as usize;
+                    if carry_on && frame.depth[at] != Frame::NOT_DRAWN_DEPTH {
+                        // Paid for in an earlier frame; it costs nothing now and is no longer a shortfall.
+                        decided += 1;
+                        continue;
+                    }
                     if spent + charge > budget.0 {
                         not_drawn = rays as u32 - decided;
                         break 'tiles;

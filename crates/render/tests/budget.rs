@@ -11,7 +11,8 @@ use contracts::sdf::{
     NODE_SPHERE, NODE_UNION,
 };
 use render::raster::{
-    render_bnb, render_bnb_budget, render_bnb_budget_in, Budget, Camera, Frame, Scan, Stats,
+    render_bnb, render_bnb_budget, render_bnb_budget_in, render_bnb_refined, Budget, Camera, Frame,
+    Scan, Stats,
 };
 use render::{validate, Tree};
 
@@ -407,4 +408,98 @@ fn two_runs_of_one_budget_agree_byte_for_byte() {
     assert_eq!(first.pixels, second.pixels);
     assert_eq!(first.depth, second.depth);
     assert_eq!(first_stats, second_stats);
+}
+
+#[test]
+fn finishing_a_frame_costs_nothing_extra_and_changes_nothing_about_the_picture() {
+    // The property the whole progressive idea rests on: rendering under a ceiling over several frames must
+    // produce the *same image* as rendering under no ceiling at once. If refinement changed a pixel, a
+    // budget would be a rendering mode rather than a scheduling one - and a torn frame is the failure a
+    // caller cannot see, because it looks like a render.
+    let tree = scene();
+    let camera = camera();
+    let (want, want_stats) = full(&tree, &camera);
+    let charge = (u64::from(camera.max_steps) + 1) as usize;
+    let _ = charge;
+
+    let mut frame = Frame::new(camera.width, camera.height);
+    let mut passes = 0;
+    let mut remaining = {
+        let stats = render_bnb_refined(&tree, &camera, Budget(0), Scan::CentreOut, &mut frame);
+        stats.not_drawn
+    };
+    assert_eq!(
+        remaining,
+        camera.width * camera.height,
+        "a zero ceiling draws nothing"
+    );
+    let mut previous_undrawn = remaining + 1;
+    while remaining > 0 {
+        passes += 1;
+        let stats = render_bnb_refined(
+            &tree,
+            &camera,
+            Budget(want_stats.evaluations / 4),
+            Scan::CentreOut,
+            &mut frame,
+        );
+        assert!(
+            stats.evaluations <= want_stats.evaluations / 4,
+            "pass {passes} overran its ceiling"
+        );
+        assert!(
+            stats.not_drawn < previous_undrawn,
+            "pass {passes} made no progress: {remaining} -> {}",
+            stats.not_drawn
+        );
+        previous_undrawn = stats.not_drawn;
+        remaining = stats.not_drawn;
+        assert!(
+            passes < 64,
+            "refinement should converge; stuck after {passes} passes"
+        );
+    }
+
+    assert_eq!(
+        frame.pixels, want.pixels,
+        "a refined frame differs from a single-pass frame"
+    );
+    assert_eq!(frame.depth, want.depth, "a refined frame differs in depth");
+    assert!(
+        passes >= 2,
+        "the ceiling was not actually a constraint at {passes} passes"
+    );
+    println!("REFINE {} passes of a quarter of the full cost", passes);
+}
+
+#[test]
+fn a_refined_frame_loses_its_subject_last_when_the_order_centres_out() {
+    // Why `Scan::CentreOut` is the default for progressive work: the pixels a first frame can afford are
+    // the ones near the middle, which is where a subject is. Half the cost should keep most of the hits.
+    let tree = scene();
+    let camera = camera();
+    let (_, full_stats) = full(&tree, &camera);
+    let mut centre = Frame::new(camera.width, camera.height);
+    let centre_stats = render_bnb_refined(
+        &tree,
+        &camera,
+        Budget(full_stats.evaluations / 2),
+        Scan::CentreOut,
+        &mut centre,
+    );
+    let mut corner = Frame::new(camera.width, camera.height);
+    let corner_stats = render_bnb_refined(
+        &tree,
+        &camera,
+        Budget(full_stats.evaluations / 2),
+        Scan::TileMajor,
+        &mut corner,
+    );
+    assert!(
+        centre_stats.hits > corner_stats.hits,
+        "at the same ceiling, centre-out should keep more of the subject than the corner-first order: \
+         {} vs {}",
+        centre_stats.hits,
+        corner_stats.hits
+    );
 }
