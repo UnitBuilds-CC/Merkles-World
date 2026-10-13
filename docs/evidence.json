@@ -1,10 +1,10 @@
 {
   "_purpose": "Numbers the documentation publishes as measured evidence, in one place, so a claim and the thing it claims cannot drift apart silently. Each claim lists where docs cite it and what measures it; two mechanical checks close the loop. tools/check_docs.mjs fails if a cited_in file stops containing the value's prefix (a doc that quietly drops or rewrites an evidence number is caught). CI's roots-in-a-browser job fails if the boot's actual output hash differs from the value here (a boot that changes its printed line without updating the claim is caught). A green run therefore means the published number IS the measured number, not that someone remembered.",
-  "_updated": "2026-10-12",
+  "_updated": "2026-10-13",
   "claims": {
     "suite_size": {
       "kind": "phrase",
-      "value": "183 tests in 29 suites",
+      "value": "187 tests in 29 suites",
       "what": "The workspace's measured test total, as `cargo test -q` reports it summed across the per-suite lines. It is on the README's front page, which is the place most likely to be read and the place that drifted furthest once - a status board saying '32 tests' while the suite held 183 is a public lie, not a stale number.",
       "measured_by": "`cargo test -q` - the sum of the `test result: ok.` lines",
       "cited_in": ["README.md", "docs/11-roadmap.md"]
