@@ -312,8 +312,7 @@ size is the whole story, and it is now a test: a 1.6-unit object 4,096 away subt
 0.5 half-height frustum, about six parts per million of the grid, so **the empty frame was the correct
 render**; give that cell a 400-unit feature - the scale region content actually is - and 16 of 768 pixels
 meet it where the disc formula predicts 17, the centre ray on a chord at 3,712.8 against the 3,715 the
-formula gives. Region streaming therefore needs no precision work; a frame that spans cells needs
-**terrain**, which is SPEC-04's terrain half rather than a renderer fix, and
+formula gives. Region streaming therefore needs no precision work. It needs two other things before a frame can span cells: **terrain-scale content** (SPEC-04's terrain half), and an answer to the fact that composing cells as a minimum of fields *costs reach* - a demo step with a prop cell, a ridge cell and a hill cell along one axis lost the hill even at 512 steps per ray, because the nearer cell's non-zero field values spend the steps the farther cell needs. That is [OQ-57](13-risks-open-questions.md), and the step was reverted rather than shipped with a frame quietly missing its own horizon, and
 [OQ-56](13-risks-open-questions.md) records the diagnosis and retires the camera-relative worry. Whether the
 grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
 contract decision with a cost attached (interpreter arm, validator, WGSL twin, asset graph). Until it is

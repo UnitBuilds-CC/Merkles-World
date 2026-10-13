@@ -20,13 +20,21 @@
 //!    enclosure, and against the bound hierarchy - and reported as counts, not shown. The three frames are
 //!    asserted identical, and the line prints which of the two culls the scene's own licence allows, which
 //!    for a blended scene is none. Nothing displays it; that half is still the renderer workstream's.
+//! 8. the same grid is drawn a fourth time **under a ceiling** on charged evaluations, centre-out, and the
+//!    pixels the ceiling sacrificed are counted rather than left as a black guess.
+//!
+//! Steps 6 to 8 are CPU arithmetic on a buffer. The clause of the pitch demo they satisfy is "a rendered
+//! procedural scene" in the sense docs/11's gate table can check - pixels exist and are reproducible - and
+//! not in the sense a player would accept: there is no display, and gates R1 and R2 are frame times.
 //!
 //! Usage: `engine` compiles its own scene and loads those bytes back; `engine <asset.bin>` boots from
 //! a file an `assetc` run wrote, which is the shape doc 09's dev profile ends in.
 //!
 //! What is NOT here, because docs/11's gate table says so and a demo must not quietly disagree with
-//! its own status page: no GPU, no window, no culling, no BVH, no macro simulation, no compaction, no
-//! mod loading. The first clause of the pitch demo is now true in the narrow sense that something
+//! its own status page: no GPU, no window, no BVH build (the bounds are derived per node from the tree the
+//! asset compiler emitted, not from a spatial index over primitives), no macro simulation, no mod loading,
+//! and no multi-region frame. Culling and a work ceiling are here since steps 7 and 8, on the CPU path;
+//! ledger compaction is a landed transform with no caller in this loop. The first clause of the pitch demo is now true in the narrow sense that something
 //! boots and completes the loop end to end, and the asset it boots with goes through the file format
 //! an author's tool would write.
 
