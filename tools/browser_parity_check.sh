@@ -3,6 +3,10 @@
 #
 #   bash tools/browser_parity_check.sh [path/to/engine.wasm]
 #
+# Environment: MLWS_NATIVE_OUTPUT (this machine's boot output, the default target/s3_native.txt),
+# MLWS_PORT, MLWS_ENGINES (comma list of safari,chromium - default both), MLWS_SKIP_BUILD=1 to test the
+# module on disk instead of rebuilding it.
+#
 # CI already drives both engines (the `browser-execute` and `browser-jsc` jobs), so nothing here is a new
 # claim - what is missing until now is that a person holding an Apple-silicon Mac had no command. The gate
 # says "an M1 browser", and the device harness stopped at the native and WASI legs, which are both not a
@@ -28,6 +32,18 @@ PORT="${MLWS_PORT:-8137}"
 BASE="http://127.0.0.1:${PORT}"
 REF="${MLWS_NATIVE_OUTPUT:-target/s3_native.txt}"
 EMPTY_SHA="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+# Which engines to drive. CI's `browser-execute` job asks for Chromium only - its own comment says the job's
+# claim is "a browser host on three architectures", and JavaScriptCore belongs to `browser-jsc` - while a
+# person holding an M1 Mac wants both. Deselection has to be expressible, or the one script cannot replace
+# the inline YAML step it otherwise duplicates.
+ENGINES="${MLWS_ENGINES:-safari,chromium}"
+wanted() {
+  case ",${ENGINES}," in
+    *",$1,"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 sha_of() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -90,7 +106,10 @@ fail=0
 verdicts=""
 
 # --- Safari / JavaScriptCore: the non-V8 engine, and the one gate P1.5's fourth target is about ------
-if [[ "$(uname -s)" == "Darwin" ]] && command -v safaridriver >/dev/null 2>&1; then
+if ! wanted safari; then
+  echo "// Safari / JavaScriptCore: not requested (MLWS_ENGINES=$ENGINES)"
+  verdicts="${verdicts}safari=not-requested "
+elif [[ "$(uname -s)" == "Darwin" ]] && command -v safaridriver >/dev/null 2>&1; then
   echo
   echo "// Safari / JavaScriptCore"
   MLWS_NATIVE_OUTPUT="$REF" MLWS_PORT="$PORT" bash tools/safari_parity.sh "$WASM"
@@ -114,6 +133,10 @@ else
 fi
 
 # --- Chromium-family: V8 in a browser rather than V8 in node ---------------------------------------
+if ! wanted chromium; then
+  echo "// Chromium-family: not requested (MLWS_ENGINES=$ENGINES)"
+  verdicts="${verdicts}chromium=not-requested "
+else
 browser=""
 for candidate in \
   "google-chrome" "google-chrome-stable" "chromium" "chromium-browser" \
@@ -188,6 +211,7 @@ else
       verdicts="${verdicts}chromium=DIVERGES "
     fi
   fi
+fi
 fi
 
 echo
