@@ -17,13 +17,11 @@ targets = [
 all-features = true
 
 [advisories]
-# `paste` is flagged as no longer maintained (the branch CI reported it as one advisory error alongside the licence line).
-# Ignored by crate name under the `unmaintained` knob rather than by an invented RUSTSEC id: cargo-deny keys that list
-# on crate names, and guessing an identifier would be fabricating the evidence for a waiver. Drop this line if the
-# crate ever leaves the graph - `paste` arrives through wgpu's dependency tree, so it is OQ-51's cost, not a
-# finding about this repository's own code.
-ignore = []
-unmaintained = [
+# `paste` arrives through wgpu's tree and is reported as no longer maintained. cargo-deny 0.20 has
+# no [advisories].unmaintained key (it rejected that shape outright), and its ignore list accepts crate
+# names, so the waiver is by name - deliberately not by an invented RUSTSEC id, which would be
+# fabricating the identifier that justifies the exception. Remove this entry if paste leaves the graph.
+ignore = [
     "paste",
 ]
 
