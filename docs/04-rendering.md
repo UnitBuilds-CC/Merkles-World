@@ -608,7 +608,7 @@ running it on real content rather than on the synthetic ridge.
   questions is sound (a proved-empty ray charges nothing, so the ceiling cannot be breached by it) and would
   turn 813 frames into something like `3072 - 2260` over the same charge, but it changes the *prefix*
   property the budget tests pin - which pixels are drawn at a given ceiling - so it is a decision to make
-  with those tests in hand, not a quiet edit. It is filed as **OQ-60**.
+  with those tests in hand, not a quiet edit. It is filed as **OQ-60**. The shape of the trade is measured now (`examples/refine_probe.rs`): on a grid whose whole frame costs 876 against a charge of 97, ceilings of 1, 2, 4, 8 and 16 charges settle it in 125, 9, 3, 2 and 1 frames - every row charging exactly the same 876 in total, asserted - while a sub-charge ceiling never settles at all. Frame one at a single charge takes 22 pixels of 3,072 even though 96.0% of the grid is proved free, which is option (a)'s whole prize: the same work, a much better first frame.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
