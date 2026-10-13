@@ -10,11 +10,15 @@
       "cited_in": ["README.md", "docs/11-roadmap.md"]
     },
     "boot_output_sha256": {
-      "value": "7c71da7ca50774da36def063e24b4848ff345c9116cdea2221e3fba619bd50af",
+      "value": "db71f8a0bf5818d66a8faab4ac32f093b3c18637e3888a9c853dd47ee3083af8",
       "what": "SHA-256 of the whole eighteen-line output of `cargo run -p engine` (seventeen before the peer-reconcile line arrived, sixteen before the stream-carry line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
       "first_measured_at": "38327470938",
       "superseded": [
+        {
+          "value": "7c71da7ca50774da36def063e24b4848ff345c9116cdea2221e3fba619bd50af",
+          "why": "repointing a citation that wrongly named OQ-46 (wire identities) as the owner of divergence resolution also edited a word inside the boot's own printed peer-reconcile line, so the whole-output bytes moved again while every hashed vector stayed put. Caught by CI's browser leg comparing the run against this manifest - the local gate cannot see it, because the root lines are unchanged and the citing files still agreed with the stale value: a claim checked only against other claims is not checked at all"
+        },
         {
           "value": "3c67db5f51644de6b20290cbffa0bac0a3c5bb404fe1e1b74e4162f72e5f1f0f",
           "why": "step 3b of the boot now performs gate P1.6 end to end: it diverges a lagging peer missing one of three appends, names the voxel the bisection walk finds (2048, 2048, 2048, with None on the side that never received it), reconciles it with ledger::repair::catch_up to the leader's root, and re-runs the walk to show nothing is left - all asserted in the binary. A printed line grew, so the whole-output bytes moved; no hashed value did: EPOCH_0, REGIONS, SLOT_TABLE and REGION_0 still agree with doc 03, and the WASM leg still matches native line for line"
