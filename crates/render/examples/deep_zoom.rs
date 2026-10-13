@@ -26,6 +26,7 @@
 //!
 //! Measured on this machine; no GPU, so this is about numerics, not frame time. R1 and R2 stay unmet.
 
+use contracts::coords::GlobalVoxelPos;
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_SPHERE, NODE_UNION,
@@ -239,6 +240,64 @@ fn main() {
         planned.len(),
         stream_stats.evaluations
     );
+    println!();
+    println!("// The second table is OQ-58's number, and it is a different question from the one above. With");
+    println!("// the subtraction order fixed, the frame stops being what breaks: the eye and the cell cancel");
+    println!("// exactly no matter how large both are. What is left is the *placement* - gate C1 keeps a cell");
+    println!("// index in `i64` and `Region::origin` turns it into an `f32`, so past some index the renderer");
+    println!(
+        "// is drawing a region that is not where the ledger says it is, while still drawing it"
+    );
+    println!("// perfectly. Read the ulp column against the delta column: the delta stays flat, the ulp grows");
+    println!(
+        "// past one voxel, and that is the distance at which a deep world stops being a claim."
+    );
+    println!();
+    println!(" cell index | world origin | origin - exact `i64` (voxels) | f32 ulp there (voxels) | hits | max depth delta");
+    for cell in [
+        0i64,
+        1,
+        4096,
+        244140,
+        2_097_152,
+        16_777_216,
+        16_777_217,
+        33_554_433,
+        268_435_457,
+    ] {
+        let exact = cell * GlobalVoxelPos::REGION_SIZE;
+        let region = Region {
+            cell: [cell, 0, 0],
+            tree: snout_at([0.0; 3]),
+        };
+        let got = region.origin()[0];
+        let placement_error = f64::from(got) - exact as f64;
+        // The spacing of the `f32` grid the origin landed on: 2^(exponent - 23) world units.
+        let exponent = ((got.to_bits() >> 23) & 0xff) as i32;
+        let ulp = if exponent == 0 || got == 0.0 {
+            f64::from(f32::MIN_POSITIVE)
+        } else {
+            2.0f64.powi(exponent - 150)
+        };
+        let cam = camera([got, 0.0, -3.0]);
+        let sweep_regions = [region];
+        let planned = plan(&cam, &sweep_regions);
+        let (frame, _) = render_regions(&cam, &sweep_regions, &planned);
+        let hit_count = frame.depth.iter().filter(|d| **d != Frame::NO_HIT).count();
+        let mut worst = 0.0f32;
+        for index in 0..frame.depth.len() {
+            let a = frame.depth[index];
+            let b = base_frame.depth[index];
+            if a == Frame::NO_HIT || b == Frame::NO_HIT {
+                continue;
+            }
+            worst = worst.max((a - b).abs());
+        }
+        println!(
+            " {:>10} | {:>12.0} | {:>27.0} | {:>20.4} | {:>4} | {:>15.6}",
+            cell, got, placement_error, ulp, hit_count, worst
+        );
+    }
     println!();
     println!(
         "// Read rows 2, 3 and 4 against each other, because that trio is the whole of docs/02's"

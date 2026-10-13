@@ -128,6 +128,14 @@ jobs:
       - name: Region streaming cost (informational)
         run: cargo run --release --example region_cost -p render
 
+      # Gate R5's numerics, on every architecture the matrix has. The claim being printed is a cross-
+      # implementation one - the same snout at 1e-6, four coordinate regimes, and a cell sweep - so the
+      # interesting fact is whether x86-64 Linux, x86-64 Windows and ARM64 macOS agree that the far camera-
+      # relative frame is *identical* to the local one. Nothing here is asserted; the assertion lives in
+      # tests/stream.rs, and this is the evidence that it holds on three compilers rather than one.
+      - name: Deep zoom, four coordinate regimes (informational)
+        run: cargo run --release --example deep_zoom -p render
+
       # Spike S7's first half: how long a distant consequence takes to arrive, and what a commit costs
       # when it may only touch the disturbed width. Printed, never asserted - it is a model of integers,
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.

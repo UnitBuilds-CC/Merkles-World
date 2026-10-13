@@ -427,6 +427,34 @@ After that, row 4 is row 2: all 4,096 pixels hit and every depth matches the loc
 `tests/stream.rs::a_cell_a_billion_out_draws_the_same_picture_as_the_same_cell_at_zero` pins it as pixels,
 depth, charged work and hit count.
 
+The sweep the same example prints next is the one OQ-58 needs, and its headline is that the fixed path is
+**distance-invariant**. Re-rendering the snout at nine cell indices from 0 to 2^28 + 1 — world zero to
+1.0995e12 — every row returns 4,096 of 4,096 hits and a max depth delta of exactly 0.000000 against the
+local baseline. Camera-relative ordering makes the *frame* independent of where in the world the cell sits,
+because the eye and the cell origin cancel exactly and `t` never sees a large number. What degrades instead
+is **placement**, which is a different failure and a quieter one:
+
+| cell index | world origin | origin − exact `i64` (voxels) | `f32` ulp there (voxels) |
+|------------|--------------|------------------------------|--------------------------|
+| 1 | 4,096 | 0 | 0.0005 |
+| 4,096 | 16,777,216 | 0 | 2.0 |
+| 244,140 | 999,997,440 | 0 | 64.0 |
+| 16,777,216 | 68,719,476,736 | 0 | 8,192.0 |
+| 16,777,217 | 68,719,476,736 | −4,096 | 8,192.0 |
+| 268,435,457 | 1,099,511,627,776 | −4,096 | 131,072.0 |
+
+Three thresholds come out of that table, and the renderer is not the thing that sets them:
+
+- **Sub-voxel placement stops at 2^24 world units** — cell index 4,096. Past it an `f32` origin cannot name
+  a fraction of a voxel (the ulp is already 2.0 at 16,777,216), so the shape is drawn perfectly *somewhere
+  near* where the ledger says it is. Nothing about the frame reports this: the hits and depths are identical.
+- **The cell index itself stops rounding at 2^24** — from index 16,777,217 onward `cell as f32` is wrong, and
+  here it is wrong by a whole region (−4,096 voxels), which is the first placement error in the table.
+- **R5's own 1e-6 figure is only expressible within about 16 units of absolute zero** — an `f32`'s ulp crosses
+  1e-6 near 2^3. Which is precisely why the gate's claim is meaningless without docs/02's rule: the tolerance
+  is not what ran out at cell 244,140, the *coordinates* were, and camera-relative arithmetic is what makes
+  1e-6 a reachable number a billion units from origin instead of an impossible one.
+
 Two things this does **not** settle. R5 is a claim about an image on a display; what is measured here is the
 reference evaluator's numerics on one machine, with the WGSL twin's own cross-vendor agreement (PR #1,
 ~2.4e-7) as the other half. And the correction lands on [OQ-56](13-risks-open-questions.md), whose
