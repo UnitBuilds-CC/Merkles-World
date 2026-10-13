@@ -65,7 +65,7 @@ fn main() {
         REGION_UNITS
     );
     println!();
-    println!(" spheres | nodes | rays | plain evals | descent evals | skipped plain -> descent | hits | visits counted -> pruned | node work avoided");
+    println!(" spheres | nodes | rays | plain evals | descent evals | skipped plain -> descent | hits | visits counted -> pruned | node work avoided | evals removed per bound record built");
     let camera = Camera {
         origin: [0.0, 0.0, -6.0],
         forward: [0.0, 0.0, 1.0],
@@ -104,8 +104,17 @@ fn main() {
         } else {
             0.0
         };
+        // The descent's own fixed cost, which docs/04 claimed as "O(nodes) per frame" without pricing it:
+        // one bound record per node of every selected region, built once per frame. Dividing the evaluations
+        // it removes by the records it builds turns that claim into a ratio a reader can judge.
+        let records: u64 = selected
+            .iter()
+            .map(|&index| regions[index].tree.nodes.len() as u64)
+            .sum();
+        let removed = plain.evaluations.saturating_sub(bnb.evaluations);
+        let per_record = removed / records.max(1);
         println!(
-            " {:>7} | {:>5} | {:>4} | {:>11} | {:>13} | {:>17} | {:>4} | {:>22} | {:>17.1}%",
+            " {:>7} | {:>5} | {:>4} | {:>11} | {:>13} | {:>17} | {:>4} | {:>22} | {:>17.1}% | {:>17}",
             count,
             2 * count - 1,
             plain.rays,
@@ -115,6 +124,7 @@ fn main() {
             bnb.hits,
             format!("{} -> {}", counted.visits, bnb.visits),
             avoided * 100.0,
+            format!("{} ({}/{})", per_record, removed, records),
         );
     }
     println!();

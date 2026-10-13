@@ -503,7 +503,11 @@ Three readings, and the third is the one that changes the roadmap's arithmetic:
   same 876 evaluations — because 24 of them are simply never entered.
 - **It is not free and not universal.** The tight row (spacing 1.2, where the cover sphere nearly fits) buys
   85.6% rather than 97.4%, and every frame pays a bound table per selected region — O(nodes), built once per
-  frame rather than per ray, which is the honest cost of `stream` owning its own march loop. Nothing here is
+  frame rather than per ray, which is the honest cost of `stream` owning its own march loop - now priced rather than asserted: the probe's
+  last column divides the evaluations removed by the bound records built, and it comes out between **1,319
+  and 16,647 charged evaluations removed per record built** (worst for the densest cell, 283,008 removed
+  against 129 records; best for the sparsest, the same 283,008 against 17). A frame that cannot afford 129
+  derivations per region is not the frame this hierarchy is being sold to. Nothing here is
   a frame time: evaluations are not nanoseconds, and R1 still waits on a device (OQ-51).
 
 `tests/stream.rs::the_descent_inside_a_region_avoids_node_work_and_moves_no_pixel` states the law the
