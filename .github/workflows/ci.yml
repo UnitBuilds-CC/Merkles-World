@@ -232,6 +232,11 @@ jobs:
           set -euo pipefail
           node --version
           cargo run --release -q -p engine > host.txt
+          # A peer comparison proves two runs agree, not that either finished: a boot that panicked
+          # halfway would leave every leg agreeing on truncated output, and `test -s` would still pass.
+          # The closing marker is what turns "the two agree" into "the same complete boot", so the
+          # reference is checked rather than assumed.
+          grep -q '^// boot complete' host.txt || { echo "the native reference never reached its closing marker"; exit 1; }
           node --experimental-wasi-unstable-preview1 tools/wasm_parity.mjs \
             target/wasm32-wasip1/release/engine.wasm > wasm.txt 2> wasm.err
           # An empty file diffs clean against an empty file. The engine asserts its own vectors, so if it
@@ -296,6 +301,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo run --release -q -p engine > host.txt
+          # A peer comparison proves two runs agree, not that either finished: a boot that panicked
+          # halfway would leave every leg agreeing on truncated output, and `test -s` would still pass.
+          # The closing marker is what turns "the two agree" into "the same complete boot", so the
+          # reference is checked rather than assumed.
+          grep -q '^// boot complete' host.txt || { echo "the native reference never reached its closing marker"; exit 1; }
           node --experimental-wasi-unstable-preview1 tools/wasm_parity.mjs \
             target/wasm32-wasip1/release/engine.wasm > wasm.txt 2> wasm.err
           test -s wasm.txt || { echo "the WASM run printed nothing"; exit 1; }
@@ -344,6 +354,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo run --release -q -p engine > host.txt
+          # A peer comparison proves two runs agree, not that either finished: a boot that panicked
+          # halfway would leave every leg agreeing on truncated output, and `test -s` would still pass.
+          # The closing marker is what turns "the two agree" into "the same complete boot", so the
+          # reference is checked rather than assumed.
+          grep -q '^// boot complete' host.txt || { echo "the native reference never reached its closing marker"; exit 1; }
           node tools/shim_parity.mjs target/wasm32-wasip1/release/engine.wasm > shim.txt
           test -s shim.txt || { echo "the shim run printed nothing"; exit 1; }
           if ! diff -u host.txt shim.txt; then
