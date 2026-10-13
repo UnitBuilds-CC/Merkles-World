@@ -399,7 +399,7 @@ pub(crate) fn ray_for(
 /// `steps + 1` and a miss costs the full step budget. It is also the unit a [`Budget`] is spent in, which is
 /// what turns a ceiling into a bound: refusing to *start* a ray whose worst-case charge does not fit is
 /// enough, and no measured quantity is needed mid-frame.
-fn ray_charge(camera: &Camera) -> u64 {
+pub(crate) fn ray_charge(camera: &Camera) -> u64 {
     u64::from(camera.max_steps) + 1
 }
 
@@ -428,7 +428,7 @@ pub enum Scan {
 }
 
 /// Every tile index in the requested order. `CentreOut` sorts on `(dy*dy + dx*dx, ty, tx)` in integers.
-fn tile_order(camera: &Camera, scan: Scan) -> Vec<u32> {
+pub(crate) fn tile_order(camera: &Camera, scan: Scan) -> Vec<u32> {
     let tiles_x = camera.width.div_ceil(TILE);
     let tiles_y = camera.height.div_ceil(TILE);
     let mut tiles: Vec<u32> = (0..tiles_x * tiles_y).collect();
@@ -450,10 +450,10 @@ fn tile_order(camera: &Camera, scan: Scan) -> Vec<u32> {
 /// Pixels per tile side, for [`render_bnb_budget`]. Eight is a choice rather than a law - it is the
 /// smallest block that still amortises a bound test - and `tests/budget.rs` pins the *behaviour* (whole
 /// tiles cut, prefixes identical) instead of the number, so a different tile on a GPU is not a failure.
-const TILE: u32 = 8;
+pub(crate) const TILE: u32 = 8;
 
 /// Write one already-computed colour into a sized frame at `index`.
-fn write_pixel(frame: &mut Frame, index: usize, rgb: &[u8; 3]) {
+pub(crate) fn write_pixel(frame: &mut Frame, index: usize, rgb: &[u8; 3]) {
     frame.pixels[index * 3..index * 3 + 3].copy_from_slice(rgb);
 }
 

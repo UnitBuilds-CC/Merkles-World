@@ -6,9 +6,10 @@ use contracts::sdf::{
     NODE_SPHERE, NODE_UNION,
 };
 use render::cull::{counting_bounds, SceneBounds};
-use render::raster::{render, render_culled, Camera};
+use render::raster::{render, render_culled, Budget, Camera, Frame, Scan};
 use render::stream::{
-    plan, render as render_regions, render_bnb, render_with_tables, Region, REGION_UNITS,
+    plan, render as render_regions, render_bnb, render_budget, render_with_tables, Region,
+    REGION_UNITS,
 };
 use render::Tree;
 
@@ -340,6 +341,89 @@ fn chain(count: usize, spacing: f32, x: f32, nodes: &mut Vec<NodeRecord>, params
     ]));
     chain(1, spacing, x, nodes, params);
     chain(count - 1, spacing, x + spacing, nodes, params);
+}
+
+#[test]
+fn the_ceiling_across_cells_holds_and_every_pixel_it_drew_matches_the_full_frame() {
+    // `raster` has spent a frame budget within one tree for a while; the streamed frame is the one the demo
+    // actually composes, and a ceiling across cells is a different claim unless the cut is provably the same
+    // law. So: the decision is made against the worst a ray can cost *before it starts* (so the ceiling
+    // holds by construction, at every level including zero and double the full cost), every pixel the cut
+    // reached equals the unbudgeted frame byte for byte, and every pixel it did not is the sentinel rather
+    // than a plausible sky someone would have to squint at to notice was never marched.
+    let regions = [
+        Region {
+            cell: [0, 0, 0],
+            tree: ridge(9, 8.0),
+        },
+        Region {
+            cell: [0, 0, 1],
+            tree: sphere(0.9, [0.0, 0.0, 0.0]),
+        },
+    ];
+    let camera = camera([0.0, 0.0, -6.0], 40.0);
+    let selected = plan(&camera, &regions);
+    let (full, full_stats) = render_bnb(&camera, &regions, &selected);
+
+    for level in [
+        0u64,
+        8,
+        64,
+        512,
+        4096,
+        full_stats.evaluations,
+        full_stats.evaluations * 2,
+    ] {
+        let (frame, stats) =
+            render_budget(&camera, &regions, &selected, Budget(level), Scan::CentreOut);
+        assert!(
+            stats.evaluations <= level,
+            "a ceiling of {level} was overran: {} charged",
+            stats.evaluations
+        );
+        let mut drawn = 0usize;
+        for index in 0..frame.depth.len() {
+            if frame.depth[index] == Frame::NOT_DRAWN_DEPTH {
+                assert_eq!(
+                    &frame.pixels[index * 3..index * 3 + 3],
+                    &Frame::NOT_DRAWN_RGB,
+                    "an undrawn pixel reports a colour, so a shortfall is indistinguishable from sky"
+                );
+                continue;
+            }
+            drawn += 1;
+            assert_eq!(
+                frame.depth[index], full.depth[index],
+                "pixel {index} moved once a ceiling was applied"
+            );
+            assert_eq!(
+                &frame.pixels[index * 3..index * 3 + 3],
+                &full.pixels[index * 3..index * 3 + 3]
+            );
+        }
+        assert_eq!(
+            u64::from(stats.rays),
+            drawn as u64 + u64::from(stats.not_drawn),
+            "rays must divide exactly into drawn and short of, at every ceiling"
+        );
+        if level == 0 {
+            assert_eq!(stats.not_drawn, stats.rays, "zero draws nothing");
+        }
+    }
+
+    // An unlimited ceiling is the same frame, sentinel-free, to the byte - the claim that the budget walker
+    // and the full walker are one march and not two that happen to agree today.
+    let (all, all_stats) = render_budget(
+        &camera,
+        &regions,
+        &selected,
+        Budget(full_stats.evaluations * 4),
+        Scan::TileMajor,
+    );
+    assert_eq!(all_stats.not_drawn, 0);
+    assert_eq!(all.depth, full.depth);
+    assert_eq!(all.pixels, full.pixels);
+    assert_eq!(all_stats.hits, full_stats.hits);
 }
 
 #[test]

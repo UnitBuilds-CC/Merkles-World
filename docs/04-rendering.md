@@ -516,6 +516,27 @@ never take a pixel, a depth or a hit away. The first version of that test assert
 evaluations equal, saving confined to node visits — and failed, which is the measurement correcting the
 expectation rather than the other way round.
 
+### The same ceiling, spent across cells (2026-10-13)
+
+The budget pass above lives in `raster`, which owns one tree. The frame the demo actually composes is a
+minimum of several regions, and a ceiling across cells is a different claim unless it is the same law — so
+`stream::render_budget` spends it the same way: the decision is made against the worst a ray can cost
+(`max_steps + 1`) *before the ray starts*, tiles are walked in the order the caller asks for, and a pixel the
+cut never reaches reports `Frame::NOT_DRAWN_DEPTH` / `NOT_DRAWN_RGB` rather than a plausible sky. It is not a
+second march. The per-ray work moved into one private `march_ray` that the plain, descent, counting and
+budgeted walkers all call, because two copies of the composite march is exactly the fork that would show up
+as "the budgeted frame disagrees with the full one" — and the existing streaming tests are what prove the
+extraction changed nothing: 56 render tests green before it and 57 after, with the boot's own three-cell
+assertion still holding.
+
+`tests/stream.rs::the_ceiling_across_cells_holds_and_every_pixel_it_drew_matches_the_full_frame` is the gate:
+seven ceilings from zero to twice the full cost, each one never overran, every drawn pixel equal to the
+unbudgeted frame in colour and depth, `rays == drawn + not_drawn` at every level, and an unlimited ceiling
+byte-identical to the descent's frame in both buffers. What is *not* measured yet is the curve — which share
+of a streamed frame's surface survives a given ceiling, in which walk order, on content at region scale.
+That is `pop_in`'s question asked of cells rather than of one tree, and it is the next unit in this section,
+not a claim in it.
+
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
 ### Refinement: the same ceiling spread across frames, losslessly (2026-10-13)

@@ -24,8 +24,11 @@
 //! (docs/02's float discipline, AGENTS.md §4).
 
 use crate::cull::{ray_may_hit, scene_bounds, Enclosure, SceneBounds};
-use crate::raster::{normal_to_rgb, ray_for, sky, unit, Camera, Frame, Stats};
-use crate::{normal, sdf_eval, sdf_eval_bnb, Tree, ROOT};
+use crate::raster::{
+    normal_to_rgb, ray_charge, ray_for, sky, tile_order, unit, write_pixel, Budget, Camera, Frame,
+    Scan, Stats, TILE,
+};
+use crate::{normal, sdf_eval, sdf_eval_bnb, Tree, Vec3, ROOT};
 use contracts::coords::GlobalVoxelPos;
 
 /// One region's side length in voxels, and so in world units: gate C1's `region * 4096 + offset`, quoted
@@ -184,126 +187,24 @@ fn march_regions(
     let mut evaluations = 0u64;
     let mut skipped = 0u32;
 
-    // Pre-compute what each selected region needs, once, rather than per ray.
-    // Grown by the marcher's hit tolerance, exactly as `raster` grows the enclosures it tests: a ray that
-    // grazes a region - passing within `surface` of its sphere but outside it - is a hit as far as the march
-    // is concerned, and a skip that disagrees with the marcher is a missing pixel rather than a saving.
-    // Both are camera-relative: the eye is the origin of the arithmetic (docs/02), so no number in the
-    // bounds below is a world coordinate, and none of them has to survive a subtraction afterwards.
-    let bounds: Vec<Enclosure> = selected
-        .iter()
-        .map(|&index| {
-            regions[index]
-                .enclosure_relative(camera.origin)
-                .grown(camera.surface)
-        })
-        .collect();
-    // The eye, in each region's own coordinates. Exact by the same argument as `relative_origin`, and the
-    // reason the march can accumulate `t` here at all: at a far cell the alternative - build the world point,
-    // subtract the cell afterwards - rounds the sample to the cell's ulp (64 units at 10^9) and deletes
-    // surface, which `examples/deep_zoom.rs` measured at 1,280 of 4,096 pixels.
-    let eyes: Vec<[f32; 3]> = selected
-        .iter()
-        .map(|&index| regions[index].relative_origin(camera.origin))
-        .collect();
+    let prepared = prepare(camera, regions, selected);
+    let bounds = &prepared.bounds;
+    let eyes = &prepared.eyes;
 
     for py in 0..camera.height {
         for px in 0..camera.width {
             let dir = ray_for(camera, px, py, forward, right, up);
-            let mut any = false;
-            for (slot, enclosure) in bounds.iter().enumerate() {
-                if !ray_may_hit(*enclosure, [0.0; 3], dir, camera.max_t) {
-                    continue;
-                }
-                // The descent is asked in this region's own coordinates, from this region's own eye, for the
-                // same reason the samples are: a bound table is a statement about the tree's frame, not the
-                // world's. A counting table declines to answer (`prunes()` is false), so the baseline walk
-                // asks the region test and nothing deeper - which is the difference being measured.
-                if let Some(scene) = tables {
-                    let scene = &scene[slot];
-                    if scene.prunes()
-                        && !scene.may_reach_subtree(
-                            &regions[selected[slot]].tree,
-                            ROOT as usize,
-                            eyes[slot],
-                            dir,
-                            camera.surface,
-                        )
-                    {
-                        continue;
-                    }
-                }
-                any = true;
-                break;
-            }
-            if !any {
+            let marched = march_ray(camera, regions, selected, bounds, eyes, tables, dir);
+            if marched.skipped {
                 skipped += 1;
-                push(&mut frame.pixels, &sky(dir));
-                frame.depth.push(Frame::NO_HIT);
-                continue;
-            }
-            let mut t = 0.0f32;
-            let mut steps = 0u32;
-            let mut hit_t = Frame::NO_HIT;
-            // The hit point stays in the coordinates of whichever region owned it, because that is where
-            // its gradient has to be tapped and where it is still precise.
-            let mut hit_local = [0.0f32; 3];
-            // Which region owns the surface, so the gradient is tapped in that region's coordinates and
-            // against that region's tree. Guessing "the first one" would shade a neighbouring region's
-            // surface with this one's field - a plausible normal, and wrong.
-            let mut hit_region = usize::MAX;
-            let mut hit_steps = 0u32;
-            while t < camera.max_t && steps < camera.max_steps {
-                let mut distance = f32::MAX;
-                let mut owner = 0usize;
-                let mut owner_local = [0.0f32; 3];
-                for (slot, &index) in selected.iter().enumerate() {
-                    let eye = eyes[slot];
-                    let local = [
-                        eye[0] + dir[0] * t,
-                        eye[1] + dir[1] * t,
-                        eye[2] + dir[2] * t,
-                    ];
-                    let field = match tables {
-                        // One evaluator with an optional table, same rule as `raster`: two implementations of
-                        // A-07 that agree today are two programs tomorrow. A counting table answers the same
-                        // field as no table at all and merely declines every licence, so the two walks this
-                        // function can run differ only in what they decline to enter.
-                        Some(scene) => {
-                            sdf_eval_bnb(&regions[index].tree, &scene[slot], ROOT, local)
-                        }
-                        None => regions[index].field_at_local(local),
-                    };
-                    if field < distance {
-                        distance = field;
-                        owner = slot;
-                        owner_local = local;
-                    }
+            } else {
+                evaluations += marched.charged;
+                if marched.hit {
+                    hits += 1;
                 }
-                if distance.abs() < camera.surface {
-                    hit_t = t;
-                    hit_local = owner_local;
-                    hit_region = owner;
-                    hit_steps = steps;
-                    break;
-                }
-                t += distance.max(camera.surface);
-                steps += 1;
             }
-            if hit_t == Frame::NO_HIT {
-                // The same accounting `raster` uses, so a one-region frame and a tree frame report
-                // comparable numbers: a miss is charged the whole step budget, which is an upper bound.
-                evaluations += u64::from(camera.max_steps);
-                push(&mut frame.pixels, &sky(dir));
-                frame.depth.push(Frame::NO_HIT);
-                continue;
-            }
-            hits += 1;
-            evaluations += u64::from(hit_steps) + 1;
-            let region = &regions[selected[hit_region]];
-            let n = normal(&region.tree, ROOT, hit_local, camera.surface * 16.0);
-            push(&mut frame.pixels, &normal_to_rgb(n));
-            frame.depth.push(hit_t);
+            push(&mut frame.pixels, &marched.rgb);
+            frame.depth.push(marched.depth);
         }
     }
 
@@ -325,6 +226,253 @@ fn march_regions(
             not_drawn: 0,
         },
     )
+}
+
+/// The frame budget, spent across cells.
+///
+/// Same law as [`crate::raster::render_bnb_budget`] and the same per-ray march as [`render`], which matters
+/// more here than it does in one tree: the ceiling is decided against the worst a ray can cost *before it
+/// starts*, so it holds by construction and can be used as a gate rather than an observation - and the
+/// pixels the cut never reached report [`Frame::NOT_DRAWN_DEPTH`] and [`Frame::NOT_DRAWN_RGB`] rather than
+/// a plausible sky someone would have to squint at to notice was never marched.
+///
+/// The walk is per tile, in the order the caller asks for, because with several cells in view the order is
+/// a statement about which part of the *world* arrives first: a ceiling spent centre-out keeps the subject,
+/// and the same ceiling spent tile-major keeps the corner nearest the origin.
+pub fn render_budget(
+    camera: &Camera,
+    regions: &[Region],
+    selected: &[usize],
+    budget: Budget,
+    scan: Scan,
+) -> (Frame, Stats) {
+    let tables: Vec<SceneBounds> = selected
+        .iter()
+        .map(|&index| scene_bounds(&regions[index].tree))
+        .collect();
+    let prepared = prepare(camera, regions, selected);
+    let forward = unit(camera.forward);
+    let right = unit(camera.right);
+    let up = unit(camera.up);
+    let rays = (camera.width * camera.height) as usize;
+
+    let mut frame = Frame::new(camera.width, camera.height);
+    frame.pixels.clear();
+    frame.pixels.resize(rays * 3, 0);
+    let sentinel = Frame::NOT_DRAWN_RGB;
+    for (index, byte) in frame.pixels.iter_mut().enumerate() {
+        *byte = sentinel[index % 3];
+    }
+    frame.depth.clear();
+    frame.depth.resize(rays, Frame::NOT_DRAWN_DEPTH);
+
+    let charge = ray_charge(camera);
+    let tiles_x = camera.width.div_ceil(TILE);
+    let mut spent = 0u64;
+    let mut hits = 0u32;
+    let mut skipped = 0u32;
+    let mut decided = 0u32;
+    let mut not_drawn = 0u32;
+
+    'tiles: for tile in tile_order(camera, scan) {
+        let tx = tile % tiles_x;
+        let ty = tile / tiles_x;
+        for py in ty * TILE..((ty + 1) * TILE).min(camera.height) {
+            for px in tx * TILE..((tx + 1) * TILE).min(camera.width) {
+                if spent + charge > budget.0 {
+                    not_drawn = rays as u32 - decided;
+                    break 'tiles;
+                }
+                let dir = ray_for(camera, px, py, forward, right, up);
+                let at = (py * camera.width + px) as usize;
+                let marched = march_ray(
+                    camera,
+                    regions,
+                    selected,
+                    &prepared.bounds,
+                    &prepared.eyes,
+                    Some(&tables),
+                    dir,
+                );
+                write_pixel(&mut frame, at, &marched.rgb);
+                frame.depth[at] = marched.depth;
+                spent += marched.charged;
+                decided += 1;
+                if marched.hit {
+                    hits += 1;
+                }
+                if marched.skipped {
+                    skipped += 1;
+                }
+            }
+        }
+    }
+
+    (
+        frame,
+        Stats {
+            rays: rays as u32,
+            hits,
+            evaluations: spent,
+            skipped,
+            visits: tables.iter().map(SceneBounds::visits).sum(),
+            not_drawn,
+        },
+    )
+}
+
+/// What a frame needs from each selected region, computed once rather than once per ray. Both the plain
+/// walker and the budgeted walker take their per-ray answers from [`march_ray`], because two copies of the
+/// composite march is the fork that would show up as "the budgeted frame disagrees with the full one".
+struct Prepared {
+    bounds: Vec<Enclosure>,
+    eyes: Vec<[f32; 3]>,
+}
+
+fn prepare(camera: &Camera, regions: &[Region], selected: &[usize]) -> Prepared {
+    // Grown by the marcher's hit tolerance, exactly as `raster` grows the enclosures it tests: a ray that
+    // grazes a region - passing within `surface` of its sphere but outside it - is a hit as far as the march
+    // is concerned, and a skip that disagrees with the marcher is a missing pixel rather than a saving.
+    // Both are camera-relative: the eye is the origin of the arithmetic (docs/02), so no number here is a
+    // world coordinate, and none of them has to survive a subtraction afterwards.
+    let bounds: Vec<Enclosure> = selected
+        .iter()
+        .map(|&index| {
+            regions[index]
+                .enclosure_relative(camera.origin)
+                .grown(camera.surface)
+        })
+        .collect();
+    // The eye, in each region's own coordinates. Exact by the same argument as `relative_origin`, and the
+    // reason the march can accumulate `t` here at all: at a far cell the alternative - build the world point,
+    // subtract the cell afterwards - rounds the sample to the cell's ulp (64 units at 10^9) and deletes
+    // surface, which `examples/deep_zoom.rs` measured at 1,280 of 4,096 pixels.
+    let eyes: Vec<[f32; 3]> = selected
+        .iter()
+        .map(|&index| regions[index].relative_origin(camera.origin))
+        .collect();
+    Prepared { bounds, eyes }
+}
+
+/// One ray of the composed frame: what it shows, how much it cost, and whether it was marched at all.
+struct Marched {
+    rgb: [u8; 3],
+    depth: f32,
+    charged: u64,
+    hit: bool,
+    skipped: bool,
+}
+
+fn march_ray(
+    camera: &Camera,
+    regions: &[Region],
+    selected: &[usize],
+    bounds: &[Enclosure],
+    eyes: &[[f32; 3]],
+    tables: Option<&[SceneBounds]>,
+    dir: Vec3,
+) -> Marched {
+    let mut any = false;
+    for (slot, enclosure) in bounds.iter().enumerate() {
+        if !ray_may_hit(*enclosure, [0.0; 3], dir, camera.max_t) {
+            continue;
+        }
+        // The descent is asked in this region's own coordinates, from this region's own eye, for the same
+        // reason the samples are: a bound table is a statement about the tree's frame, not the world's. A
+        // counting table declines to answer (`prunes()` is false), so the baseline walk asks the region test
+        // and nothing deeper - which is the difference being measured.
+        if let Some(scene) = tables {
+            let scene = &scene[slot];
+            if scene.prunes()
+                && !scene.may_reach_subtree(
+                    &regions[selected[slot]].tree,
+                    ROOT as usize,
+                    eyes[slot],
+                    dir,
+                    camera.surface,
+                )
+            {
+                continue;
+            }
+        }
+        any = true;
+        break;
+    }
+    if !any {
+        return Marched {
+            rgb: sky(dir),
+            depth: Frame::NO_HIT,
+            charged: 0,
+            hit: false,
+            skipped: true,
+        };
+    }
+    let mut t = 0.0f32;
+    let mut steps = 0u32;
+    let mut hit_t = Frame::NO_HIT;
+    // The hit point stays in the coordinates of whichever region owned it, because that is where its
+    // gradient has to be tapped and where it is still precise.
+    let mut hit_local = [0.0f32; 3];
+    // Which region owns the surface, so the gradient is tapped in that region's coordinates and against that
+    // region's tree. Guessing "the first one" would shade a neighbouring region's surface with this one's
+    // field - a plausible normal, and wrong.
+    let mut hit_region = usize::MAX;
+    let mut hit_steps = 0u32;
+    while t < camera.max_t && steps < camera.max_steps {
+        let mut distance = f32::MAX;
+        let mut owner = 0usize;
+        let mut owner_local = [0.0f32; 3];
+        for (slot, &index) in selected.iter().enumerate() {
+            let eye = eyes[slot];
+            let local = [
+                eye[0] + dir[0] * t,
+                eye[1] + dir[1] * t,
+                eye[2] + dir[2] * t,
+            ];
+            let field = match tables {
+                // One evaluator with an optional table, same rule as `raster`: two implementations of A-07
+                // that agree today are two programs tomorrow. A counting table answers the same field as no
+                // table at all and merely declines every licence, so the two walks differ only in what they
+                // decline to enter.
+                Some(scene) => sdf_eval_bnb(&regions[index].tree, &scene[slot], ROOT, local),
+                None => regions[index].field_at_local(local),
+            };
+            if field < distance {
+                distance = field;
+                owner = slot;
+                owner_local = local;
+            }
+        }
+        if distance.abs() < camera.surface {
+            hit_t = t;
+            hit_local = owner_local;
+            hit_region = owner;
+            hit_steps = steps;
+            break;
+        }
+        t += distance.max(camera.surface);
+        steps += 1;
+    }
+    if hit_t == Frame::NO_HIT {
+        // The same accounting `raster` uses, so a one-region frame and a tree frame report comparable
+        // numbers: a miss is charged the whole step budget, which is an upper bound.
+        return Marched {
+            rgb: sky(dir),
+            depth: Frame::NO_HIT,
+            charged: u64::from(camera.max_steps),
+            hit: false,
+            skipped: false,
+        };
+    }
+    let region = &regions[selected[hit_region]];
+    let n = normal(&region.tree, ROOT, hit_local, camera.surface * 16.0);
+    Marched {
+        rgb: normal_to_rgb(n),
+        depth: hit_t,
+        charged: u64::from(hit_steps) + 1,
+        hit: true,
+        skipped: false,
+    }
 }
 
 fn push(pixels: &mut Vec<u8>, rgb: &[u8; 3]) {
