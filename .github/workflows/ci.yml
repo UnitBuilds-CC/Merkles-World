@@ -71,7 +71,18 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Gates C1–C4, A-09 taxonomy, A-10 shape, spec↔contract mirror
-        run: cargo test --workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace 2>&1 | tee target/test-tally.txt
+
+      # The published test count used to be verified by comparing three documents that quote it. That is the
+      # shape of check this project has now been caught by twice - a claim whose only evidence is other claims -
+      # so the number is recomputed from the run above and the manifest is held to the measurement. A pipe can
+      # hide a failure, so this step says `shell: bash`: on the Windows runner the default would be PowerShell.
+      - name: The published test count is measured, not remembered
+        shell: bash
+        run: bash tools/check_suite_size.sh target/test-tally.txt
 
       - name: Gate C2 vectors for this architecture
         run: cargo run --release --example gate_vectors
