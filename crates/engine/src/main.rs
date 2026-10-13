@@ -471,7 +471,8 @@ fn main() {
     // cell's cover sphere. The picture may not move - that is the assertion the streaming path now carries
     // in the shipped demo, not just in a suite - and the two charge columns are the demo's own evidence that
     // the hierarchy is doing work in this scene rather than only in `stream_descent`.
-    let (descent_frame, descent_stats) = render::stream::render_bnb(&world_camera, &cells, &planned);
+    let (descent_frame, descent_stats) =
+        render::stream::render_bnb(&world_camera, &cells, &planned);
     assert_eq!(
         world_frame.pixels, descent_frame.pixels,
         "the descent inside the region cells changed the picture - a skip that disagrees with the marcher"
