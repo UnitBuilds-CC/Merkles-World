@@ -143,23 +143,86 @@ fn main() {
             },
         );
         if width == 320 {
-            wrote = Some(frame);
+            wrote = Some((frame, stats));
         }
     }
 
-    if let Some(frame) = wrote {
+    if let Some((frame, stats)) = wrote {
         let path = std::env::temp_dir().join("merkle_raster_probe.ppm");
         let mut text = format!("P3\n{} {}\n255\n", frame.width, frame.height);
         for chunk in frame.pixels.chunks(3) {
             text.push_str(&format!("{} {} {}\n", chunk[0], chunk[1], chunk[2]));
         }
+        let pixels = frame.pixels.clone();
         match std::fs::write(&path, text) {
-            Ok(()) => println!(
-                "image            : {} ({}x{}, PPM, normal-mapped colour - not a material model)",
-                path.display(),
-                frame.width,
-                frame.height
-            ),
+            Ok(()) => {
+                println!(
+                    "image            : {} ({}x{}, PPM, normal-mapped colour - not a material model)",
+                    path.display(),
+                    frame.width,
+                    frame.height
+                );
+                // Read it back and compare, because "an image was written" is the kind of claim this
+                // repository has stopped trusting: a truncated file, a half-flushed header or a buffer that
+                // changed shape in the loop would all still print a path and a size. The file is the artifact
+                // a person opens, so the artifact is what has to equal the frame the marcher produced.
+                let read_back =
+                    std::fs::read_to_string(&path).expect("the file just written is readable");
+                let mut lines = read_back.lines();
+                assert_eq!(lines.next(), Some("P3"), "the PPM magic number moved");
+                let mut dims = lines.next().unwrap_or_default().split_whitespace();
+                let file_w: u32 = dims.next().and_then(|v| v.parse().ok()).unwrap_or_default();
+                let file_h: u32 = dims.next().and_then(|v| v.parse().ok()).unwrap_or_default();
+                assert_eq!(
+                    (file_w, file_h),
+                    (frame.width, frame.height),
+                    "the file header declares a different grid than the frame holds"
+                );
+                assert_eq!(lines.next(), Some("255"), "the PPM max value line moved");
+                let decoded: Vec<u8> = lines
+                    .flat_map(|l| l.split_whitespace().filter_map(|v| v.parse::<u8>().ok()))
+                    .collect();
+                assert_eq!(
+                    decoded.len(),
+                    pixels.len(),
+                    "the file holds {} bytes but the frame holds {}",
+                    decoded.len(),
+                    pixels.len()
+                );
+                let first_mismatch = decoded
+                    .iter()
+                    .zip(pixels.iter())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(usize::MAX);
+                assert_eq!(
+                    first_mismatch,
+                    usize::MAX,
+                    "byte {first_mismatch} of the file is {} where the frame says {}",
+                    decoded[first_mismatch],
+                    pixels[first_mismatch]
+                );
+                // The first version of this line counted pixels that are not pure black, and came out as
+                // 76,800 of 76,800 - the sky is a gradient, so the metric could never disagree with anything.
+                // Surface pixels are the honest denominator: they come from the depth buffer, and the march
+                // already reported how many it expected in `stats.hits`, so the artifact and the run can be
+                // asked to agree.
+                let surface = frame
+                    .depth
+                    .iter()
+                    .filter(|d| **d != render::raster::Frame::NO_HIT)
+                    .count();
+                assert_eq!(
+                    surface,
+                    usize::try_from(stats.hits).unwrap_or(usize::MAX),
+                    "the written frame carries {surface} pixels with surface while the march reported {}",
+                    stats.hits
+                );
+                println!(
+                    "image verified   : all {} bytes equal the frame in memory, {surface} of {} rays found surface, matching the march's own count",
+                    decoded.len(),
+                    frame.depth.len()
+                );
+            }
             Err(error) => println!("image            : not written, {error}"),
         }
     }
