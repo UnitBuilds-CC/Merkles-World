@@ -256,15 +256,24 @@ try {
 if (evidence) {
   const claims = evidence.claims ?? {};
   for (const [name, claim] of Object.entries(claims)) {
-    if (typeof claim?.value !== "string" || !/^[0-9a-f]{64}$/.test(claim.value)) {
-      fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: value must be a 64-character lowercase hex digest`);
+    const kind = claim?.kind ?? "digest";
+    if (typeof claim?.value !== "string") {
+      fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: value must be a string`);
+      continue;
+    }
+    if (kind === "digest" && !/^[0-9a-f]{64}$/.test(claim.value)) {
+      fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: a digest claim's value must be a 64-character lowercase hex digest`);
+      continue;
+    }
+    if (kind === "phrase" && claim.value.length < 6) {
+      fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: a phrase claim must be long enough to be unambiguous (got "${claim.value}")`);
       continue;
     }
     if (!Array.isArray(claim.cited_in) || claim.cited_in.length === 0) {
       fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: cited_in must list at least one doc`);
       continue;
     }
-    const prefix = claim.value.slice(0, 16);
+    const prefix = kind === "digest" ? claim.value.slice(0, 16) : claim.value;
     for (const doc of claim.cited_in) {
       const entry = [...text.entries()].find(([path]) => path === join(repoRoot, doc));
       if (!entry) {
@@ -275,6 +284,7 @@ if (evidence) {
         fail(entry[0], 1, `${name}: ${doc} is declared as citing ${prefix}… but does not contain it — the citation moved, changed or was dropped`);
       }
     }
+    if (kind !== "digest") continue;
     for (const past of claim.superseded ?? []) {
       if (typeof past?.value !== "string" || !/^[0-9a-f]{64}$/.test(past.value)) {
         fail(join(repoRoot, "docs", "evidence.json"), 1, `${name}: a superseded value is not a 64-character hex digest`);
