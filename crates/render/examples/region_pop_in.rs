@@ -195,6 +195,79 @@ fn main() {
             );
         }
     }
+    // The same composite world at a size a person can actually look at. The table above measures a 64x48
+    // grid because that is the demo's own frame and the numbers have to be the demo's; a picture of two
+    // cells meeting is not legible at 64 pixels wide, so this re-marches the identical scene at 256x192.
+    // Nothing about the measurement above moves: the camera is only consumed here, after the loop.
+    let picture = Camera {
+        width: 256,
+        height: 192,
+        ..camera
+    };
+    let picture_selected = plan(&picture, &cells);
+    assert_eq!(
+        picture_selected.len(),
+        cells.len(),
+        "the wider frame must plan the same two cells"
+    );
+    let (frame_picture, picture_stats) = render_bnb(&picture, &cells, &picture_selected);
+    let path = std::env::temp_dir().join("merkle_region_world.ppm");
+    let mut text = format!(
+        "P3\n{} {}\n255\n",
+        frame_picture.width, frame_picture.height
+    );
+    for chunk in frame_picture.pixels.chunks(3) {
+        text.push_str(&format!("{} {} {}\n", chunk[0], chunk[1], chunk[2]));
+    }
+    let expected = frame_picture.pixels.clone();
+    match std::fs::write(&path, text) {
+        Ok(()) => {
+            // Read it back and compare, the same rule `raster_probe` now follows: a printed path is a claim
+            // about a file, and the file is the artifact someone opens. The surface count comes from this
+            // render's own depth buffer and has to equal what its own march reported.
+            let read_back =
+                std::fs::read_to_string(&path).expect("the file just written is readable");
+            let mut lines = read_back.lines();
+            assert_eq!(lines.next(), Some("P3"), "the PPM magic number moved");
+            let mut dims = lines.next().unwrap_or_default().split_whitespace();
+            let file_w: u32 = dims.next().and_then(|v| v.parse().ok()).unwrap_or_default();
+            let file_h: u32 = dims.next().and_then(|v| v.parse().ok()).unwrap_or_default();
+            assert_eq!(
+                (file_w, file_h),
+                (picture.width, picture.height),
+                "the file header declares a different grid than the frame holds"
+            );
+            assert_eq!(lines.next(), Some("255"), "the PPM max value line moved");
+            let decoded: Vec<u8> = lines
+                .flat_map(|l| l.split_whitespace().filter_map(|v| v.parse::<u8>().ok()))
+                .collect();
+            assert_eq!(
+                decoded, expected,
+                "the written picture is not the frame this march produced"
+            );
+            let surface = frame_picture
+                .depth
+                .iter()
+                .filter(|d| **d != Frame::NO_HIT)
+                .count();
+            assert_eq!(
+                surface,
+                usize::try_from(picture_stats.hits).unwrap_or(usize::MAX),
+                "the file carries {surface} pixels with surface while the march reported {}",
+                picture_stats.hits
+            );
+            println!(
+                "// picture           : {} - {}x{}, all {} bytes equal the frame in memory, {surface} of {} rays found surface",
+                path.display(),
+                picture.width,
+                picture.height,
+                decoded.len(),
+                frame_picture.depth.len()
+            );
+        }
+        Err(error) => println!("// picture           : not written, {error}"),
+    }
+
     println!();
     println!("// The two middle columns are the gate's sentence. A composite frame can be nearly finished");
     println!("// while the region that just arrived is barely present, because the pixels the bounds prove");
