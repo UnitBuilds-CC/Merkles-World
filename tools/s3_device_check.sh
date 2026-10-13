@@ -2,6 +2,7 @@
 # Spike S3's remaining half, made a single command on whatever machine you have.
 #
 #   ./tools/s3_device_check.sh
+#   ./tools/s3_device_check.sh --codegen
 #
 # Gate P1.5 asks for byte-identical epoch roots on four *named* targets - N2600, RTX 3060, Linux-Mesa and
 # an M1 browser - and CI's three runners are none of them. The blocker was never a missing test, it was
@@ -13,6 +14,21 @@
 # Exit status: 0 = this machine agrees with the published vectors; 1 = it does not, which is a gate
 # finding, not a script bug; 2 = the build or the harness could not run at all.
 set -uo pipefail
+
+# `--codegen` adds one axis: does this machine's output change when the same source is compiled at a
+# different x86 codegen level (AVX2 and FMA on versus off)? It is opt-in rather than default because it
+# costs a second full release build, and the slowest machine on gate P1.5's list - the N2600 - is precisely
+# where an unexpected five-minute rebuild makes the harness annoying instead of useful. The published
+# vectors it checks against are the same ones, so the default path remains the gate and this is extra
+# reach.
+CODEGEN=0
+for arg in "$@"; do
+  case "$arg" in
+    --codegen) CODEGEN=1 ;;
+    -h|--help) echo "usage: ./tools/s3_device_check.sh [--codegen]"; exit 0 ;;
+    *) echo "unknown option '$arg' (only --codegen and --help are recognised)" >&2; exit 2 ;;
+  esac
+done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 doc="$repo_root/docs/03-state-ledger.md"
@@ -142,6 +158,26 @@ if command -v node >/dev/null && rustup target list --installed 2>/dev/null | gr
 else
   echo "// wasm leg: SKIPPED (needs node and the wasm32-wasip1 target)"
   echo "//   install with: rustup target add wasm32-wasip1"
+fi
+
+if (( CODEGEN )); then
+  echo
+  echo "// codegen axis (--codegen)"
+  if [[ "$(uname -m)" != x86_64 ]]; then
+    echo "//   SKIPPED: this axis is x86 codegen levels. On $(uname -m) the ISA spread is what the WASM"
+    echo "//   leg above already covers, so nothing is being quietly left unchecked here."
+  elif bash tools/cpu_codegen_parity.sh; then
+    echo "//   this machine's output does not move across x86 codegen levels"
+  else
+    codegen_status=$?
+    if [[ $codegen_status -eq 2 ]]; then
+      echo "//   codegen axis could not run (status 2: toolchain or empty build). Not a gate result."
+    else
+      echo "//   CODEGEN AXIS DISAGREES: same source, different x86 ISA level. On a machine without AVX2"
+      echo "//   and FMA (the N2600) versus one with them (the RTX 3060 box), that is a P1.5 finding."
+      fail=1
+    fi
+  fi
 fi
 
 echo
