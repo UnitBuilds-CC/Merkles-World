@@ -69,6 +69,17 @@ fi
 echo "// machine"
 uname -a || true
 command -v rustc >/dev/null && rustc -vV | sed -n 's/^/rustc: /p; s/host: /host: /p' || echo "rustc: not found"
+# The commit and the hasher's pinned version belong in the record. Gate P1.5's row asks which machine
+# reproduced the vectors, and a machine without a code state is only half an answer: the same Celeron on a
+# different commit is a different claim, and the blake3 line is what an ISA-portability question turns on.
+if command -v git >/dev/null && git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
+  GIT_SHA="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "commit: $GIT_SHA ($(git -C "$repo_root" describe --always --dirty 2>/dev/null || echo '?'))"
+else
+  GIT_SHA="unknown"
+fi
+BLAKE3_VERSION="$(awk '/^name = "blake3"$/{getline; gsub(/^version = |"/, "", $0); print; exit}' "$repo_root/Cargo.lock" 2>/dev/null || true)"
+echo "blake3: ${BLAKE3_VERSION:-not found in Cargo.lock}"
 echo "// expected (from docs/03-state-ledger.md)"
 echo "//   EPOCH_0   $expected_epoch"
 echo "//   REGIONS   $expected_regions"
@@ -181,11 +192,18 @@ if (( CODEGEN )); then
 fi
 
 echo
+# One line that carries everything docs/11's S3 row needs. The gate has already been told "the hardware
+# failed" on a machine nobody could identify afterwards, so the identity travels with the verdict rather
+# than living in whoever remembers to scroll up. Digests stay where they are printed above - this line
+# deliberately restates no hash, so there is no second value to drift.
+SUMMARY="// SUMMARY: $(uname -srm) | commit $GIT_SHA | blake3 ${BLAKE3_VERSION:-?} | $(git -C "$repo_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
 if (( fail )); then
+  echo "$SUMMARY | verdict: DIVERGES from the published vectors"
   echo "RESULT: this machine does NOT reproduce the published vectors. That is gate-relevant: record the"
   echo "        uname line, the rustc host triple and the digests above against spike S3 in docs/11."
   exit 1
 fi
+echo "$SUMMARY | verdict: AGREES"
 echo "RESULT: this machine reproduces every published vector."
 echo "        Paste the machine line and the digests into docs/11's S3 row - the gate needs the name of"
 echo "        the hardware, not just the fact that something passed."
