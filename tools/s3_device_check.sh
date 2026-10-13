@@ -136,7 +136,13 @@ if (( PREFLIGHT )); then
     if [[ -x "$candidate" ]] || command -v "$candidate" >/dev/null 2>&1; then found="$candidate"; break; fi
   done
   if [[ -n "$found" ]]; then
-    echo "//   browser binary: $found"
+    # The page is served by a node script, so a browser without node is not a browser leg. Say both halves,
+    # because the whole preflight exists to stop a machine being told a capability it cannot use.
+    if command -v node >/dev/null 2>&1; then
+      echo "//   browser binary: $found -> browser leg possible"
+    else
+      echo "//   browser binary: $found, but node is missing, so the browser leg CANNOT run anyway"
+    fi
   else
     echo "//   browser binary: none of chrome/chromium found"
   fi
