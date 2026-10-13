@@ -10,11 +10,15 @@
       "cited_in": ["README.md", "docs/11-roadmap.md"]
     },
     "boot_output_sha256": {
-      "value": "3c67db5f51644de6b20290cbffa0bac0a3c5bb404fe1e1b74e4162f72e5f1f0f",
-      "what": "SHA-256 of the whole seventeen-line output of `cargo run -p engine` (sixteen before the stream-carry line arrived, fifteen before the region-cell line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
+      "value": "7c71da7ca50774da36def063e24b4848ff345c9116cdea2221e3fba619bd50af",
+      "what": "SHA-256 of the whole eighteen-line output of `cargo run -p engine` (seventeen before the peer-reconcile line arrived, sixteen before the stream-carry line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
       "first_measured_at": "38327470938",
       "superseded": [
+        {
+          "value": "3c67db5f51644de6b20290cbffa0bac0a3c5bb404fe1e1b74e4162f72e5f1f0f",
+          "why": "step 3b of the boot now performs gate P1.6 end to end: it diverges a lagging peer missing one of three appends, names the voxel the bisection walk finds (2048, 2048, 2048, with None on the side that never received it), reconciles it with ledger::repair::catch_up to the leader's root, and re-runs the walk to show nothing is left - all asserted in the binary. A printed line grew, so the whole-output bytes moved; no hashed value did: EPOCH_0, REGIONS, SLOT_TABLE and REGION_0 still agree with doc 03, and the WASM leg still matches native line for line"
+        },
         {
           "value": "594a8b1cc9add7d2fdbbef56bad507cdf4ce53977e274e785f9100b23c3b32f0",
           "why": "step 9b of the boot now performs the carry: one streamed frame refined at a 97-charge ceiling settles all 3,072 rays in 813 frames for exactly the single pass's 57,665 charged evaluations, and the settled frame is asserted pixel-for-pixel the picture the unbudgeted descent march found. A printed line grew, so the whole-output bytes moved; no hashed value did - EPOCH_0, REGIONS, SLOT_TABLE and the re-entered REGION_0 still agree with doc 03, and the WASM leg still matches native line for line"

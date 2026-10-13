@@ -151,6 +151,69 @@ fn main() {
     );
     println!("published match: EPOCH_0, REGIONS and REGION_0 all agree with docs/03");
 
+    // ---- 3b. gate P1.6, both halves, in the binary: find the divergent voxel, then reconcile a lag ----
+    // Detection has been tested since it landed, but never demonstrated where a wrong answer would be
+    // visible; repair is the half that was deferred, because choosing a winner is OQ-46's causal question.
+    // What needs no such rule is the boring case - a peer that missed an append - and that is the case two
+    // single-player machines actually hit when one is behind. Three distinct voxels, one of them the
+    // far corner the coordinate contract is most likely to get wrong.
+    let peer_leaf = |x: u16, y: u16, z: u16, payload: u16, append: u32| Leaf {
+        x,
+        y,
+        z,
+        payload,
+        append,
+    };
+    let leader_set = [
+        peer_leaf(12, 340, 7, 0x0101, 1),
+        peer_leaf(2048, 2048, 2048, 0x0202, 2),
+        peer_leaf(4095, 4095, 4095, 0x0ABC, 3),
+    ];
+    let laggard_set = [leader_set[0], leader_set[2]];
+    let mut leader_for_root = leader_set;
+    let leader_root = ledger::region_root(&mut leader_for_root, &ladder);
+    let mut laggard_for_root = laggard_set;
+    let laggard_root = ledger::region_root(&mut laggard_for_root, &ladder);
+    assert_ne!(
+        leader_root, laggard_root,
+        "the fixture must actually diverge, or the walk below proves nothing"
+    );
+    let mut left = laggard_set;
+    let mut right = leader_set;
+    let found = ledger::repair::first_divergence(&mut left, &mut right, &ladder)
+        .expect("differing roots have a findable voxel");
+    assert_eq!(
+        (found.x, found.y, found.z, found.local, found.remote),
+        (2048, 2048, 2048, None, Some(0x0202)),
+        "the walk must name the missing append's voxel, with `None` on the side that never got it"
+    );
+    let mut adopted = [Leaf::DEFAULT; 3];
+    let verdict = ledger::repair::catch_up(&laggard_set, &leader_set, &mut adopted, &ladder);
+    let ledger::repair::CatchUp::CaughtUp { applied, root } = verdict else {
+        panic!("a verbatim-subset lag must be adopted, got {verdict:?}");
+    };
+    assert_eq!(
+        applied, 1,
+        "exactly the missed append should have been applied"
+    );
+    assert_eq!(
+        root, leader_root,
+        "the reconciled peer must root to the leader's digest, not merely to something"
+    );
+    let mut after_left = adopted.to_vec();
+    let mut after_right = leader_set.to_vec();
+    assert!(
+        ledger::repair::first_divergence(&mut after_left, &mut after_right, &ladder).is_none(),
+        "catch_up claimed convergence while the walk still finds a divergence"
+    );
+    println!(
+        "peer reconcile   : a lagging peer missing 1 of 3 appends diverged at voxel ({}, {}, {}) and reconciled to the leader's root {} - detection and repair in the binary, and a payload clash would come back Disagrees for OQ-46 rather than be merged (P1.6)",
+        found.x,
+        found.y,
+        found.z,
+        &hex(&root)[..16],
+    );
+
     // ---- 4. the read path: does the edit persist ----
     let live = committed_at(&SLOTS, &edits, &position(4095, 4095, 4095));
     let never = committed_at(&SLOTS, &edits, &position(100, 100, 100));

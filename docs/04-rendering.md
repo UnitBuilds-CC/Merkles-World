@@ -194,7 +194,7 @@ proved empty, because a 2.1-unit sphere around a scene fills a camera that close
 quoted above print `178880 … 668 of 3072`: two rays moved back across the line when a skip began testing
 the bound grown by the marcher's hit tolerance (see the third-layer section below), and they are the boot's
 own grazing cases. The shape of the line is unchanged, the numbers in it are measured, and the whole
-fifteen-line output hashes to `167a0cade1327d0e…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current: `3c67db5f51644de6…`)
+fifteen-line output hashes to `167a0cade1327d0e…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current: `7c71da7ca50774da…`)
 `8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`)
 value), which both the docs gate and CI check rather than believe.
 
