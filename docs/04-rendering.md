@@ -394,6 +394,34 @@ no hierarchy through one.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 
+### 1080p measured, derived, and what a ceiling buys at that resolution (2026-10-13)
+
+`cargo run --release --example frame_cost -p render` runs the demo's own eleven-record scene at three
+grids and then at 1920x1080 under ceilings, and it separates the three kinds of number AGENTS.md §7
+insists on keeping apart:
+
+- **Measured, on this CPU:** charged evaluations are flat per pixel - 78.02, 78.08, 78.15 per pixel at
+  96x72, 192x144 and 320x240 - and the rate is ~25.5-26.1 ns per evaluation. Resolution costs work, it
+  does not change the work per pixel, which is the law every budget below is extrapolated from.
+- **Derived, not rendered:** an unbounded 1080p frame is therefore ~1.62e8 charged evaluations, ~4.1 s on
+  this machine, ~248x gate R1's 16.7 ms. Labelled as arithmetic on measured numbers, because R1 is a GPU
+  claim and there is no GPU in this repository's runtime path.
+- **Measured at 1080p under ceilings** (this is the table AS5 needs and did not have):
+
+| Ceiling (charged evaluations) | ms | Pixels drawn | Hits kept |
+|---|---|---|---|
+| 2,000,000 | 378.3 | 126,493 | 36.2% |
+| 8,000,000 | 806.0 | 279,383 | 67.3% |
+| 20,000,000 | 1,220.3 | 467,894 | 89.1% |
+| 45,000,000 | 2,164.0 | 758,375 | 100.0% |
+
+A ceiling is therefore not a safety margin, it is the dial between "the frame is mostly sky" and "the
+frame kept its subject", in the same unit the compiler rejects on. Choosing a row is a frame-time decision
+- which is gate R1's job, and R1 has no GPU - so `frame_cost` publishes the trade and stops short of
+picking. The last row is also the honest shape of the cull: the first 2.07 million pixels' worth of work
+buys the *second* 45 million evaluations' worth of nothing, because 1.3 million of those pixels are sky the
+bounds already answered.
+
 `render::raster::render_bnb_budget` draws as much of a grid as a stated number of **charged evaluations**
 pays for, and the unit is deliberately the same one `Stats::evaluations` reports - so a budget and the
 number it produced are comparable with no translation step. The decision is made against `max_steps + 1`,
