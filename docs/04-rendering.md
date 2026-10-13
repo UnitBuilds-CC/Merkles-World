@@ -583,7 +583,8 @@ Two things follow from the same law and are stated here because they were learne
   reason `stream_descent`'s DERIVED `frames to finish` column is not merely imprecise: its estimate of about
   three frames is **two orders of magnitude** below what the measured carry takes, because the derived figure
   assumes a frame spends its ceiling evenly, when in fact the cheap pixels all arrive first and what remains
-  is precisely the expensive frontier.
+  is precisely the expensive frontier. `stream_descent` now prints that carry **measured**, per ceiling and
+  per walk order, with the convergence and the cumulative charge asserted rather than inferred.
 
 ### The budget pass: a ceiling that holds, and what it actually costs (2026-10-12)
 

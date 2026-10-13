@@ -16,7 +16,8 @@ use contracts::sdf::{
 use render::cull::counting_bounds;
 use render::raster::{Budget, Camera, Frame, Scan};
 use render::stream::{
-    plan, render, render_bnb, render_budget, render_with_tables, Region, REGION_UNITS,
+    plan, render, render_bnb, render_budget, render_budget_refined, render_with_tables, Region,
+    REGION_UNITS,
 };
 use render::Tree;
 
@@ -161,7 +162,7 @@ fn main() {
     let wide_selected = plan(&camera, &wide);
     let (full_frame, full_wide) = render_bnb(&camera, &wide, &wide_selected);
     println!();
-    println!(" ceiling | order | charged | drawn pixels | rays proved empty | hits kept | frames to finish (derived)");
+    println!(" ceiling | order | charged | drawn pixels | rays proved empty | hits kept | frames to finish (measured carry)");
     for (label, num, den) in [
         ("1/8", 1u64, 8u64),
         ("1/4", 1, 4),
@@ -198,20 +199,56 @@ fn main() {
             }
             let drawn = u64::from(stats.rays) - u64::from(stats.not_drawn);
             let kept = 100.0 * stats.hits as f64 / full_wide.hits.max(1) as f64;
-            let frames = if drawn > 0 {
-                u64::from(stats.rays).div_ceil(drawn)
+            // MEASURED, not derived: refine the same grid at this ceiling until nothing is short of, and
+            // count the frames. The cap is here so that a ceiling below one ray's worst case - which draws
+            // nothing, forever - reports itself instead of hanging the probe.
+            let mut carry = Frame::new(camera.width, camera.height);
+            let mut carry_frames = 0u32;
+            let mut carry_charge = 0u64;
+            loop {
+                carry_frames += 1;
+                let carried = render_budget_refined(
+                    &camera,
+                    &wide,
+                    &wide_selected,
+                    Budget(ceiling),
+                    scan,
+                    &mut carry,
+                );
+                assert!(
+                    carried.evaluations <= ceiling,
+                    "frame {carry_frames} of the carry breached a ceiling of {ceiling}: {}",
+                    carried.evaluations
+                );
+                carry_charge += carried.evaluations;
+                if carried.not_drawn == 0 || carry_frames >= 2048 {
+                    break;
+                }
+            }
+            assert!(
+                carry_charge <= full_wide.evaluations,
+                "the carry charged {carry_charge} across {carry_frames} frames against the single pass's {}",
+                full_wide.evaluations
+            );
+            assert_eq!(
+                carry.depth, full_frame.depth,
+                "{carry_frames} frames of carry did not converge to the unbudgeted depths"
+            );
+            assert_eq!(carry.pixels, full_frame.pixels);
+            let frames_label = if carry_frames >= 2048 {
+                ">2048 (never converged)".to_string()
             } else {
-                0
+                format!("{carry_frames} frames, {carry_charge} charged")
             };
             println!(
-                " {:>7} | {:>11} | {:>7} | {:>12} | {:>17} | {:>9} | {:>24}",
+                " {:>7} | {:>11} | {:>7} | {:>12} | {:>17} | {:>9} | {:>30}",
                 label,
                 order_name,
                 stats.evaluations,
                 drawn,
                 stats.skipped,
                 format!("{kept:.1}%"),
-                frames,
+                frames_label,
             );
         }
     }
