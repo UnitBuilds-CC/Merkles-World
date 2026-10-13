@@ -89,6 +89,12 @@ jobs:
       - name: Spike S2 Merkle pass (informational)
         run: cargo run --release --example merkle_pass -p ledger
 
+      # Gate P1.6's walk cost, in subtree digests. Integers only, so the runners can disagree on nothing but
+      # a real change - and the number is quoted in doc 03 and doc 11, which is precisely the kind of claim
+      # that rots silently once it stops being reproduced on every push.
+      - name: Spike P1.6 divergence-walk cost (informational)
+        run: cargo run --release --example p16_walk_cost -p ledger
+
       # OQ-49's decision packet: where the sub-millisecond line falls as N shrinks, and what spreading the
       # same edits across eight regions costs. Digest counts, not milliseconds, are the part that repeats.
       - name: Spike S2 pass budget sweep (informational)
