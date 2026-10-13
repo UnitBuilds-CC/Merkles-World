@@ -154,15 +154,15 @@ fn the_lowered_scene_and_the_hand_assembled_one_agree() {
     // claiming byte equality the arithmetic cannot deliver.
     assert!(
         output.contains("region world")
-            && output.contains("hit set identical")
-            && output.contains("cells +4096 units apart"),
-        "the boot must compose region cells into one frame and say how it compared them:
+            && output.contains("cells +4096 units apart")
+            && output.contains("rays found surface")
+            && output.contains("lost none"),
+        "the boot must compose the region cells into one frame and report the invariant that makes the          comparison meaningful at region distance - adding a cell may bring surface nearer, it may not          remove any:
 {output}"
-    );
-    // The two culled paths must be reported as different measurements, because that difference is the
-    // demo's own evidence for ADR-024: a scene of one compact object has a tight single bound and nothing
-    // for a hierarchy to do, so the spread objects are what make the columns disagree. Pinned to the line
-    // rather than to a number, so the claim survives a camera change.
+    ); // The two culled paths must be reported as different measurements, because that difference is the
+       // demo's own evidence for ADR-024: a scene of one compact object has a tight single bound and nothing
+       // for a hierarchy to do, so the spread objects are what make the columns disagree. Pinned to the line
+       // rather than to a number, so the claim survives a camera change.
     assert!(
         output.contains("with the scene cull") && output.contains("with the hierarchy descent"),
         "the boot must report both culling paths so their difference is checkable:

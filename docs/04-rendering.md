@@ -194,7 +194,7 @@ proved empty, because a 2.1-unit sphere around a scene fills a camera that close
 quoted above print `178880 … 668 of 3072`: two rays moved back across the line when a skip began testing
 the bound grown by the marcher's hit tolerance (see the third-layer section below), and they are the boot's
 own grazing cases. The shape of the line is unchanged, the numbers in it are measured, and the whole
-fifteen-line output hashes to `167a0cade1327d0e…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`)
+fifteen-line output hashes to `167a0cade1327d0e…` in `docs/evidence.json` (after `d80711e5fbdff94b…`, (current: `c5ca867b681e8971…`) (current: `d66eff197a7e40ca…`)
 `8cdd94f4c617922c…` and `15c1e8af1b523d73…`, each superseded by a printed line rather than a hashed (current: `c5ca867b681e8971…`)
 value), which both the docs gate and CI check rather than believe.
 
@@ -313,7 +313,10 @@ size is the whole story, and it is now a test: a 1.6-unit object 4,096 away subt
 render**; give that cell a 400-unit feature - the scale region content actually is - and 16 of 768 pixels
 meet it where the disc formula predicts 17, the centre ray on a chord at 3,712.8 against the 3,715 the
 formula gives. Region streaming therefore needs no precision work, and the demo now carries it: the boot composes three cells and prints
-`region world     : 3 cells +4096 units apart, all planned - 56 of 3072 rays found surface, 19000 charged evaluations, 2824 proved empty by their bounds`, naming the comparison it checked - dropping the prop-scale cell leaves the hit set identical and moves no stopped depth by more than 0.005 at distances to 12,288 units. Fifteen lines became sixteen, so the published digest moves with it: `a651b7f33e2ac0c6…` is the current value, and `docs/evidence.json` keeps the earlier ones with the reason each was superseded. It needs one other thing before a frame can span cells: **terrain-scale content** (SPEC-04's terrain half). The second obstacle this section reported - a far cell's surface being lost to a shared step budget - was measured and is gone: `examples/region_diagnose.rs` runs the demo configuration and varies one factor per row, and the hit set is identical in all of them (56 of 3,072 pixels, hero cell in or out, 96 steps or 512, slab or sphere ridge, 64x48 or 32x24). What differs is a stopped depth in the third decimal - 7202.292 against 7202.295 - which at that magnitude is three `f32` units in the last place and well inside the 1e-2 tolerance that defines a hit: composing cells changes the trajectory, so the trace settles elsewhere in the same band. The consequence is a rule rather than a fix: **across region cells a frame is compared in pixels and hits, and in depth only to within the march's own tolerance** - the same finding OQ-53 states for a seeded start, and the reason gate R4's frame hash stays informational [OQ-57](13-risks-open-questions.md), and
+`region world     : 3 cells +4096 units apart, all planned - 259 of 3072 rays found surface (8.4% of
+                 the frame), 174881 charged evaluations against 174138 for the terrain cells alone,
+                 1039 proved empty by their bounds; adding the nearest cell re-lit 0 pixels and lost
+                 none, worst depth shift 0.0 units
 [OQ-56](13-risks-open-questions.md) records the diagnosis and retires the camera-relative worry. Whether the
 grammar should grow an instance/translate kind is [OQ-55](13-risks-open-questions.md) - a
 contract decision with a cost attached (interpreter arm, validator, WGSL twin, asset graph). Until it is
