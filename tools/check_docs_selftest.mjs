@@ -76,7 +76,8 @@ const CASES = [
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
       const current = j.claims.boot_output_sha256.value;
-      Object.assign(j.gate_p1_5_targets[2], { status: "agrees", boot_sha256: current, recorded: "2026-10-13" });
+      // legs present and honest, so the only thing missing is the commit - the legs rule fires earlier.
+      Object.assign(j.gate_p1_5_targets[2], { status: "agrees", boot_sha256: current, recorded: "2026-10-13", legs: "native,wasi" });
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },
@@ -113,6 +114,50 @@ const CASES = [
     mutate() {
       const j = JSON.parse(PRISTINE.evidence);
       delete j.gate_p1_5_targets[1].command;
+      write("docs/evidence.json", JSON.stringify(j, null, 2));
+    },
+  },
+  {
+    name: "an 'agrees' row with no legs recorded",
+    expects: "agrees with no legs recorded",
+    mutate() {
+      const j = JSON.parse(PRISTINE.evidence);
+      Object.assign(j.gate_p1_5_targets[0], {
+        status: "agrees",
+        boot_sha256: j.claims.boot_output_sha256.value,
+        commit: "0".repeat(40),
+        recorded: "2026-10-13",
+      });
+      write("docs/evidence.json", JSON.stringify(j, null, 2));
+    },
+  },
+  {
+    name: "the M1-browser row agreeing with no browser leg",
+    expects: "no browser leg",
+    mutate() {
+      const j = JSON.parse(PRISTINE.evidence);
+      Object.assign(j.gate_p1_5_targets[3], {
+        status: "agrees",
+        boot_sha256: j.claims.boot_output_sha256.value,
+        commit: "0".repeat(40),
+        recorded: "2026-10-13",
+        legs: "native,wasi",
+      });
+      write("docs/evidence.json", JSON.stringify(j, null, 2));
+    },
+  },
+  {
+    name: "an 'agrees' row whose legs never include native",
+    expects: "does not include native",
+    mutate() {
+      const j = JSON.parse(PRISTINE.evidence);
+      Object.assign(j.gate_p1_5_targets[1], {
+        status: "agrees",
+        boot_sha256: j.claims.boot_output_sha256.value,
+        commit: "0".repeat(40),
+        recorded: "2026-10-13",
+        legs: "browser,codegen",
+      });
       write("docs/evidence.json", JSON.stringify(j, null, 2));
     },
   },

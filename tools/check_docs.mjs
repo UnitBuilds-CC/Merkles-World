@@ -356,6 +356,20 @@ if (evidence) {
           `${entry.target}: status must be "not run", "agrees" or "diverges" (got ${JSON.stringify(status)})`);
       } else if (status === "agrees") {
         agreed += 1;
+        // A device run that skipped the browser is not the M1-browser target having reported, and a run with
+        // no native leg has not computed the roots at all. The harness already prints which legs ran, so the
+        // register has to carry that and the row that names a browser must show one.
+        const legs = typeof entry.legs === "string" ? entry.legs : "";
+        if (!legs) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: agrees with no legs recorded, so nothing distinguishes a full device run from one that skipped everything it was asked to drive`);
+        } else if (!legs.split(",").includes("native")) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `${entry.target}: legs "${legs}" does not include native, so no root was actually computed on this machine`);
+        } else if (entry.target === "M1-browser" && !legs.split(",").includes("browser")) {
+          fail(join(repoRoot, "docs", "evidence.json"), 1,
+            `M1-browser: agrees on legs "${legs}" with no browser leg - the gate names a browser, and a Safari run that was skipped (remote automation refused) is not that target reporting`);
+        }
         if (!HEX.test(entry.boot_sha256 ?? "")) {
           fail(join(repoRoot, "docs", "evidence.json"), 1,
             `${entry.target}: claims agreement with no whole-output digest - a verdict that names no bytes is the vacuous-green shape this project has now been caught in four times`);
