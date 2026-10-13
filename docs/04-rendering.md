@@ -307,7 +307,9 @@ One claim this section had to take back: an attempt to make the demo a row of th
 at 4,096 units, was reverted, and looked like a precision or march failure. It was neither.
 `examples/far_scale_probe.rs` walks the view axis out to 12,288 units and hits in **one step** at every
 distance - 8, 64, 512, 4,096, 8,192, 12,288 - including at the finest 1e-3 tolerance, and `march` agrees, so
-the march, the bound and the `world - cell * 4096` subtraction are all sound at region scale. The angular
+the march, the bound and the subtraction this probe hand-rolls are all sound at region scale - and that part
+survived the 2026-10-13 correction below, because the ordering bug only bites where an `f32`'s ulp
+approaches the feature's own size, which is nowhere near 12,288 units. The angular
 size is the whole story, and it is now a test: a 1.6-unit object 4,096 away subtends 0.0004 radians in a
 0.5 half-height frustum, about six parts per million of the grid, so **the empty frame was the correct
 render**; give that cell a 400-unit feature - the scale region content actually is - and 16 of 768 pixels

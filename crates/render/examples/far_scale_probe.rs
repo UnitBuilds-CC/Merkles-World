@@ -57,7 +57,11 @@ fn trace(distance: f32, surface: f32, max_steps: u32) -> (String, u32, f32) {
             point[1] - origin_local[1],
             point[2] - origin_local[2],
         ];
-        // The same expression `stream::Region::field_at` evaluates.
+        // The arithmetic this probe hand-rolls - form the sample point, then subtract the cell. `stream`
+        // no longer works that way: it cancels the cell out of the camera first, which
+        // `examples/deep_zoom.rs` shows is the difference between a frame and a third of a frame missing.
+        // What is measured here is therefore the *old* order on purpose: it is the instrument for how far
+        // that order travelled before it stopped resolving, which is the number OQ-56 leaned on.
         let distance_field = {
             let centre = [0.0f32, 0.0, 0.0];
             let dx = local[0] - centre[0];
@@ -115,7 +119,8 @@ fn main() {
 
     // Cross-check against the crate's own marcher, so this file cannot report a behaviour `march` does not
     // share: the same sphere, placed by shifting the camera back to its cell origin, which is what
-    // `stream::Region::field_at` effectively does for a region at that cell.
+    // what `stream` used to do for a region at that cell, before the cell began to be cancelled out of the
+    // camera instead of subtracted from the sample (`Region::relative_origin`, `examples/deep_zoom.rs`).
     let tree = sphere(1.6);
     for distance in [8.0f32, 4096.0, 12288.0] {
         let hit = march(
