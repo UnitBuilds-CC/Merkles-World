@@ -116,11 +116,23 @@ if [ -z "$reported" ]; then
   exit 1
 fi
 
+# The reference only means something if the native boot actually finished. An empty file has a hash too -
+# e3b0c442... is the digest of nothing - so a peer comparison against a truncated or empty reference could
+# "pass" a broken run, which is the failure mode this session has now found three times in its own harnesses.
+if ! grep -q '^// boot complete' "$MLWS_NATIVE_OUTPUT"; then
+  echo "FAIL the native reference in $MLWS_NATIVE_OUTPUT never reached its closing marker - it did not boot"
+  exit 1
+fi
 expected=$( (sha256sum "$MLWS_NATIVE_OUTPUT" 2>/dev/null || shasum -a 256 "$MLWS_NATIVE_OUTPUT" 2>/dev/null) | cut -d' ' -f1)
+EMPTY_SHA="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 echo "safari sha256 : $reported"
 echo "native sha256 : ${expected:-not supplied}"
 if [ -z "$expected" ]; then
   echo "FAIL MLWS_NATIVE_OUTPUT must point at the native boot's output for a comparison"
+  exit 1
+fi
+if [ "$expected" = "$EMPTY_SHA" ] || [ "$reported" = "$EMPTY_SHA" ]; then
+  echo "FAIL one side of the comparison hashed to the empty-input digest"
   exit 1
 fi
 if [ "$reported" != "$expected" ]; then
