@@ -261,6 +261,15 @@ print_record() {
   (( ${BROWSER_RAN:-0} )) && legs="$legs,browser"
   (( ${CODEGEN_RAN:-0} )) && legs="$legs,codegen"
   echo "// register record for $TARGET - paste this object into docs/evidence.json's gate_p1_5_targets:"
+  # Say it here rather than at paste time: the checker refuses an M1-browser row whose legs do not include a
+  # browser, and the way that happens in practice is Safari's remote automation being switched off, which the
+  # leg reports as a skip and this run would otherwise carry on past.
+  if [[ "$TARGET" == "M1-browser" ]] && ! [[ ",$legs," == *",browser,"* ]]; then
+    echo "//   WARNING: legs is \"$legs\" with no browser leg, and gate_p1_5_targets' M1-browser row is"
+    echo "//   required by tools/check_docs.mjs to have driven one. This record will be refused: enable"
+    echo "//   Safari's Develop > Allow Remote Automation and re-run, rather than pasting a row that names"
+    echo "//   a target whose engine never ran."
+  fi
   echo "//   the label is a claim about this machine, not a fact the harness can check, so the record"
   echo "//   carries the host and os beside the verdict and the register entry has to agree with them."
   printf '{"target":"%s","status":"%s","boot_sha256":"%s","commit":"%s","recorded":"%s","host":"%s","os":"%s","legs":"%s","command":"bash tools/s3_device_check.sh %s"}\n' \
