@@ -6,7 +6,7 @@
       "value": "d66eff197a7e40ca57a00b9559455ac68bee81a57c352b4698c9d131e61c1eb6",
       "what": "SHA-256 of the whole sixteen-line output of `cargo run -p engine` (fifteen before the region-cell line arrived, fourteen before the budget line), which is the artifact the determinism claim is about: native, the bare-V8 shim run, Chromium on three architectures and Safari/JavaScriptCore all produce these bytes.",
       "measured_by": "the `roots in a browser` job's `native sha256` line, and `roots in JavaScriptCore (Safari)`'s `safari sha256` line",
-      "first_measured_at": "pending its own green run (previous value measured by 38326245766)",
+      "first_measured_at": "38327470938",
       "superseded": [
         {
           "value": "15c1e8af1b523d7382f705a6ffe6a19e7d3ef4dbfc4c585fd4ead8931c139cf3",
@@ -46,7 +46,7 @@
         "docs/04-rendering.md",
         "docs/13-risks-open-questions.md"
       ],
-      "_note_value_change": "measured by 38326245766 (all ten job definitions green: the sixteen-line output with the region-cell frame is identical in native, bare V8, Chromium on three architectures and Safari/JavaScriptCore)"
+      "_note_value_change": "measured by 38327470938 (all ten definitions green: the sixteen-line output, terrain-scale region cells included, is identical in native, bare V8, Chromium x3 architectures and Safari/JavaScriptCore)"
     }
   }
 }
