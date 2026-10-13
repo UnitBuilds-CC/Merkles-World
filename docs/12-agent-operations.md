@@ -71,6 +71,56 @@ approval.
                └──── retry budget: 3 attempts, then escalate to human
 ```
 
+## Verifying before you claim — the tools, and the traps each one exists for
+
+The loop above ends in "green", and green is the easy part to produce by accident. These commands are the
+procedure; the traps after them are all incidents from this repository's own history, several from 2026-10-13.
+
+- **`bash tools/local_gate.sh`** — run the trunk checks in CI's order, in one command: `fmt --check`, `clippy
+  --all-targets -D warnings`, `cargo test --workspace`, docs integrity, the docs checker's self-test, the AS2
+  gate logic, and the boot's whole-output digest against `docs/evidence.json`. It prints the local rustc and
+  clippy versions beside what the most recent CI run used. Run it **before every push**, not after a red trunk.
+- **`node tools/check_docs.mjs` / `tools/check_docs_selftest.mjs`** — the docs are the spec, so the checker
+  enforces links, anchors, table shape, contract mirrors, published evidence values, and gate P1.5's device
+  register. The self-test exists because a checker is also a claim: it copies the tree, plants 13 violations,
+  and fails if any goes unreported.
+- **`bash tools/s3_device_check.sh --preflight`** then **`--browser --target <label>`** — gate P1.5's four named
+  machines. `--preflight` answers "which legs can this machine drive?" in seconds, building nothing, which
+  matters most on the slowest box the gate names.
+- **`bash tools/record_device_run.sh --label <label> --record '<json>' --apply`** — the last human step: it
+  refuses a record citing a stale digest or missing a leg, moves the derived `N of 4 named targets have
+  reported` count in docs/11 and README together, and restores everything if docs integrity objects. Its own
+  refusals are tested by `record_device_run_selftest.sh`.
+- **`tools/cpu_codegen_parity.sh`, `tools/wasm_simd_parity.sh`, `tools/browser_parity_check.sh`** — the ISA and
+  engine axes CI also runs; `browser_parity_check.sh` is shared by CI and by a person holding a device, on
+  purpose: two implementations of one comparison is how a harness drifts.
+
+The traps, each one earned:
+
+1. **A check you have not falsified is not a check.** Plant the violation, watch it fail, restore, watch it
+   pass. Then sabotage the checker once and confirm the suite notices — a rule that cannot disagree with
+   anything is the shape of a green light that means nothing.
+2. **`stable` is not a pin.** `rust-toolchain.toml` asks for a moving target, so CI's clippy is routinely newer
+   and its lint set a superset of yours; two commits passed every local check and red-trunked all three
+   architectures with `chunks_exact` lints. Filed as OQ-62; until it is pinned, `local_gate.sh`'s version lines
+   are the mitigation.
+3. **Never chain a verification command behind a pipe.** `cargo clippy -D warnings | tail` or a docs checker
+   piped into `grep`/`tail` reports the *pipe's* status, so a failure walks on as success — three times in one
+   session, including a validator invoked with the wrong interpreter. Redirect to a file, take `$?`, then read
+   the file.
+4. **A green run does not prove the step ran.** Read that step's log lines and count them. A leg can pass by
+   skipping, on one runner of a matrix, or against an empty artifact — an empty file has a hash, which is how
+   one parity check passed by comparing a module with itself.
+5. **Rebuild or hash the artifact you are comparing.** A browser leg once reported a P1.5 disagreement that was
+   really a stale module on disk: indistinguishable from the real thing, because the harness trusted a file
+   instead of the source state.
+6. **Select CI runs by `headSha`, and remember status starts at `queued`.** Listing the latest run right after a
+   push returns the *previous* commit's; a loop that breaks on "not in_progress" exits before anything begins.
+7. **These files are CRLF.** Scripted edits that split or join on the wrong separator have deleted a register
+   row here and produced a parser error blaming a different character; detect the file's own endings, or append
+   a section instead of rewriting a table row. Apostrophes inside `${VAR:-default}` do the same class of damage
+   to bash.
+
 ## Gate list = the CI contract
 
 The suite is exactly the validation gates written in docs 02–10 (C\*, P1.\*, R\*, SM\*, E\*, PH\*,
