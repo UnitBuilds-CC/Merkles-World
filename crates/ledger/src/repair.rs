@@ -18,13 +18,15 @@
 //! Today's caller is single-player, so a hit in the walk still means the replay was not deterministic and
 //! belongs in A-09's determinism-violation band rather than in a merge.
 //!
-//! Cost, stated rather than glossed: every level hashes both sides' children until it finds the
-//! differing one, so the walk is up to 8 subtree hashes per level per side against a root pass that
-//! computes them once. That is the price of locating a divergence without shipping the region, and
-//! the path runs rarely by design; the measurement belongs with the spike that gates P1.6.
-//!
-//! [OQ-46]: https://github.com/UnitBuilds-CC/Merkles-World/blob/main/docs/13-risks-open-questions.md
-//! [ADR-004]: https://github.com/UnitBuilds-CC/Merkles-World/blob/main/docs/decisions.md
+//! Cost, measured rather than reasoned about (`cargo run --release --example p16_walk_cost -p
+//! ledger`, digest counts, not microseconds - timings do not repeat across machines and these do):
+//! locating a divergence costs **1.26x to 2.23x the two root passes a caller has to run anyway just to
+//! notice one exists** - 372 digests against 167 at 8 records, 46,903 against 37,287 at 2,048. The ratio
+//! *falls* as the region grows, because the walk's extra work is one path down twelve levels while the
+//! root pass touches every leaf: the bigger the region, the more absurd the alternative of shipping it.
+//! Two paths cost nothing beyond the compare: sides that agree return after their two root passes (9,914
+//! digests, the walk never starts), and a peer that merely *lagged* needs no walk at all -
+//! [catch_up] settles that for one extra pass of verification, which is why it exists.
 
 use super::{build_branch, leaf_winner, octant_runs, EmptyLadder, Leaf, Root};
 use contracts::tree::{OCTREE_ARITY, OCTREE_DEPTH};
@@ -53,7 +55,24 @@ pub fn first_divergence(
     remote: &mut [Leaf],
     ladder: &EmptyLadder,
 ) -> Option<Divergence> {
-    if super::region_root(local, ladder) == super::region_root(remote, ladder) {
+    let mut ignored = 0usize;
+    first_divergence_counted(local, remote, ladder, &mut ignored)
+}
+
+/// [`first_divergence`], counting the subtree digests the walk computes.
+///
+/// The count is the measurement the module's cost note needed: the walk re-derives children the root pass
+/// already paid for, so this reports how much more hashing a divergence hunt costs than simply rooting both
+/// sides - which is the number a caller weighs before running it on a large region.
+pub fn first_divergence_counted(
+    local: &mut [Leaf],
+    remote: &mut [Leaf],
+    ladder: &EmptyLadder,
+    digests: &mut usize,
+) -> Option<Divergence> {
+    let mine_root = super::region_root_counted(local, ladder, digests);
+    let theirs_root = super::region_root_counted(remote, ladder, digests);
+    if mine_root == theirs_root {
         return None;
     }
 
@@ -94,14 +113,12 @@ pub fn first_divergence(
             let mine: Root = if lstart == lend {
                 ladder.empty(level - 1)
             } else {
-                let mut counted = 0usize;
-                build_branch(level - 1, &mut local[lstart..lend], ladder, &mut counted)
+                build_branch(level - 1, &mut local[lstart..lend], ladder, digests)
             };
             let theirs: Root = if rstart == rend {
                 ladder.empty(level - 1)
             } else {
-                let mut counted = 0usize;
-                build_branch(level - 1, &mut remote[rstart..rend], ladder, &mut counted)
+                build_branch(level - 1, &mut remote[rstart..rend], ladder, digests)
             };
             if mine != theirs {
                 descent = Some(((lstart, lend), (rstart, rend)));
