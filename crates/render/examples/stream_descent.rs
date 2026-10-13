@@ -254,12 +254,15 @@ fn main() {
     }
     println!();
     println!(
-        "// `frames to finish` is DERIVED, not measured: it is the grid divided by the pixels one"
+        "// `frames to finish` is MEASURED now: the same grid is refined at that ceiling until nothing is"
     );
-    println!("// ceiling decided, and it assumes each frame is re-budgeted at the same charge. Refining a");
-    println!("// streamed frame across frames is `raster`'s `render_bnb_refined`, and the streaming twin of");
-    println!("// it is not built yet - so that column is arithmetic on a measured number, and is labelled");
-    println!("// as such. And the pairs disagree with the expectation this file was written to confirm: at a");
+    println!("// short of, counting the frames and the cumulative charge, with convergence and the per-frame");
+    println!("// ceiling asserted in the loop above. The derived version - the grid divided by the pixels one");
+    println!(
+        "// frame decided - was printed here first, and it is wrong in both directions: at 1/8 it"
+    );
+    println!("// predicted 140 centre-out and 3 tile-major, and the measured carry takes 57 frames in either");
+    println!("// order. And the pairs disagree with the expectation this file was written to confirm: at a");
     println!("// given ceiling the two orders draw 11x to 56x different numbers of pixels while keeping the");
     println!("// SAME share of surface (0.8, 11.3, 37.1, 66.9 in both). The descent makes an off-subject ray");
     println!("// cost nothing, so a walk that spends its ceiling on cheap tiles finalises the grid for free,");
