@@ -389,49 +389,34 @@ jobs:
 
       - name: The same module inside a browser engine
         shell: bash
+        # One implementation of the browser comparison: the same script a person runs on gate P1.5's own
+        # M1 machine. The inline copy this replaces was a second version of the same arithmetic, and this
+        # repository's own rule about two implementations that agree today is that they are two programs
+        # tomorrow - a harness counts. Chromium only here, because this job's claim is "a browser host on
+        # three architectures"; JavaScriptCore belongs to the `browser-jsc` job beside it.
+        env:
+          MLWS_ENGINES: chromium
+          # The module was built from this checkout by the step above, so it cannot be stale, and rebuilding
+          # it here would double the job's Rust time for no additional guarantee.
+          MLWS_SKIP_BUILD: 1
+          MLWS_NATIVE_OUTPUT: host.txt
         run: |
           set -euo pipefail
-          browser=""
-          for candidate in \
-            "google-chrome" "google-chrome-stable" "chromium" "chromium-browser" \
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-            "/c/Program Files/Google/Chrome/Application/chrome.exe" \
-            "/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"; do
-            # -x handles a path (including one with spaces, quoted); command -v handles a name on PATH.
-            if [ -x "$candidate" ] || command -v "$candidate" >/dev/null 2>&1; then
-              browser="$candidate"
-              break
-            fi
-          done
-          if [ -z "$browser" ]; then
-            echo "SKIP: no browser binary found on ${{ matrix.label }} - the shim parity step above still ran"
+          # A peer comparison proves two runs agree, not that either finished: a boot that panicked halfway
+          # would leave every leg agreeing on truncated output, and a truncated file still has a hash.
+          grep -q '^// boot complete' host.txt || { echo "the native reference never reached its closing marker"; exit 1; }
+          leg_status=0
+          bash tools/browser_parity_check.sh target/wasm32-wasip1/release/engine.wasm || leg_status=$?
+          if [ $leg_status -eq 2 ]; then
+            # A runner with no drivable browser is a fact about GitHub's images, not about this repository's
+            # floats, so it does not red-trunk - but it is said out loud, because a leg that silently did not
+            # run is how a gate gets closed by an empty comparison.
+            echo "SKIP: no browser engine could be driven on ${{ matrix.label }} - this run proves nothing"
+            echo "about gate P1.5's browser clause. The leg lines above say what was missing."
             exit 0
           fi
-          node tools/browser_parity_server.mjs target/wasm32-wasip1/release/engine.wasm --port 8137 &
-          server=$!
-          trap 'kill "$server" 2>/dev/null || true' EXIT
-          sleep 1
-          # Chrome's exit code is not the claim, and neither is a DOM sample. On a loaded runner the dump
-          # can be captured before the page's fetch and compile have finished - run 38288428276 saw a
-          # 3 KB DOM with no result in it on x86-64 Linux, twice - so the page POSTs its digest to the
-          # harness's own server and the step polls for it. A page that reports cannot be mistaken for a
-          # page that is merely slow, and a disagreement is still a disagreement.
-          page=""
-          for attempt in 1 2 3 4 5 6; do
-            chrome_status=0
-            "$browser" --headless=new --disable-gpu --no-sandbox --disable-dev-shm-usage \
-              --no-first-run --virtual-time-budget=20000 --dump-dom http://127.0.0.1:8137/ \
-              > dom.html 2>chrome.log || chrome_status=$?
-            page=$(curl -sS --max-time 5 http://127.0.0.1:8137/report 2>/dev/null || true)
-            if [ -n "$page" ]; then
-              echo "reported on attempt $attempt (chrome status $chrome_status, DOM $(wc -c < dom.html) bytes)"
-              break
-            fi
-            echo "attempt $attempt: nothing reported yet (chrome status $chrome_status, DOM $(wc -c < dom.html) bytes)"
-            sleep 2
-          done
-          test -n "$page" || { echo "the browser never reported a digest"; tail -20 chrome.log; exit 1; }
-          stubs=$(grep -o 'mlws-stubs=[^ ]*' dom.html | head -1 | cut -d= -f2 || true)
+          [ $leg_status -eq 0 ] || { echo "the browser leg disagrees with this machine's native boot (status $leg_status)" >&2; exit 1; }
+          stubs=$(grep -o 'mlws-stubs=[^ ]*' target/browser-leg-dom.html | head -1 | cut -d= -f2 || true)
           echo "stubs called: ${stubs:-not in this DOM sample}"
           # macOS ships `shasum`, Linux and Git-Bash-on-Windows ship `sha256sum`; the same file, either way.
           if command -v sha256sum >/dev/null 2>&1; then
@@ -439,14 +424,7 @@ jobs:
           else
             expected=$(shasum -a 256 host.txt | cut -d' ' -f1)
           fi
-          echo "browser: $browser"
           echo "native sha256 : $expected"
-          echo "browser sha256: $page"
-          if [ "$page" != "$expected" ]; then
-            echo "^^^ the browser's output differs from the native boot" >&2
-            exit 1
-          fi
-          echo "browser parity ok on ${{ matrix.label }}"
           # The published-evidence half. docs/evidence.json carries the digest the docs cite as
           # measured; if the boot's output moves without the manifest moving with it, this fails here
           # rather than leaving five prose citations quietly quoting a stale number.
