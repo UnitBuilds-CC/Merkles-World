@@ -578,16 +578,17 @@ Two things follow from the same law and are stated here because they were learne
   frame, because the worst-case gate stops the frame as soon as one more ray could not possibly fit: at
   `4 × charge` this fixture's 768-ray grid finishes in a single frame (nothing to refine), at `full/8` it
   affords no ray at all (nothing drawn), and at one charge per frame the gate admits exactly one non-trivial
-  ray and the grid takes hundreds of frames. `refine_probe` prints that progression per frame - 335 pixels
-  settled by frame one (the free, proved-empty ones), then a handful more each frame after - and it is the
-  reason `stream_descent`'s DERIVED `frames to finish` column is not merely imprecise: its estimate of about
+  ray and the grid takes hundreds of frames. `refine_probe` prints that progression per frame - at one charge
+  frame one settles 22 pixels centre-out and 1,238 tile-major on the wide ridge, the cheap proved-empty
+  majority arriving first and the expensive frontier dribbling in behind it - and it is why the
+  `frames to finish` column `stream_descent` once *derived* deserves a stronger word than imprecise: its estimate of about
   three frames was wrong in both directions: at 1/8 the carry takes **57 frames in either walk order** where the derived
   figure predicted 140 centre-out and 3 tile-major, and at 1/2 and 3/4 it takes 3 and 2 frames. Two facts came
   out of measuring rather than estimating, and neither is the one expected. The frames to finish do not
   depend on the walk order at all - 57 centre-out, 57 tile-major at the same ceiling - even though the pixels
   settled per frame differ by 56x, so the order decides *which* pixels arrive, not how long the grid takes.
   And the carry costs nothing extra: cumulative charge across all 57 frames is 876, exactly what the single
-  unbudgeted pass charged, asserted at every ceiling and in both orders. `stream_descent` now prints that carry **measured**, per ceiling and
+  unbudgeted pass charged, asserted at every ceiling and in both orders. `stream_descent` now prints that carry **measured** (the derived column and its 335-pixel footnote are both gone), per ceiling and
   per walk order, with the convergence and the cumulative charge asserted rather than inferred.
 
 The demo now performs the carry itself, as step 9b of `cargo run -p engine`: one streamed frame of the
