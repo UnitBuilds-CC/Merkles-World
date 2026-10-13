@@ -22,7 +22,7 @@ all-features = true
 # on crate names, and guessing an identifier would be fabricating the evidence for a waiver. Drop this line if the
 # crate ever leaves the graph - `paste` arrives through wgpu's dependency tree, so it is OQ-51's cost, not a
 # finding about this repository's own code.
-ignore = [],
+ignore = []
 unmaintained = [
     "paste",
 ]
