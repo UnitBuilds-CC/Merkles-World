@@ -175,3 +175,20 @@ of claim that dies on first contact with a GPU.
   are cited across every other doc and in commit messages.
 - **The weekly review** picks the three highest-leverage `open` rows and assigns owners. S7
   (OQ-01) and OQ-02 stay on the list until closed.
+
+## OQ-50's proposed wording, for one approval rather than another round of writing
+
+Not applied: doc 02 is the spec, the ruling belongs to the Architect, and nothing in `crates/` converts a voxel
+to world space yet, so no subsystem has voted. The row above measures why only one of the two candidates is
+available; this is what its doc 02 unit-table row would say, and the single line `crates/engine`'s
+edit-to-geometry step would cite:
+
+> `GlobalVoxelPos (x, y, z)` names the half-open unit span `[x, x+1) x [y, y+1) x [z, z+1)`. A voxel's centre is
+> therefore `(x + 0.5, y + 0.5, z + 0.5)`. Every consumer that places geometry from a voxel coordinate - the
+> renderer, doc 07's collision, any future base terrain - derives that centre from this row rather than restating
+> it (ADR-021's single coordinate authority).
+
+Why not the centred cube: measured in `crates/render/examples/voxel_span_oq50.rs` (a CI step), a voxel centred on
+its integer puts its own volume across a region boundary at every `i = k * 4096`, half of it in the region below
+the one `GlobalVoxelPos::region_key()` returns - while `region_key()` is `i >> 12` and its own comment says
+region 0 is `[0, 4096)`. The half-open span agrees with the frozen arithmetic at all 28 probed indices.
