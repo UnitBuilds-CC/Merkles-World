@@ -460,6 +460,15 @@ under the eye instead. And the milliseconds here moved more than the CPU's did: 
 the stage medians at 3.679–3.900 ms and then at 7.222–20.559 ms, a 5.6× swing on the last stage of a laptop
 that was doing other things. Nothing timing-shaped is asserted, for that reason (ADR-017).
 
+**The CI leg reproduces it on a second, different device (run `38613746327`, 2026-10-14).** The Linux runner
+prints `SKIP device_edit_loop: no device (NoAdapter)` — the expected refusal, since no CI runner is a GPU
+(ADR-026's constraint as docs/11 records it) — and the ARM64 macOS runner opens `Apple Paravirtual device
+[Metal, IntegratedGpu]` and reports **3072 rays at every occupancy and the same 7.5129 centre depth** the
+NVIDIA laptop does, with stage medians 7.217–7.691 ms across that 6,000× occupancy change. Two vendors, two
+APIs, one geometry answer, and that is the part worth naming: the assertable terms travel between devices
+while the milliseconds never do. The paravirtual adapter is not this doc's mid-range dGPU, so the run says
+nothing about R1's budget.
+
 What remains of the caveat is structural, and it is OQ-55's: the edit still reaches the device by **rebuilding
 the tree on the host**, because A-07 has no instance/translate node in which to place a voxel inside the
 grammar. So R2 is now measured on a renderer that keeps the ray loop on the GPU, and **still not met as a
