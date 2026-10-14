@@ -130,14 +130,20 @@ fn main() {
     println!(
         "// what the columns mean : submit-only is how fast a thread hands the pass over - on a device queue that is nearly free and says nothing about latency. The read-back column adds the 8 MiB copy-and-map this harness pays to look at a result; a renderer keeps distances on the GPU and does not pay it. Neither column is a march, and neither is culling."
     );
+    // The workload R1 actually implies: ~45.5 evaluations per pixel, one retrieval. Measured, not multiplied.
+    let dense = grid(1920, 1080);
+    match interpreter.bench(&tree, &dense, 46, 1) {
+        Ok(bench) => println!(
+            "// 1080p x46 passes: {:.1} ms for {} evaluations per pixel with a single copy back - the shape a device-resident march has, against R1's 16.67 ms budget",
+            bench.ms_batch_with_single_read,
+            bench.dispatches
+        ),
+        Err(error) => println!("// 1080p dense pass : not measured ({error})"),
+    }
     println!(
-        "// 1080p read-back  : {largest_pass_ms:.3} ms/pass queueing alone, and the with-read column above is the completion figure - only that one bounds a frame"
+        "// 1080p per pass   : {largest_pass_ms:.3} ms for one evaluation per pixel including the copy-back this harness pays; the submit-only column above deliberately excludes it, because queueing is not latency"
     );
     println!("// R1               : NOT measured. submit-only is how fast a thread hands work over, which on a device queue is nearly free and means nothing about latency; 16.67 ms is the budget for a full march with culling at 60 Hz;");
-    println!("//                    this is one field evaluation per pixel on a three-node tree, which is a floor");
-    println!(
-        "//                    and a rate, not a frame. Multiply by the reference's measured ~45.5"
-    );
-    println!("//                    evaluations per pixel before calling anything an estimate, and label it as");
-    println!("//                    arithmetic on a device that is not the gate's mid-range GPU.");
+    println!("//                    the dense line above measures a frame's field work directly: ~46 evaluations per
+//                    pixel, one copy back. No culling, no BVH, no shading, and a below-bar device.
 }
