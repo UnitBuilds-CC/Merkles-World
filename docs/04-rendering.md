@@ -314,6 +314,39 @@ Three readings, in order of usefulness:
   that is measured here: one thread, a CPU, four nodes, no BVH, no culling, no shader. The example
   exists to give spike S1 a curve to compare the WGSL marcher against, not to substitute for it.
 
+### The march is on the device now, and it is 824 ms rather than 4,005 (2026-10-14)
+
+The section below prices a *harness*: `frame_curve` queues 46 dispatches of one-evaluation-per-pixel over the
+same 2M-point grid and takes the answer back once, so most of its 4,005 ms is carrying a grid across the bus
+46 times. A renderer does not do that, and now this repo can ask the question the way R1 poses it.
+`interp.wgsl`'s `march_rays` entry point sphere-traces inside the shader — the same step law as
+`render::march_with`, transcribed expression for expression, including the `max(distance, surface)` advance —
+using the buffers `evaluate_points` already binds (a stage may not hold six storage buffers on
+`Limits::downlevel_defaults()`). `cargo run --release -p gpu --example on_device_march` on the MX250:
+
+| grid | rays | hits | ms submit | ms for one dispatch + one copy back |
+|---|---|---|---|---|
+| 64x48 | 3,072 | 132 | 0.10 | 2.11 |
+| 256x192 | 49,152 | 2,460 | 0.15 | 22.79 |
+| 640x360 | 230,400 | 9,012 | 0.15 | 92.61 |
+| 1280x720 | 921,600 | 35,964 | 0.18 | 362.0 |
+| 1920x1080 | 2,073,600 | 80,964 | 0.17 | **824.2** |
+
+So a 64-step march of a 1080p grid against a three-node field is **824 ms**, about **4.9× cheaper than the
+4,005–4,015 ms** the 46-dispatch harness reported on the same device for roughly the same number of field
+evaluations (95.4M there; ~80M hits-plus-misses here at a 64-step cap). The harness was a real cost, but it was
+not the dominant one: **the frame's own work is 49× over R1's 16.67 ms budget on a laptop dGPU before any
+culling exists**, which is the same verdict the earlier section reached by arithmetic and now reaches by
+measurement. What remains is the lever, not the plumbing: ADR-024's descent and `stream`'s region bounds are
+the mechanism, and this march does not use them yet.
+
+The anchor is asserted in the binary, not argued: the 64×48 grid's depths are compared ray-for-ray against
+`render::march`, and measured **132 device hits / 132 reference hits, 0 hit-vs-miss disagreements, max
+deviation 0.000000**. The check was falsified before it was trusted — replacing the shader's advance with
+`max(distance * 0.5, surface)` produced 16 disagreements and exited 101, and notably the depth tolerance alone
+did not catch it (0.0073 sits under any tolerance a 64-step march needs), which is why the assertion is on the
+hit/miss *set*. Timings repeat: 824.7 and 824.2 ms across two runs of the same binary.
+
 ### The first number off a real GPU, and it is a design verdict rather than a pass (2026-10-13)
 
 `cargo run --release -p gpu --example frame_curve` measures the one quantity that exists on a device today:

@@ -18,7 +18,7 @@
 //! [`Interpreter::open`] distinguishes "no adapter" from "adapter that would not open" and the caller
 //! prints a skip rather than a failure.
 
-use render::{sdf_eval, Tree, Vec3, ROOT};
+use render::{sdf_eval, Ray, Tree, Vec3, ROOT};
 use wgpu::util::DeviceExt;
 
 /// The stack capacity declared in `interp.wgsl`'s `DEPTH`, kept in sync by the test that asserts both.
@@ -36,6 +36,7 @@ pub struct Interpreter {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    march_pipeline: wgpu::ComputePipeline,
     adapter: String,
 }
 
@@ -50,6 +51,24 @@ pub struct Bench {
     pub ms_per_pass_with_read: f64,
     /// `dispatches` passes queued together and retrieved with a single copy.
     pub ms_batch_with_single_read: f64,
+}
+
+/// One frame marched entirely on the device. `frame_curve`'s columns price a harness that carries a grid
+/// back and forth; this prices the thing gate R1 names, where the ray loop is the shader and the only
+/// bytes crossing the bus are the depths at the end.
+#[derive(Debug, Clone)]
+pub struct March {
+    pub adapter: String,
+    pub rays: usize,
+    pub max_steps: u32,
+    pub surface: f32,
+    /// Rays that returned a `t`; the rest carry the no-surface sentinel.
+    pub hits: usize,
+    /// Handing the dispatch to the queue, which is not a frame time.
+    pub ms_submit_only: f64,
+    /// Dispatch plus the copy-and-map: the interval a caller actually waits on.
+    pub ms_frame_with_read: f64,
+    pub depths: Vec<f32>,
 }
 
 /// One distance comparison.
@@ -175,11 +194,20 @@ impl Interpreter {
             compilation_options: Default::default(),
             cache: None,
         });
+        let march_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("march_rays"),
+            layout: None,
+            module: &module,
+            entry_point: Some("march_rays"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         Ok(Interpreter {
             device,
             queue,
             pipeline,
+            march_pipeline,
             adapter: adapter_name,
         })
     }
@@ -432,6 +460,139 @@ impl Interpreter {
             ms_submit_only_total: submit_only,
             ms_per_pass_with_read: with_read,
             ms_batch_with_single_read: batch_with_single_read,
+        })
+    }
+
+    /// March `rays` against one subtree of `tree` on the device and return the depths.
+    ///
+    /// One upload, one dispatch, one copy back: the shape a frame has, as opposed to `bench`'s shape of
+    /// N uploads of a whole grid. The step law itself is `interp.wgsl`'s `march_rays`, transcribed from
+    /// `render`'s `march_with`; this function reports what the device produced and does not certify that
+    /// the two agree - the example that does that is the measurement's correctness anchor.
+    pub fn march(&self, tree: &Tree, root: u32, rays: &[Ray]) -> Result<March, String> {
+        let Some(first) = rays.first() else {
+            return Err("no rays to march".to_string());
+        };
+        // The step cap and the surface tolerance are one header pair for the whole dispatch, so a grid
+        // that mixed them would trace some rays under a different law than the number being reported.
+        for ray in rays {
+            if ray.surface != first.surface || ray.max_steps != first.max_steps {
+                return Err("rays disagree on surface or max_steps".to_string());
+            }
+        }
+        let storage = wgpu::BufferUsages::STORAGE;
+        let nodes = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("march-nodes"),
+                contents: &node_bytes(tree),
+                usage: storage,
+            });
+        let pool = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("march-pool"),
+                contents: &bytes_of_f32(&tree.params),
+                usage: storage,
+            });
+        // Two vec4s per ray, read out of the buffer the point-query path already binds: a stage may not
+        // have six storage buffers on the downlevel limits this device was opened with.
+        let mut query_bytes = Vec::with_capacity(rays.len() * 32);
+        for ray in rays {
+            query_bytes.extend_from_slice(&bytes_of_f32(&[
+                ray.origin[0],
+                ray.origin[1],
+                ray.origin[2],
+                root as f32,
+            ]));
+            query_bytes.extend_from_slice(&bytes_of_f32(&[
+                ray.dir[0], ray.dir[1], ray.dir[2], ray.max_t,
+            ]));
+        }
+        let queries = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("march-rays"),
+                contents: &query_bytes,
+                usage: storage,
+            });
+        let header_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("march-header"),
+                contents: &bytes_of_u32(&[
+                    rays.len() as u32,
+                    STACK_DEPTH,
+                    first.max_steps,
+                    first.surface.to_bits(),
+                ]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let size = (rays.len() * 4) as u64;
+        let traced = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("march-depths"),
+            size,
+            usage: storage | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("march-staging"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.march_pipeline.get_bind_group_layout(0),
+            entries: &[
+                entry(0, &nodes),
+                entry(1, &pool),
+                entry(2, &queries),
+                entry(3, &header_buf),
+                entry(4, &traced),
+            ],
+        });
+        let workgroups = rays.len().div_ceil(64) as u32;
+
+        let start = std::time::Instant::now();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&self.march_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&traced, 0, &staging, 0, size);
+        self.queue.submit([encoder.finish()]);
+        let ms_submit_only = start.elapsed().as_secs_f64() * 1000.0;
+        let raw = self.read(&staging, size)?;
+        let ms_frame_with_read = start.elapsed().as_secs_f64() * 1000.0;
+
+        let mut depths = Vec::with_capacity(rays.len());
+        let mut offset = 0usize;
+        while offset + 4 <= raw.len() {
+            depths.push(f32::from_le_bytes(
+                raw[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| "short read")?,
+            ));
+            offset += 4;
+        }
+        let hits = depths
+            .iter()
+            .filter(|depth| **depth < UNSUPPORTED_HALF)
+            .count();
+        Ok(March {
+            adapter: self.adapter.clone(),
+            rays: rays.len(),
+            max_steps: first.max_steps,
+            surface: first.surface,
+            hits,
+            ms_submit_only,
+            ms_frame_with_read,
+            depths,
         })
     }
 

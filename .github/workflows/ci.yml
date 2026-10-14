@@ -242,6 +242,11 @@ jobs:
       - name: GPU field-evaluation curve (informational)
         run: cargo run --release -p gpu --example frame_curve
 
+      # The same probe's successor: the march inside the shader, one dispatch, one copy back. The anchor
+      # against `render::march` is asserted in-binary; only the milliseconds are informational.
+      - name: GPU on-device march (informational)
+        run: cargo run --release -p gpu --example on_device_march
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.

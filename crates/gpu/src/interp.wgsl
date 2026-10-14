@@ -25,8 +25,12 @@ struct Node {
 struct Header {
     point_count: u32,
     stack_depth: u32,
-    _pad: u32,
-    _pad2: u32,
+    // Only `march_rays` reads these two; `evaluate_points` ignores them, and the buffers stay shared rather
+    // than growing a fifth and sixth binding, because downlevel classes cap a stage at four storage
+    // buffers. The surface tolerance arrives as raw bits: a uniform block has no f32 here and reusing a
+    // u32 word keeps one header for both entry points.
+    march_steps: u32,
+    march_surface_bits: u32,
 }
 
 // A-07's kind numbers as literals, because renumbering silently reinterprets every asset on disk.
@@ -327,4 +331,50 @@ fn evaluate_points(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let query = queries[index];
     distances[index] = eval_from(u32(query.w), query.xyz);
+}
+
+// The march, on the device. `frame_curve` priced a frame as 46 separate dispatches of `evaluate_points`
+// over the same grid, each one submitting and copying back, and the resulting 4,005 ms was mostly the
+// harness carrying a 2M-point grid around 46 times. This entry point asks the question R1 actually
+// poses: how long does a frame take when the ray loop is the shader and the only bytes that cross the bus
+// are the depths at the end.
+//
+// `queries` is re-read as two vec4s per ray - (origin, root index) then (direction, max_t) - and
+// `distances` comes back as t, or the same sentinel the field walk returns for "no surface". No new
+// bindings: four storage buffers per stage is the downlevel ceiling and this file is already at it.
+//
+// The step law is `crates/render`'s `march_with`, expression for expression, including the order of the
+// two loop conditions and the `max(distance, surface)` advance: two implementations of one march that
+// differ by a step count are the same fork the interpreter's tests exist to prevent, and the agreement
+// example measures it rather than asserting it away.
+@compute @workgroup_size(64)
+fn march_rays(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= header.point_count {
+        return;
+    }
+    let origin_and_root = queries[index * 2u];
+    let direction_and_max_t = queries[index * 2u + 1u];
+    let root = u32(origin_and_root.w);
+    let origin = origin_and_root.xyz;
+    let direction = direction_and_max_t.xyz;
+    let max_t = direction_and_max_t.w;
+    let surface = bitcast<f32>(header.march_surface_bits);
+    let max_steps = header.march_steps;
+
+    var t = 0.0;
+    var steps = 0u;
+    loop {
+        if t >= max_t || steps >= max_steps {
+            distances[index] = UNSUPPORTED;
+            return;
+        }
+        let distance = eval_from(root, origin + direction * t);
+        if abs(distance) < surface {
+            distances[index] = t;
+            return;
+        }
+        t = t + max(distance, surface);
+        steps = steps + 1u;
+    }
 }
