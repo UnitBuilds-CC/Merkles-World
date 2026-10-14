@@ -259,6 +259,11 @@ jobs:
       - name: R2 edit loop on a device (informational)
         run: cargo run --release -p gpu --example device_edit_loop
 
+      # AS4's hot-path clause: one upload, then frames that bind it. The asserted terms are byte counts and
+      # bit-identical depths, with a mutated shape required to diverge; a runner without a device prints SKIP.
+      - name: Shape uploaded once, bound per frame (informational)
+        run: cargo run --release -p gpu --example as4_upload_reuse
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.

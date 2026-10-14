@@ -71,6 +71,19 @@ pub struct March {
     pub depths: Vec<f32>,
 }
 
+/// A shape tree resident on the device: the two buffers the march binds as slots 0 and 1, created once and
+/// handed to every frame after that. `march` re-uploads them per call because one upload per frame is the
+/// shape a correctness probe wants; gate AS4's clause is different — a frame must not allocate or parse its
+/// way to the queue — and a re-uploaded asset allocates and copies even though it parsed nothing. `bytes` is
+/// what the per-frame path pays again on every frame after the first.
+#[derive(Debug)]
+pub struct Shape {
+    nodes: wgpu::Buffer,
+    pool: wgpu::Buffer,
+    pub bytes: usize,
+    pub node_count: usize,
+}
+
 /// One distance comparison.
 pub struct Agreement {
     pub adapter: String,
@@ -470,6 +483,37 @@ impl Interpreter {
     /// `render`'s `march_with`; this function reports what the device produced and does not certify that
     /// the two agree - the example that does that is the measurement's correctness anchor.
     pub fn march(&self, tree: &Tree, root: u32, rays: &[Ray]) -> Result<March, String> {
+        self.march_uploaded(&self.upload(tree), root, rays)
+    }
+
+    /// Put a shape on the device once, so a later frame can bind it without allocating or copying its
+    /// bytes again. The `.len()` fields are taken before the buffers move.
+    pub fn upload(&self, tree: &Tree) -> Shape {
+        let storage = wgpu::BufferUsages::STORAGE;
+        let nodes = node_bytes(tree);
+        let pool = bytes_of_f32(&tree.params);
+        Shape {
+            bytes: nodes.len() + pool.len(),
+            node_count: tree.nodes.len(),
+            nodes: self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("shape-nodes"),
+                    contents: &nodes,
+                    usage: storage,
+                }),
+            pool: self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("shape-pool"),
+                    contents: &pool,
+                    usage: storage,
+                }),
+        }
+    }
+
+    /// Everything a march does with a shape that is already resident — the half a reused frame pays.
+    pub fn march_uploaded(&self, shape: &Shape, root: u32, rays: &[Ray]) -> Result<March, String> {
         let Some(first) = rays.first() else {
             return Err("no rays to march".to_string());
         };
@@ -481,20 +525,8 @@ impl Interpreter {
             }
         }
         let storage = wgpu::BufferUsages::STORAGE;
-        let nodes = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("march-nodes"),
-                contents: &node_bytes(tree),
-                usage: storage,
-            });
-        let pool = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("march-pool"),
-                contents: &bytes_of_f32(&tree.params),
-                usage: storage,
-            });
+        let nodes = &shape.nodes;
+        let pool = &shape.pool;
         // Two vec4s per ray, read out of the buffer the point-query path already binds: a stage may not
         // have six storage buffers on the downlevel limits this device was opened with.
         let mut query_bytes = Vec::with_capacity(rays.len() * 32);
@@ -545,8 +577,8 @@ impl Interpreter {
             label: None,
             layout: &self.march_pipeline.get_bind_group_layout(0),
             entries: &[
-                entry(0, &nodes),
-                entry(1, &pool),
+                entry(0, nodes),
+                entry(1, pool),
                 entry(2, &queries),
                 entry(3, &header_buf),
                 entry(4, &traced),

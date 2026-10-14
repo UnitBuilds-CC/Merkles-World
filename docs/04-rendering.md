@@ -469,6 +469,21 @@ APIs, one geometry answer, and that is the part worth naming: the assertable ter
 while the milliseconds never do. The paravirtual adapter is not this doc's mid-range dGPU, so the run says
 nothing about R1's budget.
 
+**One upload, bound per frame (AS4, 2026-10-14, `cargo run --release --example as4_upload_reuse -p gpu`, a CI
+step).** `Interpreter::march` has always re-uploaded the node records and the parameter pool, which is right
+for a probe and wrong for a frame: AS4's clause is that a loaded shape reaches the queue without a per-frame
+allocation or parse. `upload` + `march_uploaded` now split it, and the asserts are the two kinds a device can
+honestly carry. The reused frames match the per-frame path **bit for bit** (`f32::to_bits` equality on all
+3,072 depths, plus equal hit counts), and that equivalence is falsified inside the binary by uploading a second
+shape with one parameter moved — radius 2.0 against 3.5 — and requiring the depths to diverge; they do, first at
+ray 0, 14.856176 against 14.850224. The cost term is a byte count, not a duration: the 80-byte shape is handed
+over once where the per-frame path hands it over six times, and the 400 bytes never re-uploaded are 0.000% of a
+frame's bus traffic at 64×48 (98,304 ray bytes) or at 1080p (66,355,200 ray bytes, DERIVED from the same 32
+bytes per ray). That is the finding worth more than the clause it closes: **the shape is never the per-frame
+cost — the rays are**, and a real renderer generates them on the device and uploads neither. Consistent with
+that, the medians here were 11.123 ms reused against 11.662 ms per-frame upload, i.e. indistinguishable on a
+machine whose runs move by multiples of that anyway.
+
 What remains of the caveat is structural, and it is OQ-55's: the edit still reaches the device by **rebuilding
 the tree on the host**, because A-07 has no instance/translate node in which to place a voxel inside the
 grammar. So R2 is now measured on a renderer that keeps the ray loop on the GPU, and **still not met as a
