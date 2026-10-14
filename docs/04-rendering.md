@@ -340,7 +340,7 @@ also what ADR-012's WGSL renderer has always implied.
 What this is **not**: not a march (the CPU reference measured ~45.5 evaluations per pixel), not culled, not a
 mid-range dGPU (docs/04's bar), and not hashed or comparable across machines — timings never are (ADR-017, and
 R4 is informational by rule). **R1 stays unmet and R2 unmeasured**: R2 needs continuous terrain editing inside a
-running frame loop, which needs the edit-to-geometry step OQ-50 still gates.
+running frame loop, which needs the edit-to-geometry step OQ-50 *gated*. Ruled 2026-10-14, so this is unblocked work rather than an open question - and still unbuilt.
 
 **buildbox's zero adapters, so far (2026-10-14).** Four hypotheses are dead, each eliminated by a run rather
 than by reasoning: the driver (580.178.04 loaded, `nvidia-smi` answers, `/dev/nvidia0` and `/dev/nvidia-uvm`

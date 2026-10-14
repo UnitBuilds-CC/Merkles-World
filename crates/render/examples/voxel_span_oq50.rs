@@ -176,6 +176,6 @@ fn main() {
     println!("// What this settles and what it does not: the arithmetic half is a contradiction test against a");
     println!("// frozen contract, and only one convention passes it. The visual half is about whether the");
     println!("// difference is *seen* - it is not a claim that either placement is correct, and no code here");
-    println!("// chooses one. docs/13's OQ-50 row carries the ruling, which needs the Architect because the");
+    println!("// chooses one. docs/13's OQ-50 row records the ruling, and doc 02 now states the convention (half-open `[x, x+1)`, approved 2026-10-14), because the");
     println!("// answer also fixes how physics (doc 07) and any future base terrain read the same coordinate.");
 }

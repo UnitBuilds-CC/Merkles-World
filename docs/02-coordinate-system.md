@@ -57,13 +57,19 @@ converts once at its boundary and never leaks it.
 
 | Level | Extent | Address |
 |-------|--------|---------|
-| Voxel | 1 unit | `GlobalVoxelPos` (3×i64) |
+| Voxel | 1 unit, spanning `[x, x+1)` from its coordinate (**OQ-50**, ruled 2026-10-14) | `GlobalVoxelPos` (3×i64) |
 
-**Not stated here, and deliberately not invented in code:** whether the integer names the unit cube
-`[x, x+1)` or a cube centred on `(x+0.5, y+0.5, z+0.5)`. Nothing hashed depends on it — a voxel's world
-position never enters a root — but the renderer, doc 07's collision, and the eventual base-terrain generator
-all have to agree, so it is [OQ-50](13-risks-open-questions.md) rather than a private choice in whichever
-subsystem needs it first.
+**Span convention ([OQ-50](13-risks-open-questions.md), ruled 2026-10-14):** a coordinate names the half-open
+unit cube `[x, x+1) x [y, y+1) x [z, z+1)`, so the voxel's centre is `(x + 0.5, y + 0.5, z + 0.5)`. Nothing
+hashed depends on the choice — a voxel's world position never enters a root — but every consumer that places
+geometry from a voxel coordinate (the renderer, doc 07's collision, any future base terrain) derives it from
+*this row* rather than restating it, which is ADR-021's single coordinate authority.
+
+It is half-open rather than centred for a reason that is arithmetic rather than taste: `region_key()` is
+`i >> 12` and its own comment says region 0 is `[0, 4096)`, so a cube centred on the integer would sit with
+half its volume in the region *below* the one its own index maps to at every `i = k·4096`.
+`crates/render/examples/voxel_span_oq50.rs` measures exactly that — 10 of 28 probe indices straddle a region
+under the centred convention, 0 under this one — and it is a CI step, so the claim cannot rot.
 | Slab | plane tile: 256² voxels × 64 deep = 2²² voxels (4 MiB @ 1 B/voxel), 3 orientations | `(RegionKey, axis, plane_index)` — a lookup identity, **not** a delta-record field since [ADR-029](decisions.md); geometry still [SPEC-06](13-risks-open-questions.md)'s |
 | Region | 4096³ voxels = 2³⁶ voxels | `RegionKey` (3×i64) |
 | Sector | 16 regions per axis (16³ = 4096 regions) | `(Rx>>4, Ry>>4, Rz>>4)` |
