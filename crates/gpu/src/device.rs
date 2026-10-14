@@ -114,6 +114,16 @@ fn bytes_of_f32(values: &[f32]) -> Vec<u8> {
     out
 }
 
+/// Four little-endian `f32`s as a stack array, for the paths that may not allocate per value.
+fn vec4_bytes(values: [f32; 4]) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[0..4].copy_from_slice(&values[0].to_le_bytes());
+    out[4..8].copy_from_slice(&values[1].to_le_bytes());
+    out[8..12].copy_from_slice(&values[2].to_le_bytes());
+    out[12..16].copy_from_slice(&values[3].to_le_bytes());
+    out
+}
+
 /// A shape tree as four `u32` words per node, in `contracts::sdf::NodeRecord`'s order - the bytes an
 /// `assetc` run writes, with no repacking between the file and the buffer.
 pub fn node_bytes(tree: &Tree) -> Vec<u8> {
@@ -529,17 +539,23 @@ impl Interpreter {
         let pool = &shape.pool;
         // Two vec4s per ray, read out of the buffer the point-query path already binds: a stage may not
         // have six storage buffers on the downlevel limits this device was opened with.
-        let mut query_bytes = Vec::with_capacity(rays.len() * 32);
-        for ray in rays {
-            query_bytes.extend_from_slice(&bytes_of_f32(&[
+        //
+        // The bytes go straight into one pre-sized buffer. Repacking each vec4 through a `Vec` allocates
+        // twice per ray - 6,144 tiny allocations for a 64x48 frame, which is the malloc/free churn
+        // AGENTS.md §3 bans on a gameplay frame - and the buffer's length is fixed by the ray count, so a
+        // growable allocation is buying nothing here.
+        let mut query_bytes = vec![0u8; rays.len() * 32];
+        for (index, ray) in rays.iter().enumerate() {
+            let start = index * 32;
+            let chunk = &mut query_bytes[start..start + 32];
+            chunk[..16].copy_from_slice(&vec4_bytes([
                 ray.origin[0],
                 ray.origin[1],
                 ray.origin[2],
                 root as f32,
             ]));
-            query_bytes.extend_from_slice(&bytes_of_f32(&[
-                ray.dir[0], ray.dir[1], ray.dir[2], ray.max_t,
-            ]));
+            chunk[16..]
+                .copy_from_slice(&vec4_bytes([ray.dir[0], ray.dir[1], ray.dir[2], ray.max_t]));
         }
         let queries = self
             .device
