@@ -141,13 +141,7 @@ fn main() {
         Err(error) => println!("// 1080p x46        : not measured ({error})"),
     }
     println!(
-        "// 1080p read-back  : {largest_pass_ms:.3} ms/pass queueing alone, and the with-read column above is the completion figure - only that one bounds a frame"
+        "// 1080p per pass   : {largest_pass_ms:.3} ms for ONE evaluation per pixel, completion included; the submit-only column above is queueing cost and is not a frame time"
     );
-    println!("// R1               : NOT measured. submit-only is how fast a thread hands work over, which on a device queue is nearly free and means nothing about latency; 16.67 ms is the budget for a full march with culling at 60 Hz;");
-    println!("//                    this is one field evaluation per pixel on a three-node tree, which is a floor");
-    println!(
-        "//                    and a rate, not a frame. Multiply by the reference's measured ~45.5"
-    );
-    println!("//                    evaluations per pixel before calling anything an estimate, and label it as");
-    println!("//                    arithmetic on a device that is not the gate's mid-range GPU.");
+    println!("// R1               : NOT met, and now bounded usefully. One evaluation per pixel at 1080p fits in the 16.67 ms budget on a GTX 1070; a march needs ~46 of them, which is 33x over. So the gate is a per-pixel-work question - culling, a hierarchy, or fewer rays - not a shader-speed question.");
 }

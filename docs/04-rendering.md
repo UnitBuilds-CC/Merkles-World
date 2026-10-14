@@ -329,6 +329,37 @@ costs and only one of them bounds a frame:
 | 1920x1080 | 2,073,600 | 0.137 | **91.350** |
 | 1920x1080, 46 passes, one copy back | 95,385,600 evals | — | **4,005.2 / 4,015.4** |
 
+Then the same probe on a **desktop discrete GPU** — buildbox's GTX 1070, Vulkan, `DiscreteGpu` — which is the
+instrument R1 was actually written against:
+
+| device | 1080p, one eval/pixel, completion | 1080p, 46 evals/pixel, one copy back |
+|---|---|---|
+| GeForce MX250 (Vulkan, laptop dGPU) | 91.35 ms | 4,005–4,015 ms |
+| **GeForce GTX 1070 (Vulkan, desktop dGPU)** | **13.46 ms** | **551.5 ms** |
+
+That changes the shape of the gate rather than just its numbers. One field evaluation per pixel across a full
+1080p grid lands *inside* R1's 16.67 ms budget on this hardware, and the 46 a march needs land 33× outside it.
+So R1 is not a shader-throughput question that tuning closes: the budget buys about one evaluation per pixel,
+and closing a ~46× gap is the explicit job of culling, the hierarchy and the step budget — ADR-024's descent,
+measured today at 96–97% of node work avoided on a wide ridge, is the mechanism the gate depends on, and
+`stream`'s region bounds are what keep off-screen work at zero.
+
+A caveat on the laptop row rather than on the desktop one: re-running the same probe on the MX250 gave
+627 ms for the same single-evaluation pass that had read 91 ms minutes earlier, so a laptop dGPU's absolute
+numbers are not reproducible across runs (power states, and nothing here pins clocks). The 1070 row is the one
+the argument rests on, and even it is a rate, not a frame. This is exactly why timings sit outside the hashed
+surface (ADR-017) and why R1's verification will need repeated runs reported as a distribution rather than a
+single quoted figure.
+
+**Why buildbox reported no adapters at all, when its Vulkan loader sees the GPU (2026-10-14).** Not the driver,
+not permissions, not the ICD: its `gcc` is a **Nix-store wrapper** (`/nix/store/…gcc-wrapper-13.4.0`), and
+binaries linked by it don't consult the system `ld.so.cache`, so `dlopen("libvulkan.so.1")` — and `libEGL.so` —
+fail with "cannot open shared object file" while `vulkaninfo` runs happily. Linking with the distro's own
+compiler fixes it, recorded machine-locally in `~/.cargo/config.toml` (`linker = "/usr/bin/gcc-13"`) rather
+than in the repository, because it is a fact about one box and not a project requirement. Two diagnostics were
+wrong before that one was right: "wgpu logs nothing" (I had grepped `lib.rs`, not `vulkan/adapter.rs`) and "the
+loader is never reached" (the binary under test was a stale build with no logger wired in).
+
 Submit-only is how fast a thread hands work to the queue; on a device queue that is nearly free and says
 nothing about latency. The read-back column adds the 8 MiB copy-and-map this harness pays so a CPU can look at
 the result. That column is the finding: **~91 ms to complete and retrieve one 1080p evaluation pass, against
