@@ -354,6 +354,10 @@ rather than another guess. Until that reads out the reason, the honest form of t
 enumerated by the Vulkan loader on this headless box and not by wgpu - and note CI's own Linux runner reports
 the same empty list, so the pattern is not peculiar to the NVIDIA stack.
 
+One more thing worth recording before anyone spends a build on it: grepping `wgpu-hal 27.0.4` for a warn or
+error on the backend-decline path finds none, so installing a `tracing-subscriber` may print nothing at all. The
+next experiment is to construct the hal's Vulkan platform instance directly and watch it fail - not another logger.
+
 ### A frame can be drawn into memory the caller owns (2026-10-12)
 
 AGENTS.md §3 bans allocation churn during gameplay frames and doc 09 promises AS4's "no allocation
