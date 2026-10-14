@@ -253,6 +253,12 @@ jobs:
       - name: R2 edit loop (informational)
         run: cargo run --release -p engine --example r2_edit_loop
 
+      # R2 again over the device path: the same slab and read-back, but the rays go to `interp.wgsl`'s
+      # `march_rays` and the asserted terms are the hit count and the device-vs-reference agreement, not a
+      # duration. A runner with no adapter prints its own SKIP line and exits 0 - read for the word, not the badge.
+      - name: R2 edit loop on a device (informational)
+        run: cargo run --release -p gpu --example device_edit_loop
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.

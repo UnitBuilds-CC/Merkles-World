@@ -439,9 +439,32 @@ second `z` layer — the last edit then sat a full unit higher above the plane, 
 scene. Held to one layer (96×64 columns, more than 6,000 voxels), the count is exactly constant. So the
 assertion is live, and it is evidence about occupancy only because the scene was pinned still first.
 
-And this is still the **CPU reference march**: R1's on-device `march_rays` does not read the ledger yet — an
-edit reaches the frame here by rebuilding the tree, and A-07 has no instance node (OQ-55) to do it in the
-grammar. So R2 is measured on the reference path and **unmet on a device**.
+**The same loop, marched by the shader (2026-10-14, `cargo run --release --example device_edit_loop -p gpu`,
+a CI step).** The reason the loop above was the reference path was that `march_rays` had no ledger in front of
+it. It now does: the same `Slab`, the same `deltas()` read-back, the same doc 02 placement law, and the same
+64×48 grid handed to `interp.wgsl` instead of `render::raster` — measured on the MX250 over Vulkan. A device
+march reports two terms that survive being asserted, and both are integers or geometry, never a duration. The
+count of rays that find surface is **3072 at 1, 100, 1,000 and 6,000 records**, asserted equal across that
+6,000× change in occupancy; and at every one of those occupancies the device's depths agree with the
+reference's ray-for-ray — **0 hit/miss disagreements, worst depth deviation under 0.002**, the anchor
+`on_device_march` uses, which is what keeps a dispatch the driver folded away from arriving here as a frame.
+The centre pixel returns **7.5129** at every stage, where placement says 7.500 and the same grid over
+unedited terrain returns 9.0000 — so an accepted edit arrives in a *device* frame at the distance doc 02 gives
+it. That assert is live: marching the unedited tree inside the loop fired it at occupancy 1 ("the device put
+the newest edit at 9 where doc 02 says 7.5") and exited 101.
+
+Two things the device numbers do not say. The flat hit count is a **guard**, not the edit's signature: the
+terrain plane is 2048 units wide, so all 3,072 rays find surface with or without an edit, and 3072 against
+3072 only proves the frame never went empty — which is why the visible-edit claim is carried by the depth
+under the eye instead. And the milliseconds here moved more than the CPU's did: two runs of identical code put
+the stage medians at 3.679–3.900 ms and then at 7.222–20.559 ms, a 5.6× swing on the last stage of a laptop
+that was doing other things. Nothing timing-shaped is asserted, for that reason (ADR-017).
+
+What remains of the caveat is structural, and it is OQ-55's: the edit still reaches the device by **rebuilding
+the tree on the host**, because A-07 has no instance/translate node in which to place a voxel inside the
+grammar. So R2 is now measured on a renderer that keeps the ray loop on the GPU, and **still not met as a
+frame** — R1's 16.67 ms at 1080p is unmet, and the 10-minute/36,000-frame span is DERIVED from a flat count,
+not run.
 
 **buildbox's zero adapters, so far (2026-10-14).** Four hypotheses are dead, each eliminated by a run rather
 than by reasoning: the driver (580.178.04 loaded, `nvidia-smi` answers, `/dev/nvidia0` and `/dev/nvidia-uvm`
