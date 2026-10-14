@@ -341,6 +341,19 @@ mid-range dGPU (docs/04's bar), and not hashed or comparable across machines —
 R4 is informational by rule). **R1 stays unmet and R2 unmeasured**: R2 needs continuous terrain editing inside a
 running frame loop, which needs the edit-to-geometry step OQ-50 still gates.
 
+**buildbox's zero adapters, so far (2026-10-14).** Four hypotheses are dead, each eliminated by a run rather
+than by reasoning: the driver (580.178.04 loaded, `nvidia-smi` answers, `/dev/nvidia0` and `/dev/nvidia-uvm`
+exist), permissions (`ian` added to `render`, and `vulkaninfo` sees both devices in the same session), loader
+layers (`VK_LOADER_LAYERS_DISABLE` changes nothing), and a missing surface extension (`VK_KHR_surface`,
+`VK_EXT_surface_maintenance1` and `VK_KHR_surface_protected_capabilities` are advertised with `DISPLAY` and
+`WAYLAND_DISPLAY` both unset). It is not a build gap either: `LD_DEBUG=libs` shows the probe **does** load
+`libvulkan.so.1`, while `VK_LOADER_DEBUG=all` emits nothing, so no `vkCreateInstance` is ever attempted.
+`wgpu-hal` therefore declines the backend between loading the library and creating an instance, and it reports
+why on a `tracing` channel the probe has no subscriber for - which makes installing one the next line of code
+rather than another guess. Until that reads out the reason, the honest form of the claim is: a real desktop GPU,
+enumerated by the Vulkan loader on this headless box and not by wgpu - and note CI's own Linux runner reports
+the same empty list, so the pattern is not peculiar to the NVIDIA stack.
+
 ### A frame can be drawn into memory the caller owns (2026-10-12)
 
 AGENTS.md §3 bans allocation churn during gameplay frames and doc 09 promises AS4's "no allocation
