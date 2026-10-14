@@ -327,6 +327,7 @@ costs and only one of them bounds a frame:
 | 128x128 | 16,384 | 0.189 | 0.886 |
 | 512x512 | 262,144 | 0.083 | 12.743 |
 | 1920x1080 | 2,073,600 | 0.137 | **91.350** |
+| 1920x1080, 46 passes, one copy back | 95,385,600 evals | — | **4,005.2 / 4,015.4** |
 
 Submit-only is how fast a thread hands work to the queue; on a device queue that is nearly free and says
 nothing about latency. The read-back column adds the 8 MiB copy-and-map this harness pays so a CPU can look at

@@ -130,6 +130,16 @@ fn main() {
     println!(
         "// what the columns mean : submit-only is how fast a thread hands the pass over - on a device queue that is nearly free and says nothing about latency. The read-back column adds the 8 MiB copy-and-map this harness pays to look at a result; a renderer keeps distances on the GPU and does not pay it. Neither column is a march, and neither is culling."
     );
+    // The workload a frame implies: the CPU reference counted ~45.5 field evaluations per pixel, so ask for
+    // 46 and retrieve the grid once. Measured rather than extrapolated.
+    let dense = grid(1920, 1080);
+    match interpreter.bench(&tree, &dense, 46, 1) {
+        Ok(bench) => println!(
+            "// 1080p x46        : {:.1} ms for 46 evaluations per pixel with one copy back, against R1's 16.67 ms whole-frame budget",
+            bench.ms_batch_with_single_read
+        ),
+        Err(error) => println!("// 1080p x46        : not measured ({error})"),
+    }
     println!(
         "// 1080p read-back  : {largest_pass_ms:.3} ms/pass queueing alone, and the with-read column above is the completion figure - only that one bounds a frame"
     );

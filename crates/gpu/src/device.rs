@@ -48,6 +48,8 @@ pub struct Bench {
     pub evaluations: usize,
     pub ms_submit_only_total: f64,
     pub ms_per_pass_with_read: f64,
+    /// `dispatches` passes queued together and retrieved with a single copy.
+    pub ms_batch_with_single_read: f64,
 }
 
 /// One distance comparison.
@@ -413,6 +415,15 @@ impl Interpreter {
         }
         let with_read = start.elapsed().as_secs_f64() * 1000.0 / read_dispatches as f64;
 
+        // Third column: N dispatches queued, then one retrieval - a frame's field work with the grid copied
+        // back once, which is the shape a device-resident march has. Measured rather than multiplied.
+        let start = std::time::Instant::now();
+        for _ in 0..dispatches {
+            submit(self);
+        }
+        self.read(&staging, size)?;
+        let batch_with_single_read = start.elapsed().as_secs_f64() * 1000.0;
+
         Ok(Bench {
             adapter: self.adapter.clone(),
             points: points.len(),
@@ -420,6 +431,7 @@ impl Interpreter {
             evaluations: points.len() * dispatches,
             ms_submit_only_total: submit_only,
             ms_per_pass_with_read: with_read,
+            ms_batch_with_single_read: batch_with_single_read,
         })
     }
 
