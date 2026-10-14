@@ -48,9 +48,6 @@ pub struct Bench {
     pub evaluations: usize,
     pub ms_submit_only_total: f64,
     pub ms_per_pass_with_read: f64,
-    /// `dispatches` passes queued together and retrieved with one copy - a frame's worth of field work,
-    /// measured rather than multiplied.
-    pub ms_batch_with_single_read: f64,
 }
 
 /// One distance comparison.
@@ -416,16 +413,6 @@ impl Interpreter {
         }
         let with_read = start.elapsed().as_secs_f64() * 1000.0 / read_dispatches as f64;
 
-        // Third column, and the one R1 actually asks: N dispatches queued, then a single copy back. That is
-        // "a frame's worth of field work with the result retrieved once" - the shape a device-resident march
-        // would have - rather than a per-pass cost multiplied by hand.
-        let start = std::time::Instant::now();
-        for _ in 0..dispatches {
-            submit(self);
-        }
-        self.read(&staging, size)?;
-        let batch_with_single_read = start.elapsed().as_secs_f64() * 1000.0;
-
         Ok(Bench {
             adapter: self.adapter.clone(),
             points: points.len(),
@@ -433,7 +420,6 @@ impl Interpreter {
             evaluations: points.len() * dispatches,
             ms_submit_only_total: submit_only,
             ms_per_pass_with_read: with_read,
-            ms_batch_with_single_read: batch_with_single_read,
         })
     }
 
