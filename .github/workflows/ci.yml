@@ -259,6 +259,13 @@ jobs:
       - name: R2 edit loop on a device (informational)
         run: cargo run --release -p gpu --example device_edit_loop
 
+      # R2's own ten minutes, run instead of derived: 36,000 consecutive frames with one slab edit every sixth
+      # (10/s at 60 fps). Every frame is compared against frame 1's charged evaluations - 18,284 at all of
+      # them - so the O(1) claim is tested at the span the gate names, not at four sampled occupancies.
+      # Expect a couple of minutes per runner: that is the span, not a hang.
+      - name: R2 ten-minute span (informational)
+        run: cargo run --release -p engine --example r2_ten_minute_span
+
       # AS4's hot-path clause: one upload, then frames that bind it. The asserted terms are byte counts and
       # bit-identical depths, with a mutated shape required to diverge; a runner without a device prints SKIP.
       - name: Shape uploaded once, bound per frame (informational)

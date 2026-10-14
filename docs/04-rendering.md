@@ -487,8 +487,44 @@ machine whose runs move by multiples of that anyway.
 What remains of the caveat is structural, and it is OQ-55's: the edit still reaches the device by **rebuilding
 the tree on the host**, because A-07 has no instance/translate node in which to place a voxel inside the
 grammar. So R2 is now measured on a renderer that keeps the ray loop on the GPU, and **still not met as a
-frame** — R1's 16.67 ms at 1080p is unmet, and the 10-minute/36,000-frame span is DERIVED from a flat count,
-not run.
+frame** — R1's 16.67 ms at 1080p is unmet. The ten-minute span, which used to be the other half of that
+sentence, is no longer derived: see the next section.
+
+**R2's ten minutes, run (2026-10-14, `cargo run --release --example r2_ten_minute_span -p engine`, a CI step).**
+`r2_edit_loop` measured the frame at four occupancies and then said, in its own output, that a 10-minute session
+at 60 fps is 36,000 frames and was *derived from the flat median, not run*. That sentence is now false in the
+way it matters: 36,000 consecutive frames of the 64×48 reference march have been marched, with one terrain edit
+appended to a real `Slab` every sixth frame (ten a second at sixty — both numbers from the gate's own words, not
+from tuning), so occupancy grows **continuously** rather than in four stages. Every frame is asserted, not
+sampled: **18,284 charged evaluations on all 36,000 frames**, compared against frame 1's value at the moment each
+frame is marched, plus doc 02's placement under the eye on every frame, plus the slab handing back exactly the
+records it took. The O(1) hot path therefore holds across the span R2 names, on the reference path.
+
+Three runs on this laptop put the median at 1.94, 2.40 and 3.54 ms, and the p99.9 at 8.51, 14.27 and 108.03 ms
+— the *same* code's tail ranging 12.7× between runs, which is why the gate's claim rides on the integer column
+and no duration is asserted anywhere (ADR-017). The span's own wall clock is the honest way to say what
+"stable" would mean if a wall clock could gate it: p99.9 came out 4.40×, 5.95× and 30.5× the median over 36,000
+samples, and that tail is this machine's load, not the ledger's.
+
+The instrument was falsified twice successfully and once usefully, and the useful failure is the third. (1)
+Letting the edit walk climb into a second `z` layer from record 3,000 — the scene changes, and the charge assert
+fired at **frame 18,001 with 19,712 against 18,284 at 3,001 records**. (2) Marching `terrain(None)` after frame
+20,000 — fired at frame 20,001 with **16,184**, because dropping the union changes the charge too. (3) Both were
+caught by the *charge* assert, so a third plant was built to be charge-neutral and reach the placement assert
+alone: shift the marched centre one whole voxel along `x` after frame 20,000. **It exited 0 — the plant was
+inert.** It shifted the terrain *and* the camera by the same amount, and the march is camera-relative, so the
+sphere stayed exactly under the eye and nothing about the frame changed. The honest residue: on this instrument
+the placement assert has not been shown to fire on its own, because every violation tried so far also moves the
+charge, and the charge assert is evaluated first. The equivalent depth assert *has* been falsified where it is
+the only live term — `device_edit_loop`'s in-loop march of `terrain(None)` fired the depth check at occupancy 1
+and exited 101, because there the hit count was saturated and could not catch anything. What would make this
+loop's placement assert independently provable is a scene where the two asserts disagree, which is a fixture
+question, not a reason to weaken either check.
+
+Still open on R2, stated plainly: this is the **CPU reference** path at 64×48, so it is the shape of a frame and
+not a frame budget; the device loop (`gpu`'s `device_edit_loop`) asserts the same invariants at four occupancies
+and has not run 36,000 frames; and R1's 16.67 ms at 1080p stays unmet, gated on culling inside the GPU path
+rather than on anything this loop measures.
 
 **buildbox's zero adapters, so far (2026-10-14).** Four hypotheses are dead, each eliminated by a run rather
 than by reasoning: the driver (580.178.04 loaded, `nvidia-smi` answers, `/dev/nvidia0` and `/dev/nvidia-uvm`
