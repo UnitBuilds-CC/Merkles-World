@@ -403,8 +403,45 @@ also what ADR-012's WGSL renderer has always implied.
 
 What this is **not**: not a march (the CPU reference measured ~45.5 evaluations per pixel), not culled, not a
 mid-range dGPU (docs/04's bar), and not hashed or comparable across machines — timings never are (ADR-017, and
-R4 is informational by rule). **R1 stays unmet and R2 unmeasured**: R2 needs continuous terrain editing inside a
-running frame loop, which needs the edit-to-geometry step OQ-50 *gated*. Ruled 2026-10-14, so this is unblocked work rather than an open question - and still unbuilt.
+R4 is informational by rule). **R1 stays unmet, and R2 has its first measured loop (2026-10-14,
+`cargo run --release --example r2_edit_loop -p engine`, a CI step)**: terrain edits accumulate in a real `Slab`
+in stages of 1 / 100 / 1,000 / 6,000 records — 6,000 is ten minutes at ten edits a second — and at every stage
+the same 64×48 frame is marched (3 warm-up passes discarded, 21 timed), with P1.7's placement invariant
+asserted per frame inside the loop: the newest edit's surface must sit at `HEIGHT - 0.5`, and it does at every
+occupancy.
+
+**What is asserted is a count, not a duration.** Doc 03's claim is that a frame walks a region's compiled
+shape rather than scanning what the player edited, so the charged work per frame must be the same at 6,000
+records as at 1 — and `Stats::evaluations` says exactly that: **18,284 evaluations per frame at every
+occupancy from 1 to 6,000**, asserted equal, and equal on any machine because it is an integer the march
+reports. The milliseconds are printed and not asserted, for a reason this machine demonstrated during
+development: two runs of identical code put the 6,000-record stage's median at 3.44 ms and at 8.69 ms and its
+read-back at 0.046 ms and 1.108 ms. A wall-clock ratio on a laptop measures whatever else was running, and an
+informational CI step that can redden trunk on machine load is a worse instrument than no step at all. Three
+runs of the shipped loop here put a stage median anywhere between 2.09 ms and 3.52 ms (widest within-run
+spread 1.60×, 13–21% of R1's budget), so the milliseconds are reported as a range and one run is never quoted
+as the number.
+
+The term that *does* grow is the one an epoch commit pays: `slab.deltas()` read-back is **0.046–0.052 ms at
+6,000 records** against 0.001 ms at 100 and 1,000 — under 2% of a frame here — and the 1-record row is below
+timer
+resolution, which is why the column is ns/record rather than a rate. This is the proportional part of S2's law
+re-measured rather than cited.
+
+The count was then falsified by coupling the march to the ledger: growing the stop tolerance by one part in
+`1e7` per record moved it from 18,284 to 18,280 and the assert fired on a 0.02% change. The *first* plant tried
+exited 0 and taught the more useful lesson — raising `max_steps` from 96 to 189 changed the charge by nothing,
+because every ray in this frame converges long before the cap, so the cap is not a term the frame pays. A
+checker is only as live as the violation it can express, and the two firings that came before the plant were
+both real: the 1.3× median bar failed at 2.50× under machine load (which is what demoted the milliseconds to
+informational), and the count itself fired at 19,712 against 18,284 when the fixture's edit walk climbed into a
+second `z` layer — the last edit then sat a full unit higher above the plane, genuinely changing the marched
+scene. Held to one layer (96×64 columns, more than 6,000 voxels), the count is exactly constant. So the
+assertion is live, and it is evidence about occupancy only because the scene was pinned still first.
+
+And this is still the **CPU reference march**: R1's on-device `march_rays` does not read the ledger yet — an
+edit reaches the frame here by rebuilding the tree, and A-07 has no instance node (OQ-55) to do it in the
+grammar. So R2 is measured on the reference path and **unmet on a device**.
 
 **buildbox's zero adapters, so far (2026-10-14).** Four hypotheses are dead, each eliminated by a run rather
 than by reasoning: the driver (580.178.04 loaded, `nvidia-smi` answers, `/dev/nvidia0` and `/dev/nvidia-uvm`

@@ -247,6 +247,12 @@ jobs:
       - name: GPU on-device march (informational)
         run: cargo run --release -p gpu --example on_device_march
 
+      # R2's edit loop: the frame re-marched at four slab occupancies, asserting placement every frame and
+      # equal charged evaluations (18,284) across a 6000x change in occupancy. The medians are informational
+      # and asserted nowhere - a laptop's median moved 2.5x between runs of identical code.
+      - name: R2 edit loop (informational)
+        run: cargo run --release -p engine --example r2_edit_loop
+
       # The frame law - steps x nodes - plus the first pixels this repo has produced. Informational for
       # the same reason as the others: a runner cannot measure a GPU frame budget, and the step counts are
       # the part that repeats across architectures while the milliseconds do not.
