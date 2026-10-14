@@ -506,6 +506,17 @@ and no duration is asserted anywhere (ADR-017). The span's own wall clock is the
 "stable" would mean if a wall clock could gate it: p99.9 came out 4.40×, 5.95× and 30.5× the median over 36,000
 samples, and that tail is this machine's load, not the ledger's.
 
+**The CI leg reproduces the integer on three machines and the durations on none of them (run `38621355849`,
+2026-10-14).** Each of the three `gates` jobs ran the step and printed the same line the laptop does — **18,284
+evaluations per frame, asserted equal on all 36,000** — while their own timing columns disagree by an order of
+magnitude: median 0.68 ms on x86-64 Linux (p99.9 0.86, a 1.27× tail), 0.69 ms on ARM64 macOS (p99.9 2.39, 3.47×),
+0.97 ms on x86-64 Windows (p99.9 1.68, 1.73×), against 1.94–3.54 ms medians and a 8.51–108.03 ms tail here. Two
+things follow, and the second is the reason the loop asserts nothing about time: the *count* is a property of the
+march, so it travels between vendors untouched, and the *tail* is a property of the box — the quiet CI runners
+produced the tightest tails, the busiest laptop the loosest, with the same 36,000 frames and the same code in all
+four cases. A span that would gate on milliseconds would have reddened trunk on a laptop and passed on an
+emulated CPU, which is the wrong way round for a claim about a player's frame.
+
 The instrument was falsified twice successfully and once usefully, and the useful failure is the third. (1)
 Letting the edit walk climb into a second `z` layer from record 3,000 — the scene changes, and the charge assert
 fired at **frame 18,001 with 19,712 against 18,284 at 3,001 records**. (2) Marching `terrain(None)` after frame
