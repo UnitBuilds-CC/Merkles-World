@@ -382,7 +382,11 @@ ray-steps), and the fit is gone rather than tuned.
 
 What did survive all five runs is an integer, and it is the part worth pricing against. **Cap 4 and cap 8 find
 exactly the same 7,240 surfaces of 230,400 rays, and cap 4 → cap 64 — sixteen times the permitted steps — moves
-the swept frame by 1,772 surfaces, 0.77% of the grid.** That is the saturation, stated as work rather than as
+the swept frame by 1,772 surfaces, 0.77% of the grid.** CI run `38893054398` reads that out across vendors: the x86-64 Linux and x86-64 Windows
+`gates` jobs print `SKIP r1_step_price: no device (NoAdapter)` because no CI runner is a GPU, while the ARM64
+macOS runner opens `Apple Paravirtual device [Metal, IntegratedGpu]` and reports **the same 7,240 and the same
+1,772 surfaces at 0.77%**, with its own cap-1 row at 27.47 ms — a sixth sample inside the 24–88 ms band, and a
+second vendor for every asserted integer. That is the saturation, stated as work rather than as
 milliseconds: past a small cap the rays that would converge have converged, and the rays that will never hit
 anything pay the same at any cap. The amortised column agrees in shape (105 → 7 ns per ray-step) but is the
 weaker evidence, for the reason above. And the 1080p figure stays a **DERIVED 9.0× ray ratio** against
