@@ -274,7 +274,10 @@ the hit/miss set rather than on a depth tolerance. What it does not move: R1's 1
 grid is a shape, not a budget); the boot's published 18-line output (`engine` still does not depend on
 `gpu`, and this example runs beside it); and the fact that the boot still compiles its scene **in memory**
 rather than loading `boot_scene.ron`'s bytes at boot, which is the last step of that clause. See doc 04,
-"The demo's scene as content, on a device".
+"The demo's scene as content, on a device". **And the numbers are not this machine's alone**: CI run
+`38925028343` reproduces 3,072 rays / 605 surfaces / 0 disagreements / deviation 0.000001 / 0 bit
+differences / 80 flipped rays under the plant on the ARM64 macOS Apple Paravirtual device over Metal, while
+the two GPU-less runners print their own SKIP line after having written and re-read the 345-byte asset.
 
 
 The completion test has four clauses and eleven gates hanging off it, so each is listed with the

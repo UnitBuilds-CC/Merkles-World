@@ -1369,6 +1369,14 @@ unchanged. It is also not the boot reading a file — the shipped binary still b
 `assetc` in memory, so the remaining step for the demo's rendering clause is to boot *from* the compiled
 asset rather than beside it.
 
+**Two vendors, one picture** (CI run `38925028343`, step "Demo scene from content on a device"). Every
+integer in the table above reproduces on the ARM64 macOS runner's Apple Paravirtual device over Metal:
+3,072 rays, **605 surfaces, 0 hit/miss disagreements, worst deviation 0.000001, 0 of 3,072 bits differing
+between the two device paths, and the same 80-ray flip under the same plant**. The x86-64 Linux and Windows
+runners compile the step and print their own `SKIP boot_scene_on_device: no device (NoAdapter)` — after
+having already written and re-read the 345-byte asset, so the AS1–AS3 half of the seam is checked on all
+three and the device half on the two that have a GPU.
+
 ## Materials, lighting, sky
 
 Materials are functions of `(p, n, t)` — no texture files, ever. Beyond that the conversation
