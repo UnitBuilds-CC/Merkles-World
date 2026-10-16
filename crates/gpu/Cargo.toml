@@ -17,6 +17,10 @@ naga = { version = "27", features = ["wgsl-in"] }
 
 [dev-dependencies]
 memory = { path = "../memory" }
+# The demo scene arrives as content in this example (docs/09 stage one): `assetc` compiles the .ron, the
+# device draws the bytes it wrote. A dev-dependency keeps wgpu out of `assetc` and the compiler out of
+# every build that is not an example.
+assetc = { path = "../assetc" }
 
 [lints]
 workspace = true

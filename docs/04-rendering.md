@@ -1349,6 +1349,26 @@ per-frame depth assert demonstrably tests whether the edit arrived rather than w
 
 R1's 16.67 ms at 1080p is untouched by this — a 64×48 grid prices the span, not the frame budget.
 
+### The demo's scene as content, on a device (2026-10-16, `cargo run --release -p gpu --example boot_scene_on_device`, MX250/Vulkan)
+
+Every device number above was marched against a tree the example itself assembled. That is the right fixture
+for pricing a march and the wrong one for doc 09's promise, which is that content arrives as **bytes a
+compiler emitted**. So the boot's scene is now also a `.ron` file
+(`crates/assetc/tests/fixtures/boot_scene.ron`), compiled by the shipped `assetc::watch::Watch`, read back by
+`assetc::reader`, validated by `render::validate`, uploaded, and marched:
+
+| Term | Measured | Why it is the term |
+|---|---|---|
+| The two forms are one scene | 11 nodes, 25 parameters, depth 4; **345 bytes = 276 tree + 14 label + 55 header** against the boot's published 348 = the same tree + its 17-character label | Node count, pool length and depth come from the compiler's own `Outcome::Rebuilt`, and the byte identity is asserted, so the envelope difference is accounted for rather than noticed |
+| Device against reference, ray for ray | 3,072 rays, 605 surfaces, **0 hit/miss disagreements**, worst deviation **0.000001** | The boot's own camera law (`probe_camera()`: surface 1e-3, 96 steps, max `t` 40), not a grid invented for the probe — `marched.max_steps` and `marched.surface` are asserted to be that law, so a clamped shader could not pass for the demo's frame |
+| Reused frame against one-shot | **0 of 3,072 depths differ in any bit** | AS4's persistent buffers must be the same renderer; a bit-level comparison is the only version of that claim that is not a tolerance argument |
+| The plant | `pool[0] += 2.0` → **80 rays flip between surface and sky**, surviving rays still within 0.000001 | The depth tolerance cannot see a scene that moved; the hit/miss set can, which is why the anchor is the set |
+
+This is not R1: 3,072 rays on a CPU-law grid is a shape of a frame, and the 1080p budget question is
+unchanged. It is also not the boot reading a file — the shipped binary still builds its scene through
+`assetc` in memory, so the remaining step for the demo's rendering clause is to boot *from* the compiled
+asset rather than beside it.
+
 ## Materials, lighting, sky
 
 Materials are functions of `(p, n, t)` — no texture files, ever. Beyond that the conversation

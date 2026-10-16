@@ -1,0 +1,30 @@
+// The pitch demo's own scene, as content.
+//
+// This is the shape `crates/engine/src/main.rs` builds in code for the boot's `scene_tree()`: the hero
+// (a rounded box blended with two spheres) unioned with three spheres spread across the world. It exists
+// in both forms on purpose. The boot's compiled scene is published as three integers - 11 nodes, depth 4,
+// 348 bytes - and this file is the question those integers answer: can the same scene arrive the way
+// docs/09 says content arrives, through an authoring file the compiler reads, rather than a tree the
+// binary wrote for itself?
+//
+// So the numbers here are the boot's, unchanged: same halves, same radii, same centres, same k, same
+// grouping. `crates/gpu/examples/boot_scene_on_device.rs` compiles this file with the shipped
+// `assetc::watch::Watch` and requires the lowered tree to carry the same node count and depth the boot
+// prints, then marches it on a device. If the two forms ever drift, that example is where it shows up.
+Union(
+    a: Union(
+        a: RoundedBox(half: (0.35, 0.35, 0.9), r: 0.12),
+        b: SmoothUnion(
+            a: Sphere(r: 0.7, centre: (-0.9, 0.0, 0.0)),
+            b: Sphere(r: 0.7, centre: (0.9, 0.0, 0.0)),
+            k: 0.5,
+        ),
+    ),
+    b: Union(
+        a: Sphere(r: 0.5, centre: (-6.0, 0.0, 1.5)),
+        b: Union(
+            a: Sphere(r: 0.5, centre: (6.2, -0.4, -1.0)),
+            b: Sphere(r: 0.5, centre: (1.0, 3.2, 7.5)),
+        ),
+    ),
+)

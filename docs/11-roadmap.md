@@ -258,6 +258,25 @@ level, and two are not started** - the table below is the accurate reading, not 
 
 ### Phase 1 exit, gate by gate — measured 2026-10-12, reconciled against this device and this session's runs on 2026-10-13
 
+**Updated 2026-10-16 — the demo's scene now has a device path through the asset pipeline.**
+`crates/assetc/tests/fixtures/boot_scene.ron` is the boot's own scene written as *content*, and
+`crates/gpu/examples/boot_scene_on_device.rs` compiles it with the shipped `assetc::watch::Watch`, reads the
+bytes back through `assetc::reader`, and marches them on a GPU over the reused-frame path. On the MX250 the
+compiled asset is **345 bytes = 276 tree + a 14-character label + a 55-byte header** — the boot's published
+348-byte asset with only the stamped name different, and **11 nodes / 25 parameters / depth 4 identical on
+both sides by assertion**, which is what makes "two descriptions of one scene" a checked claim rather than a
+habit. **3,072 rays under the boot's own camera law (64×48, surface 1e-3, 96 steps, max `t` 40, from
+`probe_camera()`) found 605 surfaces with zero hit/miss disagreements against `render::march` and a worst
+depth deviation of 0.000001**, and `march_frame` matched `march_uploaded` on all 3,072 `f32::to_bits` — AS4's
+buffer reuse is not a second renderer. The plant: `pool[0] += 2.0` flipped **80** rays between surface and sky
+while leaving every surviving ray inside 0.000001, which is the standing reason this repository anchors on
+the hit/miss set rather than on a depth tolerance. What it does not move: R1's 16.67 ms at 1080p (a 64×48
+grid is a shape, not a budget); the boot's published 18-line output (`engine` still does not depend on
+`gpu`, and this example runs beside it); and the fact that the boot still compiles its scene **in memory**
+rather than loading `boot_scene.ron`'s bytes at boot, which is the last step of that clause. See doc 04,
+"The demo's scene as content, on a device".
+
+
 The completion test has four clauses and eleven gates hanging off it, so each is listed with the
 evidence that decides it rather than with a colour. Read the last row first: **the ledger half of the
 demo exists, the engine half boots and can turn a compiled asset into pixels on a CPU, and what does not

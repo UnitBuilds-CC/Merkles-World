@@ -301,6 +301,11 @@ jobs:
       # and an in-binary plant that leaves the device stale. Runners with no adapter print their own SKIP line.
       - name: AS4 asset re-upload (informational)
         run: cargo run --release -p gpu --example as4_asset_reupload
+      # The demo scene arrives as a .ron file through the shipped compiler and is drawn by the shader.
+      # Informational for the same reason every other device step is: a runner with no GPU prints its own
+      # SKIP line, and the asserts that do run are integers and geometry, never a duration.
+      - name: Demo scene from content on a device (informational)
+        run: cargo run --release -p gpu --example boot_scene_on_device
 
       # AS4's hot-path clause: one upload, then frames that bind it. The asserted terms are byte counts and
       # bit-identical depths, with a mutated shape required to diverge; a runner without a device prints SKIP.
