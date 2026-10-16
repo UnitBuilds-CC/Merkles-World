@@ -296,6 +296,12 @@ jobs:
         env: { MERKLES_R2_DEVICE_FRAMES: "3600" }
         run: cargo run --release -p gpu --example r2_device_span
 
+      # AS4's asset side: a changed shape re-uploaded into the buffers the first upload created. 600 edits at
+      # the edit cadence, every depth compared bit-for-bit against a fresh upload, plus the capacity refusal
+      # and an in-binary plant that leaves the device stale. Runners with no adapter print their own SKIP line.
+      - name: AS4 asset re-upload (informational)
+        run: cargo run --release -p gpu --example as4_asset_reupload
+
       # AS4's hot-path clause: one upload, then frames that bind it. The asserted terms are byte counts and
       # bit-identical depths, with a mutated shape required to diverge; a runner without a device prints SKIP.
       - name: Shape uploaded once, bound per frame (informational)

@@ -82,6 +82,10 @@ pub struct Shape {
     pool: wgpu::Buffer,
     pub bytes: usize,
     pub node_count: usize,
+    /// The capacity each buffer was created with, so a re-upload can refuse a tree that outgrows the shape
+    /// instead of writing past it. AS4's asset-side clause: an edit reuses these bytes and creates nothing.
+    pub nodes_capacity: u64,
+    pub pool_capacity: u64,
 }
 
 /// A frame's device-side buffers, created once for a fixed ray count and refilled by `march_frame`.
@@ -525,12 +529,14 @@ impl Interpreter {
     /// Put a shape on the device once, so a later frame can bind it without allocating or copying its
     /// bytes again. The `.len()` fields are taken before the buffers move.
     pub fn upload(&self, tree: &Tree) -> Shape {
-        let storage = wgpu::BufferUsages::STORAGE;
+        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let nodes = node_bytes(tree);
         let pool = bytes_of_f32(&tree.params);
         Shape {
             bytes: nodes.len() + pool.len(),
             node_count: tree.nodes.len(),
+            nodes_capacity: nodes.len() as u64,
+            pool_capacity: pool.len() as u64,
             nodes: self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -546,6 +552,31 @@ impl Interpreter {
                     usage: storage,
                 }),
         }
+    }
+
+    /// Move a changed shape onto the device **without creating a buffer**: the two `write_buffer` calls land in
+    /// the bytes `upload` already allocated. This is AS4's asset-side clause measured instead of asserted — an
+    /// edit that grows a tree past the capacity it first uploaded refuses here rather than silently re-creating,
+    /// because a re-creation is the allocation churn §3 bans. Returns the bytes written.
+    pub fn upload_into(&self, shape: &mut Shape, tree: &Tree) -> Result<usize, String> {
+        let nodes = node_bytes(tree);
+        let pool = bytes_of_f32(&tree.params);
+        if nodes.len() as u64 > shape.nodes_capacity || pool.len() as u64 > shape.pool_capacity {
+            return Err(format!(
+                "a {}-node / {}-param-byte shape does not fit the {} / {} bytes already resident - re-uploading \
+                 into a reused asset buffer grows nothing, so a tree that outgrows its first upload needs a new \
+                 upload (and the allocation that clause refuses)",
+                nodes.len() / 16,
+                pool.len(),
+                shape.nodes_capacity,
+                shape.pool_capacity
+            ));
+        }
+        self.queue.write_buffer(&shape.nodes, 0, &nodes);
+        self.queue.write_buffer(&shape.pool, 0, &pool);
+        shape.bytes = nodes.len() + pool.len();
+        shape.node_count = tree.nodes.len();
+        Ok(shape.bytes)
     }
 
     /// Everything a march does with a shape that is already resident — the half a reused frame pays.
