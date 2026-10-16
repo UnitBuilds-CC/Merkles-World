@@ -286,6 +286,16 @@ jobs:
       - name: R2 ten-minute span (informational)
         run: cargo run --release -p engine --example r2_ten_minute_span
 
+      # R2's span over the device path: the same cadence marched by interp.wgsl's march_rays through the frame
+      # that creates no buffers (begin_frame once, write_rays/march_frame per frame), asserting per-frame hits,
+      # placement and ray-for-ray agreement with render::march. 3,600 frames rather than 36,000 because a
+      # runner's device frames are 1-20 ms and this job has a timeout, not because the assert is weaker; the
+      # full ten minutes ran on the MX250 and the run prints the count it actually did. No-adapter runners
+      # print their own SKIP line.
+      - name: R2 span on a device (informational)
+        env: { MERKLES_R2_DEVICE_FRAMES: "3600" }
+        run: cargo run --release -p gpu --example r2_device_span
+
       # AS4's hot-path clause: one upload, then frames that bind it. The asserted terms are byte counts and
       # bit-identical depths, with a mutated shape required to diverge; a runner without a device prints SKIP.
       - name: Shape uploaded once, bound per frame (informational)

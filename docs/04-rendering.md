@@ -1310,6 +1310,45 @@ measured curve.
 > Every number in this section is a target or a derivation. The transcript's "60 FPS" is
 > aspirational; spike S1 replaces all of this with a measured frame-time curve.
 
+### R2's span on the device: 36,000 frames marched by the shader (2026-10-16, `cargo run --release -p gpu --example r2_device_span`, MX250/Vulkan)
+
+The CPU span above ran the ten minutes against `render::march` and said the device's span was still derived;
+`device_edit_loop` ran the device at four occupancies. This joins them — 36,000 consecutive frames at 64×48
+through `begin_frame` / `write_rays` / `march_frame`, one slab edit every sixth frame, 6,000 records = ten
+minutes at ten a second. Two runs of the shipped binary: **every asserted integer identical** (hit counts, the
+ray totals checked, the worst deviation, the byte and record counts), wall clock 66,902 ms and 63,030 ms —
+9.0x and 9.5x faster than the session it reproduces.
+
+Four asserted terms, all integers or geometry (ADR-017 forbids the rest):
+
+| term | value |
+|------|-------|
+| rays finding surface, every frame | **3,072 at frame 1 and frame 36,000, asserted equal frame to frame** |
+| device vs `render::march` | **6,900,480 lattice rays + 184,320 in 60 full-grid checks, 0 hit/miss disagreements, worst depth deviation 0.000005** against the 0.002 bound |
+| placement, every frame | centre depth **7.5129** against doc 02's 7.500 ± 0.05, and more than half a unit nearer than the unedited terrain's **9.0000** |
+| ledger | every edit reads back; **6,000** tree rebuilds + shape uploads + re-binds (480,000 shape bytes, 80 each) and **6,000** refills of 98,304 bytes, for **36,000** frames that created no buffer and no bind group |
+
+Two findings the four-occupancy loop could not produce. First, **the frame path holds at span length**: a
+reused `Frame` means the per-frame allocation count is zero across 36,000 frames, while an edit still reaching
+the GPU still costs a host rebuild plus a re-upload plus a re-bind — OQ-55's price, now counted at the edit
+cadence rather than sampled. Second, **the growing term lives in the read-back, not the frame**: marching the
+ledger through `deltas().collect()` once per edit touched **18,003,000 record visits** over the span (3,000
+average per edit, 500 per frame), where the device's own per-frame work is a constant 3,072 rays. The CPU span
+took its read-back once, at the end, so this is the first measurement of the commit path amortised across a
+whole session — and it is arithmetic on asserted record counts, not a duration.
+
+Milliseconds are printed and asserted nowhere: on the run above, min 0.84, median 0.96, p95 6.28, p99.9 7.31,
+max 26.35 ms over 36,000 device frames (0.81 / 0.94 / 6.25 / 7.33 / 22.11 on the second), a 7.6x tail here
+where the same harness measured 1.27x–12.7x on the CPU reference. The frame count is settable through `MERKLES_R2_DEVICE_FRAMES`; CI runs 3,600 because a runner's
+device frames cost 1–20 ms and the job has a timeout — the per-frame assert is the same one, and each run
+prints the count it actually did.
+
+The plant runs inside the binary rather than in a script: after the last frame, the same grid marched over the
+**unedited** terrain must miss the placement bound. It returns 9.0000 against the 7.5 ± 0.05 window, so the
+per-frame depth assert demonstrably tests whether the edit arrived rather than whether a buffer was filled.
+
+R1's 16.67 ms at 1080p is untouched by this — a 64×48 grid prices the span, not the frame budget.
+
 ## Materials, lighting, sky
 
 Materials are functions of `(p, n, t)` — no texture files, ever. Beyond that the conversation

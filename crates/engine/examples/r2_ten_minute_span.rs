@@ -24,7 +24,7 @@
 //! What this is NOT: not R1 (a 64×48 CPU reference march is a shape of a frame, not a 1080p GPU frame
 //! budget), not a hashed number (timings are never hashed and never gate evidence — ADR-017, gate R4 is
 //! informational), and not the device path (`device_edit_loop` runs the same invariant over `interp.wgsl`'s
-//! `march_rays`, but at four occupancies; the device's span is not run here).
+//! `march_rays`, but at four occupancies; gpu's r2_device_span runs the whole span there.
 //!
 //! The span's millisecond distribution is printed as a distribution over all 36,000 samples, which is the
 //! only thing that could make R2's "stable" word measurable at all — and the honest version of that claim is
@@ -250,8 +250,8 @@ fn main() {
     println!(
         "//                    march_rays) has the same invariants asserted at four occupancies by"
     );
-    println!("//                    gpu's device_edit_loop, and an edit still reaches the GPU by a host-side");
+    println!("//                    gpu's device_edit_loop, and gpu's r2_device_span now runs the span there too, while an edit still reaches the GPU by a host-side");
     println!("//                    tree rebuild because A-07 has no instance node (OQ-55). So R2's span is");
-    println!("//                    MEASURED on the reference and still DERIVED on a device, and R1's frame");
+    println!("//                    MEASURED on the reference AND on a device (36,000 device frames, 3,072 hits asserted equal every one), and R1's frame");
     println!("//                    budget is unmet on both - culling on the GPU, not this loop, is that gate.");
 }
