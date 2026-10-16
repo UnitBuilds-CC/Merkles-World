@@ -173,6 +173,24 @@ fn main() {
         );
     }
 
+    // Two digests pinned as assertions rather than printed as information, because AGENTS.md §4 puts a
+    // macro field value in the seat another machine must reproduce bitwise: the origin pins the rule's
+    // fixed point and the final root pins 600 commits of it. A runner that disagrees goes red here, which
+    // is the point - the S7 finding stops being a number to eyeball and becomes a checked cross-target
+    // claim.
+    assert_eq!(
+        hex(&origin),
+        "134d7a3fc5efab7ada9947d05efe3e54ca8e95534be2ba0f752189cb7ca8c099",
+        "the equilibrium field root moved, so the river's starting state is no longer the one every target agreed on"
+    );
+    assert_eq!(
+        hex(&full[COMMITS - 1]),
+        "4a99a06ad6c1180df8a27b58e5105bfd672c1bd210fede7d659502f9e45650a2",
+        "the final field root moved: a target disagrees with the two clients, or the rule changed"
+    );
+    println!(" pinned digests   : equilibrium and final field root asserted on this machine");
+    println!();
+
     // The plant: a field one unit off at one region has to move the root. Without this the table above
     // could be a hasher that ignores its payload and still print twelve agreeing digests.
     let mut tampered = start.clone();
@@ -196,7 +214,7 @@ fn main() {
     println!("//   end of the run, so the honest SM1 wording is 'agree on the epoch root', not 'agree at all times'.");
     println!("// - that window is OQ-01's lag with a number attached to it. How many epochs a peer may be behind");
     println!("//   before the difference matters is still the owner's call; this only says what the rule costs.");
-    println!("// - not measured: a second machine. Three CI architectures reproduce the final digest printed above,");
+    println!("// - not measured: a second machine. Three CI architectures assert the two field digests pinned above,");
     println!("//   and that is the cross-target half; the four named targets of P1.5 cover the ledger roots, not a");
     println!("//   macro field, because A-04 does not exist. S7's consensus half is now buildable and measured for");
     println!("//   one client pair; SM1 as written ('two clients, identically') still waits on A-04 and A-05.");
