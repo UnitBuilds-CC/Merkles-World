@@ -253,8 +253,20 @@ zero knowledge of pigs or wood.
 
 **P1 exit — the completion test, which is also the pitch demo:** a booting engine, a rendered
 procedural scene, an edit that persists, and one deterministic hash that matches across all four
-determinism targets (gate P1.5). **One of the four clauses is now true, one is true at the ledger
-level, and two are not started** - the table below is the accurate reading, not this sentence.
+determinism targets (gate P1.5). **Measured 2026-10-16: no clause is un-instrumented any more. Two are met
+outright, one is met with an unmet gate attached to it, and the fourth is met as amended** - the table below
+is the per-gate evidence, and this sentence is now accurate enough to keep. A booting engine: **met**, and its
+18 published stdout lines are what every parity leg on every runner diffs. An edit that persists: **met** at
+the ledger level, with its frame half measured rather than argued - doc 02's placement holds under the CPU
+march and on the device, and R2's 36,000-frame span runs on both. A rendered procedural scene: **met as
+pixels, unmet as a frame** - the scene is now *content* (`crates/assetc/tests/fixtures/boot_scene.ron`), the
+shipped binary boots from the compiled `.bin` with 17 of its 18 lines byte-identical to the in-code boot, and
+the same asset marches on two vendors' GPUs with zero hit/miss disagreements against the CPU reference; but
+every one of those frames is a 64x48 grid, so gate R1's 16.67 ms at 1080p stays unmet on both paths. One hash
+across four targets: **met as amended** - three architectures, WASI, Chromium, JavaScriptCore and both named
+devices recorded `agrees` at `db71f8a0…`, the standing caveat being that a CI runner's Safari is not somebody's
+M1 MacBook. What is *not* any of this: the clauses say nothing about a window, a display, or a frame that
+meets a budget, and the demo has never been shown on one.
 
 ### Phase 1 exit, gate by gate — measured 2026-10-12, reconciled against this device and this session's runs on 2026-10-13
 
