@@ -418,6 +418,64 @@ per-frame allocation, one upload — is the same conclusion from the allocation 
 carries this split instead of only the 824 ms. Neither is asserted as a duration (ADR-017): what the binary
 asserts is the seven per-cap hit counts and the seven per-cap depth deviations.
 
+### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
+
+The previous section's closing claim was made on a 640×360 grid and its own text flagged the gap: "cap-independent
+is not resolution-independent", and the bus-vs-device half of the round trip was unattributed because
+`march_uploaded` creates its ray buffer with `create_buffer_init`, so the host→device copy of the grid happens
+*before* any stopwatch starts. Both gaps are now closed by `Interpreter::begin_frame` / `write_rays` /
+`march_frame` (buffers allocated once per ray count, the grid packed in place and pushed with two
+`write_buffer` calls — which is also AS4's no-per-frame-allocation clause satisfied on the frame path rather than
+asserted in prose), measured by `cargo run --release -p gpu --example r1_round_trip_split` at **1920×1080**, the
+grid the previous attempt could not repeat.
+
+Two consecutive runs, MX250/Vulkan, buffers allocated once for the whole sweep:
+
+| cap | frame surfaces | sampled ref / device hits | disagreements | worst &#124;dev&#124; | write ms (run 1 / 2) | submit ms | wait after a write ms (run 1 / 2) | wait, nothing written (run 1 / 2) |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 0 | 0 / 0 | 0 | 0.000000 | 73.93 / 66.32 | 0.30 / 0.74 | 113.84 / 115.91 | 126.42 / 96.10 |
+| 8 | 65,148 | 66 / 66 | 0 | 0.000000 | 62.66 / 30.86 | 0.21 / 0.16 | 798.26 / 729.57 | — |
+| 64 | 80,964 | 80 / 80 | 0 | 0.000000 | 42.34 / 32.45 | 0.29 / 0.23 | 881.17 / 875.39 | — |
+
+**Every asserted integer reproduced between the two runs and the milliseconds did not**, which is the same
+discipline the section above applies: the hit counts, the sampled agreements, the zero disagreements and the
+0.000000 deviations are identical in both; `write_rays` moved from 73.93 to 66.32 ms at cap 1 and the refill
+delta changed *sign* (−12.58 ms then +19.81 ms), so the refill cannot be separated from the wait by this
+instrument and what it demonstrably costs is its own interval — the copy into the driver's staging, the number no
+earlier measurement contained. The cap-64 wait (875–881 ms) agrees with `on_device_march`'s independently written
+824 ms to within 6–7%, from a different binary and a different buffer path, and 2,073,600 rays × 32 bytes out
+against 92-byte scene asset is 74,649,600 bytes per frame — integers, not timings.
+
+What the run **retracts** is the shape claim. At 640×360 the step work saturates (cap 4 and cap 8 find the same
+7,240 surfaces). At 1080p it does not: cap 8 → cap 64 adds 15,816 surfaces (65,148 → 80,964, 24% more of the
+frame's own hits) and the wait grows from ~114 ms at cap 1 to 875 ms at cap 64 — 655–674% of the cap-1 wait for
+64× the permitted steps. So the sentence "R1's named lever attacks work that saturates while the round trip keeps
+costing the same" is **true of a 230,400-ray grid and false of R1's grid**, and the instrument that says so is
+the newly added lattice anchor: 2,040 pixels (every 32nd of both axes) marched by `render::march` at each row's
+cap and compared ray-for-ray against the device. That anchor was not decoration. The first version of it sampled
+a flat stride of 64 over the ray index, which at width 1920 is degenerate — 1920 is a multiple of 64, so every
+sampled ray sat in column 0, the most oblique column in the picture — and it refused the cap-8 row with the
+device seeing 0 hits where the reference saw 1,020. Replacing the degenerate sample with the 2-D lattice made the
+same row agree at 66/66, which is the difference between a found bug and an instrument bug, and it is why the
+lattice prints its own ref/dev/disagreement columns *before* its asserts fire: a run of this binary that had
+panicked on the earlier sample would have left no numbers behind, and the cap-64 row of the run before these two
+had already shown what an unanchored 1080p row can print (the cap-8 hit count, with a wait matching its own cap-1
+row — exactly what a header whose cap never landed would look like, and nothing in the program could disagree).
+
+The floor is then the honest part of the earlier claim: **cap 1 — one step per ray, 0 surfaces found — waits
+114–126 ms for a frame that also spends 66–74 ms in `write_rays`, i.e. 46–61 ns per ray before any ray marches,
+5.8–7.6× R1's whole 16.67 ms.** At that per-ray cost the budget buys 273k–360k rays, 13–17% of the grid. So at
+R1's resolution both halves are over budget and four levers survive, in the order cheapest to test: derive the
+rays in the shader instead of uploading 2M of them, march fewer of them (culling, tiles, the streamed carry), cap
+the steps — the lever the 640×360 sweep ruled out and this grid restores — and keep the depths on the device,
+since a shipping frame maps nothing and most of the wait is this probe reading a buffer back to check it. The
+first three are not measured here: the instrument has to write its rays and read them back to have anything to
+assert, so it prices the frame it can check, not the frame an engine would draw. R1 stays informational (ADR-017,
+gate R4); what the binary asserts is the per-cap hit counts, the lattice's ray-for-ray agreement with
+`render::march`, bit-identity with the allocate-per-call path, four refusals run inside the program (a
+mismatched grid, an unwritten frame, a re-bound shape, a moved camera) and the byte counts.
+
+
 ### The first number off a real GPU, and it is a design verdict rather than a pass (2026-10-13)
 
 `cargo run --release -p gpu --example frame_curve` measures the one quantity that exists on a device today:

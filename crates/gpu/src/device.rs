@@ -84,6 +84,32 @@ pub struct Shape {
     pub node_count: usize,
 }
 
+/// A frame's device-side buffers, created once for a fixed ray count and refilled by `march_frame`.
+///
+/// The host-side allocation this replaces is four buffers plus a bind group per march; on this adapter that
+/// churn is not just a gate violation, it is what lost the device at 1080p. `packed` is the ray byte buffer
+/// the frame writes into in place, so refilling a frame parses nothing and allocates nothing either.
+#[derive(Debug)]
+pub struct Frame {
+    pub rays: usize,
+    queries: wgpu::Buffer,
+    header: wgpu::Buffer,
+    traced: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    packed: Vec<u8>,
+    /// The step cap and surface tolerance currently on the device for this frame, recorded by `write_rays`.
+    /// A frame with no law has never been filled, and marching it would report numbers for rays that are not
+    /// there.
+    law: Option<(u32, f32)>,
+}
+
+/// The bind group pairing one resident `Shape` with one `Frame`. AS4's frame-side clause counts bind groups
+/// as well as buffers, so this is created per (shape, frame) pair and reused by every frame after the first.
+#[derive(Debug)]
+pub struct Bind {
+    bind: wgpu::BindGroup,
+}
+
 /// One distance comparison.
 pub struct Agreement {
     pub adapter: String,
@@ -637,6 +663,169 @@ impl Interpreter {
             rays: rays.len(),
             max_steps: first.max_steps,
             surface: first.surface,
+            hits,
+            ms_submit_only,
+            ms_frame_with_read,
+            depths,
+        })
+    }
+
+    /// The buffers a frame owns once, for a fixed ray count: packed rays in, depths out, plus the header
+    /// pair the shader reads.
+    ///
+    /// `march_uploaded` still creates four buffers and a bind group per call, which is what AS4's
+    /// no-allocation-churn clause is about — and what lost this repo a device at 1080p, where a fresh 66 MB
+    /// ray buffer per march makes the driver thrash. A `Frame` is allocated once and then refilled by
+    /// `write_buffer`, so a repeated frame touches no new device memory and its only host allocation is the
+    /// depth vector it hands back.
+    pub fn begin_frame(&self, ray_count: usize) -> Frame {
+        let storage = wgpu::BufferUsages::STORAGE;
+        let depth_bytes = (ray_count * 4) as u64;
+        Frame {
+            rays: ray_count,
+            queries: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame-rays"),
+                size: (ray_count * 32) as u64,
+                usage: storage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            header: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame-header"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            traced: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame-depths"),
+                size: depth_bytes,
+                usage: storage | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            staging: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("frame-staging"),
+                size: depth_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            packed: vec![0u8; ray_count * 32],
+            law: None,
+        }
+    }
+
+    /// Bind a resident shape to a frame's buffers: the pair a running renderer holds between frames, made
+    /// once per (shape, frame) rather than once per frame.
+    pub fn bind(&self, shape: &Shape, frame: &Frame) -> Bind {
+        Bind {
+            bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.march_pipeline.get_bind_group_layout(0),
+                entries: &[
+                    entry(0, &shape.nodes),
+                    entry(1, &shape.pool),
+                    entry(2, &frame.queries),
+                    entry(3, &frame.header),
+                    entry(4, &frame.traced),
+                ],
+            }),
+        }
+    }
+
+    /// Fill a frame whose buffers already exist: pack the rays into the byte buffer `begin_frame` allocated
+    /// once, then move them and the header with two `write_buffer` calls. Nothing here creates a buffer, a bind
+    /// group or a pipeline.
+    ///
+    /// Split from `march_frame` so the two directions of the host round trip can be priced apart — this call is
+    /// the host-to-device copy, that one is the dispatch plus the read-back — and it returns the byte count it
+    /// wrote, so a caller divides by a measured figure instead of hoping `rays * 32` is the width on the bus.
+    pub fn write_rays(&self, frame: &mut Frame, root: u32, rays: &[Ray]) -> Result<usize, String> {
+        let Some(first) = rays.first() else {
+            return Err("no rays to write".to_string());
+        };
+        if rays.len() != frame.rays {
+            return Err(format!(
+                "this frame was built for {} rays and the grid has {}",
+                frame.rays,
+                rays.len()
+            ));
+        }
+        for ray in rays {
+            if ray.surface != first.surface || ray.max_steps != first.max_steps {
+                return Err("rays disagree on surface or max_steps".to_string());
+            }
+        }
+        for (index, ray) in rays.iter().enumerate() {
+            let start = index * 32;
+            let chunk = &mut frame.packed[start..start + 32];
+            chunk[..16].copy_from_slice(&vec4_bytes([
+                ray.origin[0],
+                ray.origin[1],
+                ray.origin[2],
+                root as f32,
+            ]));
+            chunk[16..]
+                .copy_from_slice(&vec4_bytes([ray.dir[0], ray.dir[1], ray.dir[2], ray.max_t]));
+        }
+        let mut header = [0u8; 16];
+        for (offset, word) in [
+            rays.len() as u32,
+            STACK_DEPTH,
+            first.max_steps,
+            first.surface.to_bits(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            header[offset * 4..offset * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        self.queue.write_buffer(&frame.queries, 0, &frame.packed);
+        self.queue.write_buffer(&frame.header, 0, &header);
+        frame.law = Some((first.max_steps, first.surface));
+        Ok(frame.packed.len())
+    }
+
+    /// March the frame `write_rays` last filled. The cap and tolerance reported are the ones that call recorded
+    /// on the frame, so this cannot state a law the device was never handed; a frame nobody has written into is
+    /// an error, not a zero-filled march.
+    pub fn march_frame(&self, bind: &Bind, frame: &Frame) -> Result<March, String> {
+        let Some((max_steps, surface)) = frame.law else {
+            return Err("march_frame on a frame no rays have been written into".to_string());
+        };
+        let size = (frame.rays * 4) as u64;
+        let start = std::time::Instant::now();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&self.march_pipeline);
+            pass.set_bind_group(0, &bind.bind, &[]);
+            pass.dispatch_workgroups(frame.rays.div_ceil(64) as u32, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&frame.traced, 0, &frame.staging, 0, size);
+        self.queue.submit([encoder.finish()]);
+        let ms_submit_only = start.elapsed().as_secs_f64() * 1000.0;
+        let raw = self.read(&frame.staging, size)?;
+        let ms_frame_with_read = start.elapsed().as_secs_f64() * 1000.0;
+
+        let mut depths = Vec::with_capacity(frame.rays);
+        let mut offset = 0usize;
+        while offset + 4 <= raw.len() {
+            depths.push(f32::from_le_bytes(
+                raw[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| "short read")?,
+            ));
+            offset += 4;
+        }
+        let hits = depths
+            .iter()
+            .filter(|depth| **depth < UNSUPPORTED_HALF)
+            .count();
+        Ok(March {
+            adapter: self.adapter.clone(),
+            rays: frame.rays,
+            max_steps,
+            surface,
             hits,
             ms_submit_only,
             ms_frame_with_read,
