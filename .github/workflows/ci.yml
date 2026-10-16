@@ -247,6 +247,17 @@ jobs:
       - name: GPU on-device march (informational)
         run: cargo run --release -p gpu --example on_device_march
 
+      # R1's budget decomposed instead of asserted: the same scene marched at seven step caps on a 640x360
+      # grid, with the per-cap hit count and max depth deviation against `render::march` asserted in-binary.
+      # The reproducible finding is an integer - cap 4 and cap 8 find the same surfaces, 16x the steps change
+      # 0.77% of the grid - while the millisecond curve did not reproduce across five runs and is printed as one
+      # sample each. So R1's lever attacks work that saturates, not the cap-independent host round trip. 640x360
+      # and not 1080p on purpose: repeating a 66 MB ray buffer dispatch until the driver lost the device is a
+      # worse instrument than a smaller grid whose 1080p claim prints itself as a DERIVED ratio. Runners with no
+      # adapter print their own SKIP line.
+      - name: R1 step-price sweep (informational)
+        run: cargo run --release -p gpu --example r1_step_price
+
       # R2's edit loop: the frame re-marched at four slab occupancies, asserting placement every frame and
       # equal charged evaluations (18,284) across a 6000x change in occupancy. The medians are informational
       # and asserted nowhere - a laptop's median moved 2.5x between runs of identical code.

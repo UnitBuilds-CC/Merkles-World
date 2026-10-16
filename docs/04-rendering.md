@@ -347,6 +347,73 @@ deviation 0.000000**. The check was falsified before it was trusted — replacin
 did not catch it (0.0073 sits under any tolerance a 64-step march needs), which is why the assertion is on the
 hit/miss *set*. Timings repeat: 824.7 and 824.2 ms across two runs of the same binary.
 
+### R1's frame split two ways, and the half R1 names is the one that stops costing (2026-10-16)
+
+The section above says the 1080p frame is 49× over budget and points at culling. Before accepting that
+direction, `cargo run --release -p gpu --example r1_step_price` prices the two terms separately on the same
+three-node field: it marches one grid at seven step caps, and at each cap asserts the 64×48 anchor against
+`render::march` (hits equal, 0 hit-vs-miss disagreements, max deviation 0.000000 — 132 hits at cap 64, the same
+number `on_device_march` reports from a different binary), then times 230,400 rays at that cap. Three reps,
+median printed, MX250/Vulkan:
+
+| cap | small-grid device hits | reference hits | disagreements | worst &#124;dev&#124; | frame hits | ms | ns per ray-step (amortised) |
+|---|---|---|---|---|---|---|---|
+| 1 | 0 | 0 | 0 | 0.000000 | 0 | 24.28 | 105.36 |
+| 2 | 12 | 12 | 0 | 0.000000 | 976 | 33.04 | 71.69 |
+| 4 | 96 | 96 | 0 | 0.000000 | 7,240 | 51.11 | 55.46 |
+| 8 | 96 | 96 | 0 | 0.000000 | 7,240 | 80.90 | 43.89 |
+| 16 | 116 | 116 | 0 | 0.000000 | 8,108 | 93.50 | 25.36 |
+| 32 | 116 | 116 | 0 | 0.000000 | 8,768 | 99.16 | 13.45 |
+| 64 | 132 | 132 | 0 | 0.000000 | 9,012 | 107.90 | 7.32 |
+
+Read it as a sum of two terms, and read the millisecond column as five separate runs said to be read that way.
+**This table is run 1 of five.** **Cap 1 is a frame with essentially no march in it** — one step per ray, 0 of
+the small grid's rays reaching the surface — and across five runs that row cost **24.28, 33.24, 87.92, 32.62 and
+32.27 ms**: the dispatch, the 7.4 MB ray buffer and the depth copy-back, **every one of them over R1's entire
+16.67 ms budget before the step loop matters**. The *curve*, on the other hand, did not reproduce, and the honest
+version of this section has to say so: runs 1-2 rose smoothly to ~108 ms, while runs 3-5 put a **bimodal cap-8
+row** in the middle — 80.90 and 95.69 ms in the first two, **550.6 / 551.7 / 545.5 ms** in the three later ones —
+with cap 64 falling back under it at 108–126 ms in all three. Ratioed against their own cap-1 rows, five runs of
+the same measurement price cap 8 anywhere from **2.9× to 16.9× cap 1**, which is not a measurement of a step
+loop; it is a measurement of a laptop driver. The first draft
+of this example answered the question by least-squares fitting the rows, the fit was invalid for data like that
+(intercept 60.4 ms against a measured 33.2 ms, and its budget line printed a *negative* number of affordable
+ray-steps), and the fit is gone rather than tuned.
+
+What did survive all five runs is an integer, and it is the part worth pricing against. **Cap 4 and cap 8 find
+exactly the same 7,240 surfaces of 230,400 rays, and cap 4 → cap 64 — sixteen times the permitted steps — moves
+the swept frame by 1,772 surfaces, 0.77% of the grid.** That is the saturation, stated as work rather than as
+milliseconds: past a small cap the rays that would converge have converged, and the rays that will never hit
+anything pay the same at any cap. The amortised column agrees in shape (105 → 7 ns per ray-step) but is the
+weaker evidence, for the reason above. And the 1080p figure stays a **DERIVED 9.0× ray ratio** against
+`on_device_march`'s own measured 824 ms, because this sweep deliberately does not run at 1080p.
+
+Two things the instrument does *not* establish, kept visible because they are the next questions. First, "fixed"
+here means **cap-independent at one grid**, not resolution-independent — the ray buffer and the depth copy both
+scale with pixels, and this sweep cannot separate a term that scales with resolution from one that does not.
+Second, it does not split the fixed term into bus versus device: `on_device_march` reports 0.15 ms for
+submit-only against 92.61 ms for one dispatch plus one copy-back at this grid, but the submit column is enqueue
+only, so the march itself hides inside the second number and the 64×48-vs-1080p gap stays unattributed. The row
+that would separate them is a cap-1 1080p frame, and this machine refused it: repeating a 66 MB ray-buffer
+dispatch at 1080p lost the device after four rows (`Parent device is lost`), and cap 8 came in at 1,745 ms
+there against 824 ms at cap 64 — driver thrash, not a frame. A persistent ray buffer, or a machine that survives
+21 full-resolution dispatches, owns that measurement.
+
+The anchor was falsified before it was trusted, and the plant returned a second finding. Giving the reference
+**one step more than the device** at every cap made the sweep stop at cap 1 with `12 hit-vs-miss` and exit 101 —
+so the check does test the step law rather than the scene. It also showed the hit-count assert was reading
+backwards: `reference_hits` was tallied only for rays where *both* sides found surface, so at cap 1 it printed 0
+against the reference's actual 12 and the count comparison was device-vs-intersection, not device-vs-reference.
+The disagreement arm would still have caught the plant, which is exactly why the counter was rewritten to count
+what the reference sees on its own — a check that can only fire in one direction is a check on half the bug
+space.
+
+The consequence for the roadmap queue: **R1's named lever (cull rays, bound hierarchy, fewer rays) attacks the
+term that has stopped costing, and the term that has not is the per-frame host round trip.** AS4's clause — no
+per-frame allocation, one upload — is the same conclusion from the allocation side, and docs/11's R1 row now
+carries this split instead of only the 824 ms. Neither is asserted as a duration (ADR-017): what the binary
+asserts is the seven per-cap hit counts and the seven per-cap depth deviations.
+
 ### The first number off a real GPU, and it is a design verdict rather than a pass (2026-10-13)
 
 `cargo run --release -p gpu --example frame_curve` measures the one quantity that exists on a device today:
