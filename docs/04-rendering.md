@@ -430,7 +430,6 @@ asserted in prose), measured by `cargo run --release -p gpu --example r1_round_t
 grid the previous attempt could not repeat.
 
 Two consecutive runs, MX250/Vulkan, buffers allocated once for the whole sweep:
-
 | cap | frame surfaces | sampled ref / device hits | disagreements | worst &#124;dev&#124; | write ms (run 1 / 2) | submit ms | wait after a write ms (run 1 / 2) | wait, nothing written (run 1 / 2) |
 |---|---|---|---|---|---|---|---|---|
 | 1 | 0 | 0 / 0 | 0 | 0.000000 | 73.93 / 66.32 | 0.30 / 0.74 | 113.84 / 115.91 | 126.42 / 96.10 |
@@ -444,7 +443,14 @@ delta changed *sign* (−12.58 ms then +19.81 ms), so the refill cannot be separ
 instrument and what it demonstrably costs is its own interval — the copy into the driver's staging, the number no
 earlier measurement contained. The cap-64 wait (875–881 ms) agrees with `on_device_march`'s independently written
 824 ms to within 6–7%, from a different binary and a different buffer path, and 2,073,600 rays × 32 bytes out
-against 92-byte scene asset is 74,649,600 bytes per frame — integers, not timings.
+against 92-byte scene asset is 74,649,600 bytes per frame — integers, not timings. CI run `38914217642` puts a **third vendor** behind those same integers:
+the ARM64 macOS runner opens `Apple Paravirtual device [Metal, IntegratedGpu]` and reports **0, 65,148 and 80,964
+surfaces** at the three caps with the same 66/66 and 80/80 sampled agreements, zero disagreements and 0.000000
+deviations, and the same verdict that the cap bites (+361.9% of the cap-1 wait); its own milliseconds are a
+different machine again — `write_rays` 25.41–33.48 ms, waits of 99.70 / 372.87 / 460.51 ms, a 30 ns-per-ray floor
+against the MX250's 46–61 — and it agrees with `on_device_march`'s 824 ms only to 44%, which is printed rather
+than smoothed. The x86-64 Linux and Windows `gates` jobs print `SKIP r1_round_trip_split: no device (NoAdapter)`,
+because no CI runner is a GPU.
 
 What the run **retracts** is the shape claim. At 640×360 the step work saturates (cap 4 and cap 8 find the same
 7,240 surfaces). At 1080p it does not: cap 8 → cap 64 adds 15,816 surfaces (65,148 → 80,964, 24% more of the
