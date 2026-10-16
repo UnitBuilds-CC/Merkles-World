@@ -306,6 +306,11 @@ jobs:
       # SKIP line, and the asserts that do run are integers and geometry, never a duration.
       - name: Demo scene from content on a device (informational)
         run: cargo run --release -p gpu --example boot_scene_on_device
+      # The shipped binary booting from the same .ron, with its own falsifying arm. `shell: bash` because
+      # the Windows default shell is PowerShell, where `set -euo pipefail` is a no-op.
+      - name: The demo boots from a compiled asset
+        shell: bash
+        run: bash tools/boot_from_asset.sh
 
       # AS4's hot-path clause: one upload, then frames that bind it. The asserted terms are byte counts and
       # bit-identical depths, with a mutated shape required to diverge; a runner without a device prints SKIP.

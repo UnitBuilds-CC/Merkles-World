@@ -1377,6 +1377,32 @@ runners compile the step and print their own `SKIP boot_scene_on_device: no devi
 having already written and re-read the 345-byte asset, so the AS1–AS3 half of the seam is checked on all
 three and the device half on the two that have a GPU.
 
+### The binary boots from the asset, and 17 of its 18 lines never know (`bash tools/boot_from_asset.sh`)
+
+The example above draws the content; the shipped binary now consumes it. The `assetc` CLI compiles
+`boot_scene.ron` into a 345-byte `.bin`, `cargo run --release -p engine -- <that file>` goes through
+`scene_from_disk`, and the script requires **every published line except `scene source` to be byte-identical
+to the in-code boot** — same probe-ray `t` (3.0070 after 8 evaluations), same 64×48 raster line, same region,
+budget, carry, ledger and epoch-root lines. The one line that differs prints the path it read, which is also
+why this cannot become the published run: gate P1.5's whole-output digest `db71f8a0…` is what both named
+devices are recorded against, and a machine-specific temp path cannot be hashed.
+
+So the equality needed a failure to be worth anything, and it has one. Moving one sphere centre from
+`z 7.5` to `z 1.0` leaves the asset **at the same 345 bytes** — same node count, same pool length, the
+envelope cannot see it — and changes what the demo marches:
+
+| Line | Honest asset | Tampered asset |
+|---|---|---|
+| `scene raster` | 605 of 3,072 rays, 241,779 evaluations, bound r 10.79 | 590 of 3,072 rays, 243,008 evaluations, bound r 8.20 |
+| `scene budget` | ceiling 88,921 of 177,843, 599 of 605 hits kept | ceiling 89,536 of 179,072, 584 of 590 hits kept |
+| `region world` | 174,881 charged evaluations | 174,879 |
+| `stream carry` | 813 frames at a 97-charge ceiling | same 813 frames, 57,663 charged |
+
+The script refuses three ways, all measured: a tampering `sed` that matches nothing, a tampered asset whose
+byte count differs (the compiler stamps the *file name* as the label, so the copy has to keep it), and a
+comparison that leaves the `scene source` line inside it — that last control exits 1 on this machine, which
+is what makes the 17-line agreement a diff that could have failed.
+
 ## Materials, lighting, sky
 
 Materials are functions of `(p, n, t)` — no texture files, ever. Beyond that the conversation

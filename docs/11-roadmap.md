@@ -277,7 +277,21 @@ rather than loading `boot_scene.ron`'s bytes at boot, which is the last step of 
 "The demo's scene as content, on a device". **And the numbers are not this machine's alone**: CI run
 `38925028343` reproduces 3,072 rays / 605 surfaces / 0 disagreements / deviation 0.000001 / 0 bit
 differences / 80 flipped rays under the plant on the ARM64 macOS Apple Paravirtual device over Metal, while
-the two GPU-less runners print their own SKIP line after having written and re-read the 345-byte asset.
+the two GPU-less runners compile the step and print their own SKIP line after having written and re-read the
+345-byte asset.
+
+**And the shipped binary now boots from that same file** (`bash tools/boot_from_asset.sh`, a CI step): the
+`assetc` CLI compiles `boot_scene.ron` to a 345-byte `.bin`, `cargo run --release -p engine -- <that .bin>`
+takes the `scene_from_disk` path, and **17 of the boot's 18 published lines come back byte-identical to the
+in-code boot** — the one that differs is the line that names where the scene came from, and both sides of it
+report 11 nodes / 25 parameters / depth 4. That is the demo's rendering clause closed at the binary level
+without re-baselining gate P1.5's published whole-output digest (`db71f8a0…`), which the disk boot cannot
+become because it prints the absolute path it read. The script's own falsifying arm is what makes the
+equality mean something: moving one sphere centre inside the frame — an edit that leaves the asset at the
+same **345 bytes**, same node count and same pool length — changes the marched picture
+(**605 → 590 surfaces, 241,779 → 243,008 charged evaluations, the root cull bound r 10.79 → 8.20**) and with
+it the budget, region and carry lines. Control run: with the `scene source` line left *inside* the
+comparison the script exits 1, so the agreement is a diff that can fail rather than a diff that cannot.
 
 
 The completion test has four clauses and eleven gates hanging off it, so each is listed with the
