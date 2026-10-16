@@ -229,6 +229,8 @@ jobs:
       # not of consensus, and the consensus half of gate SM1 cannot be measured until A-04 and A-05 exist.
       - name: Spike S7 macro propagation (informational)
         run: cargo run --release --example s7_propagation -p engine
+      - name: Spike S7 consensus half - two clients, one field root (informational)
+        run: cargo run --release --example s7_field_root -p engine
       # A-07 has two implementations now, so the contract's real claim is testable: the WGSL master
       # interpreter and crates/render must compute the same distances. Exits 0 with a printed SKIP where
       # no adapter exists (the Linux runner) and 1 where a device disagrees, so silence never reads as
