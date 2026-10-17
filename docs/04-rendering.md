@@ -543,6 +543,25 @@ registered in `docs/evidence.json` as phrase claims (`device_arm_skips_on_demo_s
 `tools/check_docs.mjs` fails if either doc drops or rewrites one; the claims record the docs' spelling, while the CI
 line prints the bare integer (`the device refused 22237 union second children`).
 
+**And then the arm was priced against itself, and the saving is not resolvable.** `arm_skips_on_device` now also
+uploads the same tree through `Interpreter::upload_bounds_refused`, which keeps the node records, the pool layout and the
+walk byte-identical and makes every bound radius `+inf` — a control whose bound test can only answer *no*. Three things
+are asserted before any number is read: the control's own tally is **0** refusals where the armed shape tallied
+**3,422** (so the control is a control, not the same walk measured twice), the two marches return **bit-identical depths
+on all 30 repeats** (so the arm is not changing the picture — the failure mode an enclosure that is too small would
+produce), and the earlier hit/set anchors hold. On this bench's **GeForce MX250 [Vulkan, DiscreteGpu]**, 768 rays,
+median of 30 marches: plain union **armed 3.635 ms against control 3.654 ms** (+0.5%), far union **2.134 against 2.112**
+(−1.1%), and on the smooth union — where the arm never fires, so both numbers are the same walk — the two medians
+differ by **0.044 ms of 3.776, about 1.2%**, which is the instrument's own spread. **The arm's measured saving at this
+grid is inside its own noise floor.** That is a measurement replacing an argument: the paragraph above said the lever
+could not move R1 because it changes nodes-per-step rather than rays-in-flight, and the arithmetic was right for a
+reason the argument did not name — a march whose whole frame costs 3.6 ms at 768 rays is nowhere near the 16.67 ms
+budget at 1080p, and the per-node work the arm removes is a fraction of a step's cost that the noise floor swallows.
+The durations are informational and are not registered in `docs/evidence.json` (ADR-017); what is registered is the
+refusal counts. `r1_device_rays` found the same shape of result when it deleted 66 MB of per-frame ray bytes and the
+frame did not get faster by a resolvable amount, and this is the second time in this repository that an
+*asymptotically-obvious* saving has failed to appear as a number on a real GPU.
+
 And the run that mattered was red. CI `39022931480` on the ARM64 macOS runner died with `index out of bounds:
 the len is 5 but the index is 5` in `cull.rs`'s `collect`, reached from `as4_asset_reupload`: making `upload`
 build a bound table for *every* shape put `scene_bounds` on trees it had never been asked about, including

@@ -323,11 +323,93 @@ fn main() {
     //    where more of the fan should be provably outside its enclosure. Printed so a future reader can
     //    see the tally tracks the geometry, and deliberately not asserted - no bound on the ratio between
     //    two scenes follows from the arm's soundness argument.
-    report("union far", &union_two(6.0, 0.25));
+    let far_tree = union_two(6.0, 0.25);
+    let (far_total, _, _) = report("union far", &far_tree);
 
+    // 5. The arm **priced on the device**, against a control that cannot fire. `upload_bounds_refused` keeps
+    //    the pool layout (four words per node), the node records and the walk byte-identical and makes every
+    //    radius `+inf`, so `length(p - centre) - inf >= left` never answers yes: the only thing that differs
+    //    between the two shapes is what the bound test returns. What is asserted is that the control really
+    //    refuses (its own tally reads zero where the armed shape's does not) and that neither march computes a
+    //    different picture (bit-identical depths on every repeat). The milliseconds are printed and are not
+    //    evidence (ADR-017) — they are what lets docs/04 say what the arm saved instead of what it could have.
+    const REPEATS: usize = 30;
+    let price = |name: &str, tree: &Tree, armed_total: u64| {
+        let armed = interpreter.upload(tree);
+        let control = interpreter.upload_bounds_refused(tree);
+        let control_counted = interpreter
+            .march_counted(&control, ROOT, &rays)
+            .unwrap_or_else(|error| panic!("{name}: control counted march failed: {error}"));
+        let control_total: u64 = control_counted
+            .skips
+            .iter()
+            .map(|count| u64::from(*count))
+            .sum();
+        assert_eq!(
+            control_total, 0,
+            "{name}: the +inf control still refused {control_total} second children while the armed shape \
+             refused {armed_total} - the control is not a control, and the two timings would be one walk \
+             measured twice"
+        );
+
+        let mut armed_ms = Vec::with_capacity(REPEATS);
+        let mut control_ms = Vec::with_capacity(REPEATS);
+        for repeat in 0..REPEATS {
+            let a = interpreter
+                .march_uploaded(&armed, ROOT, &rays)
+                .unwrap_or_else(|error| panic!("{name}: armed march {repeat} failed: {error}"));
+            let c = interpreter
+                .march_uploaded(&control, ROOT, &rays)
+                .unwrap_or_else(|error| panic!("{name}: control march {repeat} failed: {error}"));
+            let flips = a
+                .depths
+                .iter()
+                .zip(&c.depths)
+                .filter(|(a, c)| a.to_bits() != c.to_bits())
+                .count();
+            assert_eq!(
+                flips,
+                0,
+                "{name}: repeat {repeat} of the armless control moved {flips} rays' depths, so the bound \
+                 test is changing the picture rather than the work - which is exactly what an enclosure too \
+                 small would do, and why this pair is asserted before it is timed"
+            );
+            armed_ms.push(a.ms_frame_with_read);
+            control_ms.push(c.ms_frame_with_read);
+        }
+        let median = |values: &mut Vec<f64>| {
+            values.sort_by(|a, b| a.total_cmp(b));
+            values[values.len() / 2]
+        };
+        let (a, c) = (median(&mut armed_ms), median(&mut control_ms));
+        println!(
+            "// {name:<16} priced : median of {REPEATS} marches of {} rays - armed {a:.3} ms, control \
+             {c:.3} ms, the arm's share of the caller's wait {:.1}%; depths bit-identical on every repeat, \
+             and the control tallied 0 refusals against the armed shape's {armed_total}",
+            rays.len(),
+            if c > 0.0 { (c - a) * 100.0 / c } else { 0.0 },
+        );
+        (a, c)
+    };
+    let (union_armed, union_control) = price("union", &union_two(1.2, 1.0), union_total);
+    // The blend is the control's own falsifier: the arm never fires on it, so its two timings are one walk
+    // measured twice and any difference is the instrument's noise floor, not the arm's saving.
+    let (smooth_armed, smooth_control) =
+        price("smooth union", &smooth_union_two(0.5, 1.2), smooth_total);
+    let (far_armed, far_control) = price("union far", &far_tree, far_total);
+
+    println!(
+        "// noise floor      : on the blend, where the armed tally is {smooth_total}, the two medians differ \
+         by {:.3} ms of {:.3} - that gap is the instrument's own spread, so an arm saving below it is not a \
+         saving anyone could claim from these numbers.",
+        (smooth_armed - smooth_control).abs(),
+        smooth_control,
+    );
     println!(
         "result           : the device's bound-skip arm counted its own refusals - {union_total} over {} \
          rays on the plain union, 0 on the leaf, 0 on the blend - each on depths identical to the march \
-         that tallies nothing."
+         that tallies nothing; and against an unlicensed-bound control it is {union_armed:.3} ms against \
+         {union_control:.3} on the union, {far_armed:.3} against {far_control:.3} on the far union \
+         (informational, ADR-017)."
     , rays.len());
 }

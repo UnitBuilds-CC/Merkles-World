@@ -643,12 +643,37 @@ impl Interpreter {
     /// Put a shape on the device once, so a later frame can bind it without allocating or copying its
     /// bytes again. The `.len()` fields are taken before the buffers move.
     pub fn upload(&self, tree: &Tree) -> Shape {
-        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let nodes = node_bytes(tree);
         let pool = pool_bytes(tree);
+        self.shape_from(nodes, pool, tree.nodes.len())
+    }
+
+    /// The same resident shape with every bound row **unlicensed**: the tail is still four words per node, so
+    /// the shader's `arrayLength(&pool) - 4 * arrayLength(&nodes)` arithmetic lands on a radius word, but
+    /// every radius is `+inf` and `length(p - centre) - inf >= left` is never true. It is therefore a control
+    /// the arm cannot fire on while the pool layout, the node records and the walk stay byte-for-byte what
+    /// `upload` made — the only difference between the two shapes is what the bound test answers.
+    ///
+    /// This exists so the device's bound-skip saving can be *measured* rather than bounded: docs/04 quotes the
+    /// CPU cull layer's avoided entries as an upper bound on the arm, and an upper bound is not a number on the
+    /// thing. Durations are still informational here (ADR-017) — what makes the pair admissible is that the two
+    /// marches' depths are asserted identical, so the cheaper one did not compute a different picture.
+    pub fn upload_bounds_refused(&self, tree: &Tree) -> Shape {
+        let nodes = node_bytes(tree);
+        let mut pool = bytes_of_f32(&tree.params);
+        for _ in 0..tree.nodes.len() {
+            pool.extend_from_slice(&vec4_bytes([0.0, 0.0, 0.0, f32::INFINITY]));
+        }
+        self.shape_from(nodes, pool, tree.nodes.len())
+    }
+
+    /// Create the two storage buffers from already-encoded bytes. `.len()` fields are read before the buffers
+    /// move, so the capacities a later `upload_into` checks against are this shape's own.
+    fn shape_from(&self, nodes: Vec<u8>, pool: Vec<u8>, node_count: usize) -> Shape {
+        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         Shape {
             bytes: nodes.len() + pool.len(),
-            node_count: tree.nodes.len(),
+            node_count,
             nodes_capacity: nodes.len() as u64,
             pool_capacity: pool.len() as u64,
             nodes: self
