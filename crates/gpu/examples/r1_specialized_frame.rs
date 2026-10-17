@@ -1,0 +1,539 @@
+//! R1's whole frame, timed in one leg, on an interpreter compiled with the stack capacity its scene actually
+//! needs. This is the row the DEPTH ladder left as arithmetic.
+//!
+//! `cargo run --release -p gpu --example r1_specialized_frame`
+//!
+//! `r1_walk_cost_ladder` measured the march leg alone at two capacities and closed with the honest caveat that the
+//! ~11.2 ms inside-budget frame it implied was **DERIVED from two legs timed minutes apart, not a measured frame**.
+//! This file times one: `Interpreter::march_camera_variant` dispatches and copies and maps the depths back inside
+//! a single `Instant`, so the number it returns is the interval a caller actually waits, which is exactly what gate
+//! R1 spends.
+//!
+//! The capacity is not a constant typed into this file. `render::tree_depth` counts the frames the walk pushes for
+//! the tree being marched — one per nested node from the root the walk starts at — and that count is what the
+//! module is compiled with. Getting the derivation wrong in either direction is the failure this example exists to
+//! make impossible, so both directions are asserted on the anchor grid: a capacity **below** the tree's depth must
+//! find 0 surfaces (a scene that renders empty, not slow — which is the reason `const DEPTH = 2` is not a shippable
+//! global), and a capacity **equal** to it must reproduce the shipped pipeline's depths with 0 differing bits. The
+//! two-node demo tree and a three-node-nested one cover both cases, so the rule `capacity = tree_depth` is tested
+//! rather than assumed.
+//!
+//! The timing is a paired, order-alternating comparison against the shipped capacity on the same frame, because
+//! that is the statistic that survived its own re-pricing before: the ladder's first fixed-order run put the
+//! shipped row 2× faster than its own recompiled twin, and the arms here differ only in which module the same
+//! dispatch list uses. A 1070's clock ramp is then inside both arms rather than inside whichever ran first.
+//!
+//! Durations assert nothing (ADR-017) and the budget ratio is printed, not claimed: R1 names 60 Hz at 1080p on
+//! buildbox's GTX 1070, so a row here says `x.xx ms = y.yy x budget` on its own instrument and nothing more.
+//! `R1_GRID=WxH` moves the timed legs to another grid, labelling its rows as not R1's, exactly as
+//! `r1_march_alone` does; unset reproduces the gate's own resolution.
+
+use contracts::sdf::{
+    pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
+    NODE_ROUNDED_BOX, NODE_SPHERE, NODE_UNION,
+};
+use gpu::device::{GpuCamera, Interpreter, March};
+use render::{march, tree_depth, Ray, Tree, Vec3, ROOT};
+
+/// `r1_march_alone`'s and `r1_walk_cost_ladder`'s scene: `union(sphere, rounded_box)`, two frames deep.
+fn demo_scene() -> Tree {
+    let record = |kind: u16, arity: u16, subtree: u32, first: u16, len: u16, root: bool| {
+        NodeRecord([
+            pack_kind_and_arity(kind, arity),
+            subtree,
+            pack_first_and_flags(first, if root { FLAG_IS_ROOT } else { 0 }),
+            pack_params_len(len),
+        ])
+    };
+    Tree {
+        nodes: vec![
+            record(NODE_UNION, 2, 3, 0, 0, true),
+            record(NODE_SPHERE, 0, 1, 0, 4, false),
+            record(NODE_ROUNDED_BOX, 0, 1, 4, 4, false),
+        ],
+        params: vec![0.5, 0.0, 0.0, 0.0, 2.0, 0.1, 2.0, 0.0, 0.0, -1.0, 0.0],
+    }
+}
+
+/// The same field, one nesting level deeper: `union(union(sphere, sphere), rounded_box)`, three frames deep.
+/// Built to give `tree_depth` something to be wrong about, and to be the scene a capacity of 2 must refuse.
+fn nested_scene() -> Tree {
+    let record = |kind: u16, arity: u16, subtree: u32, first: u16, len: u16, root: bool| {
+        NodeRecord([
+            pack_kind_and_arity(kind, arity),
+            subtree,
+            pack_first_and_flags(first, if root { FLAG_IS_ROOT } else { 0 }),
+            pack_params_len(len),
+        ])
+    };
+    Tree {
+        nodes: vec![
+            record(NODE_UNION, 2, 5, 0, 0, true),
+            record(NODE_UNION, 2, 3, 0, 0, false),
+            record(NODE_SPHERE, 0, 1, 0, 4, false),
+            record(NODE_SPHERE, 0, 1, 4, 4, false),
+            record(NODE_ROUNDED_BOX, 0, 1, 8, 4, false),
+        ],
+        params: vec![
+            0.5, 0.0, 0.0, 0.0, -1.5, 0.0, 0.0, 0.0, 2.0, 0.1, 2.0, 0.0, 0.0, -1.0, 0.0, 0.0,
+        ],
+    }
+}
+
+const SURFACE: f32 = 0.01;
+const MAX_T: f32 = 24.0;
+const HALF_HEIGHT: f32 = 0.5;
+const MAX_STEPS: u32 = 64;
+const ANCHOR_W: u32 = 64;
+const ANCHOR_H: u32 = 48;
+const R1_W: u32 = 1920;
+const R1_H: u32 = 1080;
+/// R1's frame budget at 60 Hz, the only duration this file is allowed to compare itself with.
+const BUDGET_MS: f64 = 1000.0 / 60.0;
+const MISS: f32 = 1.0e37;
+/// Paired rounds per timed row; the median of seven, with the arms alternating which one starts.
+const ROUNDS: usize = 7;
+
+fn grid() -> (u32, u32) {
+    std::env::var("R1_GRID")
+        .ok()
+        .and_then(|text| {
+            let (w, h) = text.trim().split_once(['x', 'X'])?;
+            let w = w.trim().parse::<u32>().ok()?;
+            let h = h.trim().parse::<u32>().ok()?;
+            Some((w, h))
+        })
+        .filter(|(w, h)| *w > 0 && *h > 0)
+        .unwrap_or((R1_W, R1_H))
+}
+
+fn camera(width: u32, height: u32, origin: Vec3, max_steps: u32) -> GpuCamera {
+    GpuCamera {
+        origin,
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        forward: [0.0, 0.0, 1.0],
+        half_height: HALF_HEIGHT,
+        max_t: MAX_T,
+        surface: SURFACE,
+        max_steps,
+        root: ROOT,
+        width,
+        height,
+    }
+}
+
+fn ray_at(px: u32, py: u32, width: u32, height: u32, origin: Vec3, max_steps: u32) -> Ray {
+    let aspect = width as f32 / height as f32;
+    let u = (px as f32 + 0.5) / width as f32;
+    let v = (py as f32 + 0.5) / height as f32;
+    let ndc_x = (2.0 * u - 1.0) * HALF_HEIGHT * aspect;
+    let ndc_y = (1.0 - 2.0 * v) * HALF_HEIGHT;
+    let span = [ndc_x, ndc_y, 1.0];
+    let length = (span[0] * span[0] + span[1] * span[1] + span[2] * span[2]).sqrt();
+    Ray {
+        origin,
+        dir: if length == 0.0 {
+            [0.0, 0.0, 0.0]
+        } else {
+            [span[0] / length, span[1] / length, span[2] / length]
+        },
+        max_t: MAX_T,
+        surface: SURFACE,
+        max_steps,
+    }
+}
+
+fn bit_differences(a: &[f32], b: &[f32]) -> usize {
+    a.iter()
+        .zip(b.iter())
+        .filter(|(left, right)| left.to_bits() != right.to_bits())
+        .count()
+}
+
+fn median(values: &[f64]) -> f64 {
+    let mut values = values.to_vec();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+    values[values.len() / 2]
+}
+
+fn spread(values: &[f64]) -> f64 {
+    let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    max - min
+}
+
+/// One whole frame, timed as one interval, at one capacity.
+struct FrameRow {
+    depth: u32,
+    shipped: bool,
+    cap: u32,
+    ms: f64,
+    spread_ms: f64,
+    hits: usize,
+}
+
+impl FrameRow {
+    fn budget(&self) -> f64 {
+        self.ms / BUDGET_MS
+    }
+}
+
+fn main() {
+    let interpreter = match Interpreter::open_hardware() {
+        Ok(interpreter) => interpreter,
+        Err(error) => {
+            println!(
+                "SKIP r1_specialized_frame: no device ({error:?}) - a whole frame is dispatch plus copy plus map \
+                 on a GPU; a software rasteriser has no such interval to time"
+            );
+            return;
+        }
+    };
+    let demo = demo_scene();
+    let nested = nested_scene();
+    let origin = [0.0f32, 0.0, -6.0];
+
+    let demo_depth = tree_depth(&demo);
+    let nested_depth = tree_depth(&nested);
+
+    println!("// adapter    : {}", interpreter.adapter());
+    println!("// budget     : gate R1 names {BUDGET_MS:.2} ms for one 1080p frame at 60 Hz on this device");
+    println!("// derived    : tree_depth(demo) = {demo_depth}, tree_depth(nested) = {nested_depth} - computed from the records, never typed in");
+    println!("// asserted   : the capacity a scene needs is exactly its depth (below it renders empty, at it reproduces the shipped depths bit for bit), and both arms of the timed legs agree on the picture");
+    println!("// printed    : one-interval frame ms and the budget ratio - durations assert nothing (ADR-017)");
+    println!();
+
+    // ---- The derivation rule, both directions, on the anchor grid ---------------------------------
+    //
+    // `capacity == tree_depth` must be the exact rule, not a conservative margin, because the whole saving is the
+    // absence of margin: a capacity of 32 for a two-frame tree is what the ladder priced at 15x the walk. So a
+    // scene of depth D is marched by D and by D - 1, and the second one must be an empty picture.
+    assert_eq!(
+        demo_depth, 2,
+        "the demo scene is union(sphere, rounded_box), which pushes two frames, and tree_depth says {demo_depth}; \
+         the capacity the shipped pipeline is compiled with is derived from this number"
+    );
+    assert_eq!(
+        nested_depth, 3,
+        "union(union(sphere, sphere), rounded_box) pushes three frames, and tree_depth says {nested_depth} - a \
+         count that is wrong here makes the refusal row below meaningless"
+    );
+
+    let mut refuse_checks = Vec::new();
+    for (name, tree, depth) in [
+        ("demo", &demo, demo_depth),
+        ("nested", &nested, nested_depth),
+    ] {
+        let shape = interpreter.upload(tree);
+        let mut frame = interpreter.begin_camera_frame(ANCHOR_W, ANCHOR_H);
+        interpreter.write_camera(&mut frame, &camera(ANCHOR_W, ANCHOR_H, origin, MAX_STEPS));
+        let shipped = interpreter
+            .march_camera_frame(&interpreter.bind_camera(&shape, &frame), &frame)
+            .expect("the shipped pipeline must march the anchor");
+
+        // Reference picture, so "reproduces the shipped pipeline" is anchored on `render::march` and not on itself.
+        let mut reference = Vec::with_capacity(shipped.depths.len());
+        for py in 0..ANCHOR_H {
+            for px in 0..ANCHOR_W {
+                let ray = ray_at(px, py, ANCHOR_W, ANCHOR_H, origin, MAX_STEPS);
+                reference.push(
+                    match march(
+                        tree,
+                        ROOT,
+                        ray.origin,
+                        ray.dir,
+                        ray.max_t,
+                        ray.surface,
+                        ray.max_steps,
+                    ) {
+                        Some(hit) => hit.t,
+                        None => MISS,
+                    },
+                );
+            }
+        }
+        let set_diffs = reference
+            .iter()
+            .zip(&shipped.depths)
+            .filter(|(left, right)| (**left < MISS) != (**right < MISS))
+            .count();
+
+        let exact = interpreter
+            .camera_variant(depth)
+            .expect("a variant at the tree's own depth is a legal module");
+        let exact_march = interpreter
+            .march_camera_variant(
+                &exact,
+                &interpreter.bind_camera_variant(&exact, &shape, &frame),
+                &frame,
+            )
+            .expect("the exact-capacity pipeline must march the anchor");
+        let exact_diffs = bit_differences(&shipped.depths, &exact_march.depths);
+
+        let short = interpreter
+            .camera_variant(depth - 1)
+            .expect("a variant one frame short is still a legal module");
+        let short_march = interpreter
+            .march_camera_variant(
+                &short,
+                &interpreter.bind_camera_variant(&short, &shape, &frame),
+                &frame,
+            )
+            .expect("the short-capacity pipeline must march the anchor");
+
+        refuse_checks.push(RefusalRow {
+            name,
+            depth,
+            shipped_hits: shipped.hits,
+            set_diffs,
+            exact_hits: exact_march.hits,
+            exact_diffs,
+            short_hits: short_march.hits,
+            pixels: shipped.depths.len(),
+        });
+
+        println!(
+            "//   {name} scene   : depth {depth}, shipped finds {} of {} surfaces",
+            shipped.hits,
+            shipped.depths.len()
+        );
+        println!("//     capacity {depth} (exact)  : {} bit-differing depths vs shipped, {} surfaces, {} set diffs from render::march", exact_diffs, exact_march.hits, set_diffs);
+        println!("//     capacity {} (one short): {} surfaces - the guard's sentinel, so a scene that does not fit renders empty", depth - 1, short_march.hits);
+    }
+    println!();
+
+    for row in &refuse_checks {
+        assert_eq!(
+            row.set_diffs, 0,
+            "the shipped pipeline disagrees with `render::march` on {} of {} {}-scene pixels, so this file's \
+             reference picture is not the march the repo has tests for",
+            row.set_diffs, row.pixels, row.name
+        );
+        assert_eq!(
+            row.exact_diffs, 0,
+            "a capacity of exactly the {} scene's depth ({}) changed {} depth bit patterns out of {}, so the \
+             rule `capacity = tree_depth` is not the rule the walk follows and the per-asset saving is not \
+             available",
+            row.name, row.depth, row.exact_diffs, row.pixels
+        );
+        assert_eq!(
+            row.exact_hits, row.shipped_hits,
+            "the exact-capacity pipeline found {} surfaces where the shipped one found {} on the {} scene",
+            row.exact_hits, row.shipped_hits, row.name
+        );
+        assert_eq!(
+            row.short_hits, 0,
+            "a capacity one frame short of the {} scene's depth still found {} surfaces, so the walk's guard did \
+             not fire and `DEPTH` is decoration in the module the substitution built",
+            row.name, row.short_hits
+        );
+        assert!(
+            row.shipped_hits > 0,
+            "the {} scene found no surfaces on the anchor grid, so there is nothing for a refusal to differ from",
+            row.name
+        );
+    }
+
+    // ---- One whole 1080p frame, both arms, paired and order-alternating -----------------------------
+    let (w, h) = grid();
+    let label = if (w, h) == (R1_W, R1_H) {
+        "1080p".to_string()
+    } else {
+        format!("{w}x{h}")
+    };
+    let pixels = w as usize * h as usize;
+    println!(
+        "// grid         : {label:<11} = {pixels} pixels per frame{}",
+        if label == "1080p" {
+            ", R1's own resolution".to_string()
+        } else {
+            ", NOT R1's grid, so these rows are a frontier reading".to_string()
+        }
+    );
+
+    let shape = interpreter.upload(&demo);
+    let variant = interpreter
+        .camera_variant(demo_depth)
+        .expect("the demo scene's own capacity must compile");
+    let caps = [1u32, 8, MAX_STEPS];
+
+    // A loss at this grid is a panic from inside `Device::poll`, not an `Err`, so the legs run under
+    // `catch_unwind`; only a payload naming a lost device prints a skip, and anything else exits 101.
+    let outcome = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+        let mut rows: Vec<FrameRow> = Vec::new();
+        let mut picture = Vec::new();
+        for &cap in &caps {
+            let mut big = interpreter.begin_camera_frame(w, h);
+            interpreter.write_camera(&mut big, &camera(w, h, origin, cap));
+            let shipped_bind = interpreter.bind_camera(&shape, &big);
+            let variant_bind = interpreter.bind_camera_variant(&variant, &shape, &big);
+
+            let mut shipped_ms = Vec::with_capacity(ROUNDS);
+            let mut variant_ms = Vec::with_capacity(ROUNDS);
+            let mut shipped_last: Option<March> = None;
+            let mut variant_last: Option<March> = None;
+            for round in 0..ROUNDS {
+                if round % 2 == 0 {
+                    shipped_ms.push(
+                        interpreter
+                            .march_camera_frame(&shipped_bind, &big)
+                            .expect("the shipped arm must frame")
+                            .ms_frame_with_read,
+                    );
+                    let march = interpreter
+                        .march_camera_variant(&variant, &variant_bind, &big)
+                        .expect("the specialized arm must frame");
+                    variant_ms.push(march.ms_frame_with_read);
+                    variant_last = Some(march);
+                } else {
+                    let march = interpreter
+                        .march_camera_variant(&variant, &variant_bind, &big)
+                        .expect("the specialized arm must frame");
+                    variant_ms.push(march.ms_frame_with_read);
+                    variant_last = Some(march);
+                    shipped_ms.push(
+                        interpreter
+                            .march_camera_frame(&shipped_bind, &big)
+                            .expect("the shipped arm must frame")
+                            .ms_frame_with_read,
+                    );
+                }
+                // Keep the last depths of each arm for the picture assert without holding 8 MB per round.
+                let march = interpreter
+                    .march_camera_frame(&shipped_bind, &big)
+                    .expect("the shipped arm must re-march for its depths");
+                shipped_last = Some(march);
+            }
+            let shipped_march = shipped_last.expect("the shipped arm marched");
+            let variant_march = variant_last.expect("the specialized arm marched");
+            let diffs = bit_differences(&shipped_march.depths, &variant_march.depths);
+            picture.push((cap, shipped_march.hits, variant_march.hits, diffs, pixels));
+
+            rows.push(FrameRow {
+                depth: 32,
+                shipped: true,
+                cap,
+                ms: median(&shipped_ms),
+                spread_ms: spread(&shipped_ms),
+                hits: shipped_march.hits,
+            });
+            rows.push(FrameRow {
+                depth: demo_depth,
+                shipped: false,
+                cap,
+                ms: median(&variant_ms),
+                spread_ms: spread(&variant_ms),
+                hits: variant_march.hits,
+            });
+        }
+        (rows, picture)
+    }));
+
+    let (rows, picture) = match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            let text = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|held| held.to_string()))
+                .unwrap_or_else(|| "a panic with no message".to_string());
+            if !(text.contains("device is lost") || text.contains("Validation")) {
+                println!("// {label:<11}: UNEXPECTED PANIC, not a lost device, so it is a failure: {text}");
+                std::process::exit(101);
+            }
+            println!("// {label:<11}: SKIPPED, the device was lost mid-leg: {text}");
+            println!("//                (the derivation rows above are the asserted ones; no duration here is R1 evidence)");
+            return;
+        }
+    };
+
+    println!(
+        "//   capacity |   cap |  hits | bit diffs | ms one interval | spread | x {BUDGET_MS:.2} ms budget"
+    );
+    for row in &rows {
+        println!(
+            "//   {:>8}{} | {:>5} | {:>5} | {:>9} | {:>15.3} | {:>6.3} | {:>5.2} x",
+            row.depth,
+            if row.shipped { "*" } else { " " },
+            row.cap,
+            row.hits,
+            picture
+                .iter()
+                .find(|(cap, _, _, _, _)| *cap == row.cap)
+                .map(|(_, _, _, diffs, _)| *diffs)
+                .unwrap_or(usize::MAX),
+            row.ms,
+            row.spread_ms,
+            row.budget(),
+        );
+    }
+    println!("//   (* = the shipped capacity 32, timed in the same alternating sequence)");
+    println!();
+
+    for (cap, shipped_hits, variant_hits, diffs, count) in &picture {
+        assert_eq!(
+            *diffs, 0,
+            "at cap {cap} the specialized pipeline's depths differ from the shipped frame's on {} of {} pixels, \
+             so the timed rows below are two different pictures rather than one picture at two capacities",
+            diffs,
+            count
+        );
+        assert_eq!(
+            shipped_hits, variant_hits,
+            "at cap {cap} the arms found {} and {} surfaces",
+            variant_hits, shipped_hits
+        );
+    }
+    let frame = |depth: u32, cap: u32| -> f64 {
+        rows.iter()
+            .find(|row| row.depth == depth && row.cap == cap && row.shipped == (depth == 32))
+            .map(|row| row.ms)
+            .unwrap_or(f64::INFINITY)
+    };
+    for &cap in &caps {
+        let shipped = frame(32, cap);
+        let specialized = frame(demo_depth, cap);
+        println!(
+            "// cap {cap:>3}      : shipped {shipped:.3} ms vs capacity {demo_depth} {specialized:.3} ms - {}% of \
+             the frame, {specialized:.2} ms = {:.2} x budget",
+            100.0 * (1.0 - specialized / shipped),
+            specialized / BUDGET_MS
+        );
+        assert!(
+            specialized <= shipped,
+            "at cap {cap} the specialized frame took {specialized:.3} ms against the shipped {shipped:.3} ms, so \
+             the capacity the ladder priced is not what a whole interval sees"
+        );
+    }
+    assert_eq!(
+        picture
+            .iter()
+            .find(|(cap, _, _, _, _)| *cap == MAX_STEPS)
+            .map(|(_, hits, _, _, _)| *hits),
+        Some(frame_at(&rows, MAX_STEPS, true)),
+        "the cap-64 shipped frame's hits do not match its own row"
+    );
+    println!(
+        "// reading      : the 64-step row is the one R1's 5.5x was measured against; both columns above are one \
+         dispatch-plus-copy-plus-map interval, so the read-back is inside the number rather than added to it"
+    );
+}
+
+fn frame_at(rows: &[FrameRow], cap: u32, shipped: bool) -> usize {
+    rows.iter()
+        .find(|row| row.cap == cap && row.shipped == shipped)
+        .map(|row| row.hits)
+        .unwrap_or(usize::MAX)
+}
+
+struct RefusalRow {
+    name: &'static str,
+    depth: u32,
+    shipped_hits: usize,
+    set_diffs: usize,
+    exact_hits: usize,
+    exact_diffs: usize,
+    short_hits: usize,
+    pixels: usize,
+}

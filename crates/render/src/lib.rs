@@ -184,6 +184,23 @@ pub fn validate(tree: &Tree) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// The smallest interpreter stack capacity that can evaluate this tree: one frame per nested node, counted from
+/// the root the walk actually starts at.
+///
+/// This is the number to compile `interp.wgsl`'s `DEPTH` from, and the capacity is a correctness contract rather
+/// than a tuning knob - a tree deeper than the capacity does not render slowly, it renders **empty**, because the
+/// walk's `sp >= DEPTH` guard returns the no-surface sentinel. docs/04's DEPTH ladder is why it is worth deriving
+/// per asset: on R1's own 1080p grid one tree walk costs 4.472 ns at the shipped capacity of 32 and 0.295 ns at
+/// capacity 2, so a scene that is two frames deep is paying 15x for state it never pushes.
+pub fn tree_depth(tree: &Tree) -> u32 {
+    let root = tree
+        .nodes
+        .iter()
+        .position(|record| record.flags() & contracts::sdf::FLAG_IS_ROOT != 0)
+        .unwrap_or(0);
+    depth_of(tree, root)
+}
+
 /// Nested evaluations a ray pays for at `index` - what the depth cap is actually about, since the
 /// budget is steps per frame rather than records per buffer.
 fn depth_of(tree: &Tree, index: usize) -> u32 {
