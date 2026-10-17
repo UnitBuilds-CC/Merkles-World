@@ -274,6 +274,14 @@ impl SceneBounds {
     /// because the WGSL interpreter already sits at `wgpu::Limits::downlevel_defaults()`'
     /// four-storage-buffer-per-stage ceiling.
     ///
+    /// **The `+inf` spelling is only inert for a reader that uses the bound unclamped.** [`Self::lower_bound`]
+    /// ends in `.max(0.0)` because a licensed distance cannot be negative; feed it an infinite radius and the
+    /// clamp turns `-inf` into `0`, and `0 >= left` then fires for every point already inside the first
+    /// operand — a skip on a subtree nothing bounded, in the direction that shows up as missing geometry
+    /// rather than as an error. The device arm in `interp.wgsl` therefore recomputes `d - radius` without the
+    /// clamp, and its comment carries the reason. A consumer of this table that wants the clamp has to
+    /// license separately.
+    ///
     /// The `respects` half of the guard is contract shape rather than a live branch today: the two arrays are
     /// filled in the same pass, and on the licensed tables a bounded enclosure and a granted licence arrive
     /// together. What the guard does provably carry is the counting baseline, which fills the same real

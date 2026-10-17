@@ -86,6 +86,26 @@ pub struct ReadBack {
     pub ms: f64,
 }
 
+/// The bytes that go into a shape's `pool` buffer: the tree's parameters, then the per-node bound table.
+///
+/// The tail is `render::cull::SceneBounds::encoded()` — `[centre.x, centre.y, centre.z, radius]` per node,
+/// four `f32` each, in node order. It shares the parameter buffer because `interp.wgsl` already binds four
+/// storage buffers, which is `wgpu::Limits::downlevel_defaults()`' ceiling, and a per-node table will not
+/// fit in the header uniform; the shader therefore finds the tail by
+/// `arrayLength(&pool) - 4 * arrayLength(&nodes)`. That is also why the tail is **not optional**: a pool
+/// with no table would have that arithmetic read parameter words as radii, and parameter words are
+/// finite. Nodes the cull table refuses to license arrive as `+inf`, which bounds nothing.
+///
+/// The table is derived from the same `&Tree` the parameters come from, so no caller can supply a picture
+/// of the scene that does not match the scene it uploads — and no caller has to remember to.
+fn pool_bytes(tree: &Tree) -> Vec<u8> {
+    let mut out = bytes_of_f32(&tree.params);
+    for row in render::cull::scene_bounds(tree).encoded() {
+        out.extend_from_slice(&vec4_bytes(row));
+    }
+    out
+}
+
 /// A shape tree resident on the device: the two buffers the march binds as slots 0 and 1, created once and
 /// handed to every frame after that. `march` re-uploads them per call because one upload per frame is the
 /// shape a correctness probe wants; gate AS4's clause is different — a frame must not allocate or parse its
@@ -598,7 +618,7 @@ impl Interpreter {
     pub fn upload(&self, tree: &Tree) -> Shape {
         let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         let nodes = node_bytes(tree);
-        let pool = bytes_of_f32(&tree.params);
+        let pool = pool_bytes(tree);
         Shape {
             bytes: nodes.len() + pool.len(),
             node_count: tree.nodes.len(),
@@ -627,7 +647,7 @@ impl Interpreter {
     /// because a re-creation is the allocation churn §3 bans. Returns the bytes written.
     pub fn upload_into(&self, shape: &mut Shape, tree: &Tree) -> Result<usize, String> {
         let nodes = node_bytes(tree);
-        let pool = bytes_of_f32(&tree.params);
+        let pool = pool_bytes(tree);
         if nodes.len() as u64 > shape.nodes_capacity || pool.len() as u64 > shape.pool_capacity {
             return Err(format!(
                 "a {}-node / {}-param-byte shape does not fit the {} / {} bytes already resident - re-uploading \

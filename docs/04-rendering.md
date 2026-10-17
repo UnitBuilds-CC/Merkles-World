@@ -474,6 +474,36 @@ the table uploaded once per shape instead of once per frame. Its price is a cont
 `boot_scene_on_device` pins the device pool at the asset's 25 parameters, which becomes 25 parameters plus 44
 table words for the boot's 11 nodes.
 
+**The arm is landed, and its first measured anchor is the demo scene's own frame (2026-10-17).** `interp.wgsl`'s
+`second_child_may_skip` is the bound-per-node-inside-a-step layer, on the device: at a plain `NODE_UNION`'s
+unwind — the only sound point, since `value` still holds the left operand and a discarded second child of a `min`
+is exactly that — the walk reads the tail row for the second child and descends only if
+`length(p - centre) - radius < left`. `device::pool_bytes` writes the tail from `render::cull::scene_bounds(tree)`
+itself, derived from the same `&Tree` the parameters come from, so no caller can hand the device a bound table
+that describes a different scene than the one it uploaded, and none has to remember to ask for one.
+`cargo run --release -p gpu --example boot_scene_on_device` on the MX250 then moves **only** the shape's resident
+bytes and no picture at all: **452 bytes resident** (176 node records + 100 parameter bytes + 176 table bytes,
+against the 276 before the tail) with **3,072 rays / 605 surfaces / 0 hit/miss disagreements / worst deviation
+0.000001**, the one-shot path identical, the reused frame differing in 0 of 3,072 `f32::to_bits`, and the plant
+still flipping **80** rays. That is the acceptance the design asked for, and it is the *falsifier* rather than a
+restatement: the arm lives inside `eval_from`, which `evaluate_points` shares, so the 13-kind WGSL↔CPU parity
+suite and the ray-for-ray anchors now run through the skip, and a bound that over-claims shows up as disagreements
+instead of as a slightly different picture.
+
+Two things the arm deliberately does not do. It does not clamp the bound at zero the way
+`SceneBounds::lower_bound` ends in `.max(0.0)`: that clamp is harmless on a licensed row and **wrong** on the
+`encoded()` table's `+inf` spelling of "not licensed", because `max(-inf, 0) = 0` then satisfies `0 >= left` for
+every point already inside the first child — a skip on a subtree nothing bounded, in the missing-geometry
+direction, which is the failure this file's whole existence is written against. And it asks only plain union:
+the k-aware smooth-union arm (OQ-54) stays CPU-only, so the device skips a *subset* of what the CPU may skip.
+Both differences are in the strict direction, and the shape of the resulting claim is that the arm is **provably
+not weaker than the reference and not measured as taking effect on the device**: `interp.wgsl` has no visit
+counter, and the four-storage-buffer ceiling means a counter has to live in the slot 2 the camera path leaves
+unused rather than beside the march it counts. The saving is therefore still priced by § Culling's CPU rows
+(98.1–98.3% of node visits avoided on the rows where the root bound avoids nothing), not by a device number —
+and R1's 16.67 ms stays unmet, since this changes how many nodes a step evaluates, not how many rays are in
+flight or what the frame costs on this bench.
+
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
 The previous section's closing claim was made on a 640×360 grid and its own text flagged the gap: "cap-independent

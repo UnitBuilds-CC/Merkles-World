@@ -53,6 +53,10 @@ const NODE_BEND: u32 = 19u;
 const UNSUPPORTED: f32 = 3.402823466e+38;
 
 @group(0) @binding(0) var<storage, read> nodes: array<Node>;
+// The tree's parameters, followed by the bound table: four `f32` per node, `[centre.xyz, radius]` in node
+// order, at the tail. One buffer because this stage is at the downlevel four-storage-buffer ceiling; the
+// tail is located by length arithmetic, so it is present on every shape and unlicensed nodes are spelled
+// with an infinite radius rather than a flag. See `second_child_may_skip`.
 @group(0) @binding(1) var<storage, read> pool: array<f32>;
 @group(0) @binding(2) var<storage, read> queries: array<vec4<f32>>;
 // The header is a *uniform*, not a fifth storage buffer: Limits::downlevel_defaults() allows four
@@ -253,6 +257,38 @@ fn second_child(index: u32) -> u32 {
     return first + nodes[first].subtree_len;
 }
 
+// Task #64's skip: a union's second child that is already known to be farther from `p` than the value its
+// first child produced cannot lower the `min`, so it is not walked. `crates/render`'s `eval_at` does this
+// at its NODE_UNION arm; this is the same law on the device, transcribed rather than reinvented, because
+// two walks of one grammar that differ by a skipped subtree are the fork this file exists to prevent.
+//
+// Two differences from the CPU arm, both in the safe direction.
+//
+// * The bound is **not** clamped at zero. The CPU computes `max(d - radius, 0)` because a licensed
+//   distance cannot be negative. `SceneBounds::encoded()` spells "not licensed" as an infinite radius, and
+//   a clamp turns that into `0` - which then satisfies `0 >= left` for every point already inside the first
+//   child, skipping subtrees nothing ever bounded. Unclamped, an infinite radius reads `-inf` and the test
+//   cannot fire on it. Dropping the clamp can only lower the bound, so every skip taken here is one the CPU
+//   arm also takes; the arm is stricter, never weaker.
+// * Only a plain `NODE_UNION` is asked. A smooth union's `smin` returns less than `min` by up to `k / 4`,
+//   so a far second child still bends the answer through `h`; the CPU has a separate k-aware arm for that
+//   case (OQ-54) and the device does not, which costs visits and cannot change a picture. `SUBTRACT` and
+//   `INTERSECT` are `max`, where a lower bound on one operand says nothing about the pair.
+fn second_child_may_skip(node: u32, p: vec3<f32>, left: f32) -> bool {
+    let rows = arrayLength(&nodes);
+    let words = arrayLength(&pool);
+    // The tail convention `device::pool_bytes` writes: four words per node, at the end. A pool shorter
+    // than that is a shape without a table, and the one failure mode worth refusing by length rather than
+    // by trust is reading a parameter word as a radius.
+    if words < 4u * rows {
+        return false;
+    }
+    let base = words - 4u * rows + 4u * node;
+    let centre = vec3<f32>(pool[base], pool[base + 1u], pool[base + 2u]);
+    let radius = pool[base + 3u];
+    return length(p - centre) - radius >= left;
+}
+
 // Post-order walk of a pre-order array. `subtree_len` is what makes it pointer-free: a node's first child
 // is the next record, and its second child sits one whole subtree later.
 fn eval_from(root: u32, origin: vec3<f32>) -> f32 {
@@ -301,9 +337,18 @@ fn eval_from(root: u32, origin: vec3<f32>) -> f32 {
                     continue;
                 }
                 if parent_frame.stage == 1u {
+                    // `value` is still the left operand here, which is what makes this the only sound skip
+                    // point: the arm below leaves `value` alone and keeps unwinding, and a discarded second
+                    // child of a `min` is exactly that. Doing the same test on the way *in* would skip the
+                    // first child, whose bound does not license the pair.
+                    let child = second_child(parent_frame.node);
+                    if kind_of(parent) == NODE_UNION {
+                        if second_child_may_skip(child, parent_frame.p, value) {
+                            continue;
+                        }
+                    }
                     stack[sp].left = value;
                     stack[sp].stage = 2u;
-                    let child = second_child(parent_frame.node);
                     sp = sp + 1u;
                     stack[sp] = Frame(child, 0u, parent_frame.p, 0.0);
                     descending = true;
