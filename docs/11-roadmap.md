@@ -348,8 +348,9 @@ ledger half and the booting half of the demo both exist; **the renderer half has
 `wgpu` is on `main` (OQ-51 ruled, `9139bb8`) and `interp.wgsl`'s `march_rays` / `march_rays_from_camera`
 draw a compiled scene asset on a GPU, asserted ray-for-ray against `render::march` - and **gate P1.5 is met
 as amended**, on the two devices this bench actually has. What the same sentence still gets right, and what
-therefore keeps Phase 1's exit open: **no window**, so R1, R2 and R5's "visible"/"viewable" halves stay
-unmeasured (OQ-51); **no BVH build**, because the enclosures are derived per node from the emitted tree and
+therefore keeps Phase 1's exit open: **no window**, so R1 and R5's "visible"/"viewable" halves stay
+unmeasured (OQ-51) — R2 left that list when its ten-minute span ran over the device path and became a CI row,
+so the gate named here is no longer a claim about work that has not been measured; **no BVH build**, because the enclosures are derived per node from the emitted tree and
 the spatial-index question belongs to `assetc`'s union emission (task 27, ADR-024); **no frame that meets
 R1**, since the nine whole-frame rows on the MX250 - the only admissible instrument here - sit between 90.66
 and 893.51 ms, 5.4x to 53.6x the 16.67 ms budget; and **not P1.5's original fourth target either**, which is
@@ -397,7 +398,9 @@ inside WebKit/JavaScriptCore driven by real `safaridriver` on an ARM64 Apple-sil
 at the default x86 target and again at `x86-64-v3` (AVX2 + FMA), which is the ISA gap between gate P1.5's
 Celeron and its desktop box. Every one of those agrees on the 17-line boot block, digest
 `db71f8a0bf5818d6…`, and on the compiled asset bytes. None of them is the device: the four named machines are
-was the unmet clause until both named devices reported on 2026-10-13; what remains unmeasured is R1/R2, which is a GPU-frame question and no longer a root-hash question.
+was the unmet clause until both named devices reported on 2026-10-13; what remains unmeasured is R1 and the windowed
+half of the demo — R2 has measured CI rows on both the CPU and the device path, so it no longer belongs in this
+sentence — and the residue is a GPU-frame question, no longer a root-hash question.
 
 **Guards against passing vacuously**, because three of the four holes below were in harness code written this
 session and each had already produced, or nearly produced, a green that meant nothing. A pinned expectation
