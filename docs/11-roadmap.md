@@ -270,6 +270,26 @@ meets a budget, and the demo has never been shown on one.
 
 ### Phase 1 exit, gate by gate — measured 2026-10-12, reconciled against this device and this session's runs on 2026-10-13
 
+**Updated 2026-10-17 — the device march now refuses work it can prove unnecessary, and the layer is priced on the
+demo scene's own rays.** `interp.wgsl`'s `second_child_may_skip` is doc 04 § Culling's bound-per-node-inside-a-step
+layer running on a GPU: at a plain `NODE_UNION`'s unwind — the only sound point, where `value` still holds the left
+operand — it reads that child's `[centre, radius]` row from the tail of `pool` and descends only if
+`length(p - centre) - radius < left`, and `device::pool_bytes` derives the table from the same `&Tree` as the
+parameters in both upload paths, so a shape cannot carry bounds for a scene it is not. Priced on the anchor's own
+**3,072 rays**: **348,953** node entries with the table against **391,193** with every skip refused — **42,240
+avoided** — with **0** rays changing hit/miss status and all **11** rows finite, so the table is not inert on this
+scene (an **upper** bound: the CPU also skips a smooth union's second child, OQ-54, and clamps its bound; the device
+arm does neither). Two costs the sentence has to carry. The arm's `+inf` licence spelling is inert **only** for a
+reader that keeps the bound unclamped — `max(-inf, 0) = 0` would satisfy `0 >= left` for every point inside the first
+child, which is missing geometry that renders plausibly — and the same change made `upload` build a table for every
+shape, which put `scene_bounds` on trees it had never seen and panicked CI run `39022931480` on the ARM64 macOS
+runner over a trailing record whose child index is the array's length; `collect` now refuses out-of-range children
+(`13b9595`, pinned by a CPU test that runs on all three architectures, since the example only reproduces it on a
+device runner). What is still not claimed: a device-side skip count — the stage sits at the downlevel
+four-storage-buffer ceiling, so a counter has to displace or reuse a binding, and the camera path's unbound slot 2 is
+where one would go. **R1's 16.67 ms is untouched by a lever that changes how many nodes a step evaluates**, so gate
+R1's row and the display half of the demo remain exactly as they were read. See doc 04, "The arm is landed".
+
 **Updated 2026-10-16 — the demo's scene now has a device path through the asset pipeline.**
 `crates/assetc/tests/fixtures/boot_scene.ron` is the boot's own scene written as *content*, and
 `crates/gpu/examples/boot_scene_on_device.rs` compiles it with the shipped `assetc::watch::Watch`, reads the
