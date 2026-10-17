@@ -544,7 +544,8 @@ registered in `docs/evidence.json` as phrase claims (`device_arm_skips_on_demo_s
 line prints the bare integer (`the device refused 22237 union second children`).
 
 **And then the arm was priced against itself: at 768 rays the saving did not resolve, and at 1080p with a paired
-statistic it does — ~19 to 24 ms, about 3.5%. Re-pricing the 768-ray grid with that same statistic leaves its null
+statistic it does — ~19 to 24 ms, about 3.5% on this laptop, and a measured 4.6% at 112 sigma on the desktop GPU the
+gate names, at the 64-step cap the march actually runs at. Re-pricing the 768-ray grid with that same statistic leaves its null
 standing at 0.005 ms, so the lever is grid-dependent and both ends of it are measured rather than argued.** `arm_skips_on_device` now also
 uploads the same tree through `Interpreter::upload_bounds_refused`, which keeps the node records, the pool layout and the
 walk byte-identical and makes every bound radius `+inf` — a control whose bound test can only answer *no*. Three things
@@ -595,6 +596,34 @@ The durations are informational and are not registered in `docs/evidence.json` (
 refusal counts. `r1_device_rays` found the same shape of result when it deleted 66 MB of per-frame ray bytes and the
 frame did not get faster by a resolvable amount, and this is the second time in this repository that an
 *asymptotically-obvious* saving has failed to appear as a number on a real GPU.
+
+**And the same pair ran on the desktop GPU the gate was written against, at the cap the march actually runs at:
++4.6% at 112 sigma.** The cap-1 default above is a fact about this laptop's watchdog, not about the question, so
+`arm_price_at_1080p` takes `R1_ARM_CAP` and buildbox's **GeForce GTX 1070 [Vulkan, DiscreteGpu]** ran the same
+host-written ray path — the same 2,073,600 rays, `max_t` 40, `surface` 1e-3, reused-buffer frame path the MX250 rows
+above use — at the 64-step cap the shipped march uses. Armed median **70.519 ms** against the `+inf`-bound control's
+**73.945 ms** over 15 order-alternating pairs: paired median **3.420 ms** with a **0.080 ms** median absolute deviation
+(robust standard error **0.031 ms**, so **112.0 sigma**) and **14 of 15** repeats slower without the arm, **75,944**
+surfaces found, **depths bit-identical on every repeat**, and the 512-ray sample against `render::march` at **0**
+hit/miss disagreements with worst deviation **0.000000**. The control is a control on this box too — its own tally is
+**0** refusals against the armed shape's **768** over the 768 probe rays. The dispatch-position term is printed beside
+the arm's number and not merged into it: **−3.266 ms** with 7/15 pairs slower in second place. The same box at cap 1
+reads armed **12.393 ms** against control **13.183 ms**, a paired median of **0.606 ms** (**+6.0%**, MAD 0.223 ms,
+robust standard error 0.085 ms, **7.1 sigma**, 14/15) with **0** surfaces found and a **−0.828 ms** position term.
+Reading the two caps together is the new part: the arm's *absolute* saving grows with the step budget (0.606 → 3.420 ms)
+while its *share* of the frame falls (6.0% → 4.6%), so more steps buy it more milliseconds and a smaller slice of the
+cost. And the 768-ray null survives a third instrument — it re-prices here at **−0.001 ms** (MAD 0.003 ms, robust
+standard error 0.001 ms, **−1.5 sigma**, 9/30 pairs) in the cap-64 run and **0.000 ms** (**0.6 sigma**, 17/30) in the
+cap-1 one, 32 surfaces both times.
+
+So the laptop's **~3.5%** is now a measured **4.6% at the cap the frame is actually marched at**, and on the admissible
+instrument the arm lives in a frame that costs **70.5 ms against R1's 16.67 ms budget — a factor of 4**. That is where
+the "no culling lever closes it" claim sits now: the arm's 3.420 ms is **6.4%** of the 53.8 ms the frame would have to
+shed to reach budget (DERIVED from the two medians in the same log). The 1070's cap-64 row here and the camera path's
+91.15 ms row below are *not* two prices of one frame — different paths, different fields, different `max_t` — and the
+comparison they do support is the coarse one: on the desktop GPU R1 names, a 64-step 1080p march costs 70–91 ms.
+Durations stay informational and are not registered in `docs/evidence.json` (ADR-017); what is registered is the
+refusal counts.
 
 And the run that mattered was red. CI `39022931480` on the ARM64 macOS runner died with `index out of bounds:
 the len is 5 but the index is 5` in `cull.rs`'s `collect`, reached from `as4_asset_reupload`: making `upload`
@@ -737,7 +766,8 @@ laptop's split, and it inverts because the camera path never uploads 66 MB of ra
 46-pass row is no longer the march's price**: the same grid, same field, same cap costs 91.15 ms in one dispatch,
 6.1× cheaper, so moving `march_rays` onto the device was worth that factor and the old harness had been measuring
 itself. Durations stay informational (ADR-017); what this settles is the shape of the gap — 5.5× on a desktop GPU,
-against the bound-skip arm's measured ~3.5% — which is why the remaining levers are step budget, resolution and
+against the bound-skip arm's measured **+4.6%** on that same box at the same 64-step cap (the host-written-path rows
+above) — which is why the remaining levers are step budget, resolution and
 streaming, and not more culling micro-optimisation.
 
 **Why buildbox reported no adapters at all, when its Vulkan loader sees the GPU (2026-10-14).** Not the driver,

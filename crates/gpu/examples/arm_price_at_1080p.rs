@@ -9,8 +9,11 @@
 //! of 3.776 of spread on a scene the arm never touches. A null at 768 rays is not the same claim as a null at
 //! 2,073,600 rays, and R1's 16.67 ms is stated at 1080p, so this file runs the identical A/B at that grid — and then
 //! re-prices the 768-ray pair with the corrected statistic, which is the test of whether the earlier null was the
-//! arm or the arithmetic. The corrected statistic keeps the null — the paired figure at 768 rays is microseconds —
-//! while at R1's grid the same arm is worth tens of milliseconds. The lever is grid-dependent, and that is now
+//! arm or the arithmetic. The corrected statistic keeps the null — the paired figure at 768 rays is microseconds,
+//! on three instruments now — while at R1's grid the same arm is worth 19–24 ms of a 634 ms frame on the MX250 at
+//! cap 1 and 3.4 ms of a 74 ms frame on the GTX 1070 at cap 64. The milliseconds span an order of magnitude between
+//! those rows and the share does not (3.0–3.9% and 4.6%), so the ratio is the part that is about the arm and the
+//! absolute is the machine's. The lever is grid-dependent, and that is now
 //! measured at both ends instead of argued at one.
 //!
 //! The verdict is in the printed rows, not in this comment, because the figures move between runs. What does not
@@ -22,7 +25,9 @@
 //! −20 ms with most pairs disagreeing on the sign, while the second dispatch of each pair costs ~150 ms whichever walk
 //! it carries. So the pairs alternate, and the position term and the arm's term are estimated and printed apart — a
 //! gap that survives that separation, with every pair agreeing on its sign, is the arm's and not the queue's. A cap-1
-//! frame finds no surfaces, so the depth-identity checks below compare miss markers; the picture claim that matters (a
+//! frame finds no surfaces, so at the default cap the depth-identity checks below compare miss markers; run at
+//! `R1_ARM_CAP=64` they compare the 75,944 real surfaces the 1070 finds, which is the stronger form of the same test.
+//! The picture claim that matters (a
 //! surface cannot quietly vanish) is the one the CI examples hold.
 //!
 //! Two things make the pair admissible rather than two timings of convenience, and both are asserted before any
@@ -49,8 +54,11 @@
 //! `R1_ARM_CAP` raises that cap on a machine with no watchdog to answer (buildbox's GTX 1070), which is the only way
 //! to price the arm at the cap the march actually runs at; every row names the cap it was taken at, because a saving
 //! measured at cap 1 and a saving measured at cap 64 are different claims.
-//! What this says about R1 is the uncomfortable half: a 1080p host-ray frame at cap 1 already costs several hundred
-//! ms on this GPU, and no culling lever closes a factor of tens.
+//! What both devices say about R1 is the uncomfortable half, and they say it at different scales: on the MX250 a
+//! cap-1 1080p host-ray frame costs several hundred ms, a factor of tens over the 16.67 ms budget, while on the GTX
+//! 1070 at `R1_ARM_CAP=64` the same frame costs 70.5 ms armed against a 73.9 ms control — a factor of 4 — and the
+//! arm's 3.4 ms there is 6.4% of the 54 ms the frame would have to shed to reach budget. No culling lever closes
+//! either gap, and neither number is a gate.
 //!
 //! What this is NOT: not a CI step (a paravirtual adapter would take minutes per march, and the point of the file
 //! is a real device), not hashed, and not a gate. Durations are printed and are informational (ADR-017): the row
