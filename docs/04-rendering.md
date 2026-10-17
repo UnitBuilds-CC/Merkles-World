@@ -461,6 +461,19 @@ the plant that deletes the guard turns exactly that assertion red, with node 0 o
 leaking `[1.0, 0.0, 0.0, 2.0]`. What the layout does *not* yet have is a caller: no WGSL arm reads it, and the
 frame it would price is still `march_one` evaluating the whole tree every step.
 
+**The carrier has an answer now, and it is neither of the two cheap options.** Slot 2 is
+`var<storage, read> queries: array<vec4<f32>>` - exactly the encoded row's type - and the camera path never
+binds it, so it reads as free. It is not: `march_one` is shared by both entry points, and its own comment says
+that duplicating the advance "would have been the cheaper edit and the wrong one", so giving slot 2 a second
+meaning would fork the law that this file exists to keep single. The header uniform is the other candidate, and
+growing it 16 to 32 bytes moves the 112-byte camera block `r1_device_rays` measures and several rows quote as a
+result. What survives is the **tail of `pool`**: it is `array<f32>`, already bound at slot 1 on both paths, and
+the table is four `f32` per node, so the rows follow the parameters and the shader finds them with
+`arrayLength(&pool) - 4u * arrayLength(&nodes)` - no new binding, no uniform churn, one copy of the march, and
+the table uploaded once per shape instead of once per frame. Its price is a contract the examples assert:
+`boot_scene_on_device` pins the device pool at the asset's 25 parameters, which becomes 25 parameters plus 44
+table words for the boot's 11 nodes.
+
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
 The previous section's closing claim was made on a 640×360 grid and its own text flagged the gap: "cap-independent
