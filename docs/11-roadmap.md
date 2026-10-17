@@ -307,9 +307,18 @@ comparison the script exits 1, so the agreement is a diff that can fail rather t
 
 
 The completion test has four clauses and eleven gates hanging off it, so each is listed with the
-evidence that decides it rather than with a colour. Read the last row first: **the ledger half of the
-demo exists, the engine half boots and can turn a compiled asset into pixels on a CPU, and what does not
-exist is a renderer** - no GPU, no window, no BVH - **nor gate P1.5's fourth target.**
+evidence that decides it rather than with a colour. **This lead paragraph was written 2026-10-12 and two of
+its three claims have been overtaken by the rows it summarises**, so read the rows, not this sentence: the
+ledger half and the booting half of the demo both exist; **the renderer half has a device path now** -
+`wgpu` is on `main` (OQ-51 ruled, `9139bb8`) and `interp.wgsl`'s `march_rays` / `march_rays_from_camera`
+draw a compiled scene asset on a GPU, asserted ray-for-ray against `render::march` - and **gate P1.5 is met
+as amended**, on the two devices this bench actually has. What the same sentence still gets right, and what
+therefore keeps Phase 1's exit open: **no window**, so R1, R2 and R5's "visible"/"viewable" halves stay
+unmeasured (OQ-51); **no BVH build**, because the enclosures are derived per node from the emitted tree and
+the spatial-index question belongs to `assetc`'s union emission (task 27, ADR-024); **no frame that meets
+R1**, since the nine whole-frame rows on the MX250 - the only admissible instrument here - sit between 90.66
+and 893.51 ms, 5.4x to 53.6x the 16.67 ms budget; and **not P1.5's original fourth target either**, which is
+exactly why that row reads *met as amended* rather than met.
 
 | Clause or gate | State | The evidence |
 |---|---|---|

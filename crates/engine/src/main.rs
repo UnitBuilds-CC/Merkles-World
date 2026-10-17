@@ -35,7 +35,9 @@
 //! a file an `assetc` run wrote, which is the shape doc 09's dev profile ends in.
 //!
 //! What is NOT here, because docs/11's gate table says so and a demo must not quietly disagree with
-//! its own status page: no GPU, no window, no BVH build (the bounds are derived per node from the tree the
+//! its own status page: no GPU **in this binary** (`engine` has no `gpu` dependency; the device path is real
+//! and lives in `crates/gpu`, marching a compiled asset beside the boot rather than inside it), no window, no
+//! BVH build (the bounds are derived per node from the tree the
 //! asset compiler emitted, not from a spatial index over primitives), no macro simulation, no mod loading. Culling and a work ceiling are here since steps 7 and 8, on the CPU path;
 //! ledger compaction is a landed transform with no caller in this loop. The first clause of the pitch demo is now true in the narrow sense that something
 //! boots and completes the loop end to end, and the asset it boots with goes through the file format
