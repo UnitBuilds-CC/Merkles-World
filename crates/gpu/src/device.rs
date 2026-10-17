@@ -42,6 +42,22 @@ pub struct Interpreter {
     adapter: String,
 }
 
+/// The camera-path pipeline compiled from the shipped `interp.wgsl` with its `DEPTH` constant replaced, so the
+/// interpreter's per-invocation stack capacity is a measured term instead of an argument.
+///
+/// This is a *measurement* device, not a second interpreter: the source text is the same file and the only bytes
+/// that change are the literal on the `const DEPTH` line, so the march law, the walk, the combine arms and every
+/// binding are exactly the ones the shipped pipeline compiles. Duplicating the walk to vary its stack would have
+/// been the fork `interp.wgsl`'s header comment exists to prevent.
+///
+/// Kept opaque so `wgpu::ComputePipeline` stays out of the crate's public surface. Note what a smaller capacity
+/// costs in correctness rather than milliseconds: the walk's own guard returns the no-surface sentinel once the
+/// traversal exceeds it, so a variant below the loaded tree's depth is not a faster renderer, it is a refusal.
+pub struct CameraVariant {
+    pub depth: u32,
+    pipeline: wgpu::ComputePipeline,
+}
+
 /// One timed bench pass. Two modes, because queueing work and waiting for it are different costs.
 #[derive(Debug, Clone)]
 pub struct Bench {
@@ -1140,10 +1156,31 @@ impl Interpreter {
     /// Bind a resident shape to a camera frame. Slot 2 - the ray buffer - is absent, because the entry
     /// point this pipeline was derived from never names it.
     pub fn bind_camera(&self, shape: &Shape, frame: &CameraFrame) -> Bind {
+        self.bind_camera_on(&self.camera_pipeline, shape, frame)
+    }
+
+    /// Bind a frame to a caller-chosen camera pipeline. The layout comes from the pipeline itself, exactly as
+    /// `bind_camera` derives it, so a variant that stopped reading one of these buffers fails validation rather
+    /// than quietly measuring a frame that never used the scene.
+    pub fn bind_camera_variant(
+        &self,
+        variant: &CameraVariant,
+        shape: &Shape,
+        frame: &CameraFrame,
+    ) -> Bind {
+        self.bind_camera_on(&variant.pipeline, shape, frame)
+    }
+
+    fn bind_camera_on(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        shape: &Shape,
+        frame: &CameraFrame,
+    ) -> Bind {
         Bind {
             bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("camera-march"),
-                layout: &self.camera_pipeline.get_bind_group_layout(0),
+                layout: &pipeline.get_bind_group_layout(0),
                 entries: &[
                     entry(0, &shape.nodes),
                     entry(1, &shape.pool),
@@ -1155,9 +1192,61 @@ impl Interpreter {
         }
     }
 
+    /// Compile the shipped interpreter with its `DEPTH` capacity replaced, for the cost ladder. Refuses rather
+    /// than silently handing back the shipped module: the pattern has to be present exactly once, because a
+    /// ladder whose rows are all the same pipeline would print a stack price of zero and look like a finding.
+    pub fn camera_variant(&self, depth: u32) -> Result<CameraVariant, String> {
+        const DEPTH_LINE: &str = "const DEPTH: u32 = 32u;";
+        let shipped = crate::naga_validate::INTERP;
+        if shipped.matches(DEPTH_LINE).count() != 1 {
+            return Err(format!(
+                "interp.wgsl's `{DEPTH_LINE}` line is not found exactly once, so the ladder cannot attribute a \
+                 row to a capacity"
+            ));
+        }
+        let source = shipped.replace(DEPTH_LINE, &format!("const DEPTH: u32 = {depth}u;"));
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: None,
+                module: &module,
+                entry_point: Some("march_rays_from_camera"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        Ok(CameraVariant { depth, pipeline })
+    }
+
     /// March a device-generated frame: one dispatch of width x height rays, then the depths back. The law
     /// reported is the one `write_camera` recorded, so this cannot state a law the device never received.
     pub fn march_camera_frame(&self, bind: &Bind, frame: &CameraFrame) -> Result<March, String> {
+        self.march_camera_on(&self.camera_pipeline, bind, frame)
+    }
+
+    /// The same dispatch and read-back through a caller-chosen camera pipeline, so a ladder's rows differ only
+    /// in the constant their modules were compiled with.
+    pub fn march_camera_variant(
+        &self,
+        variant: &CameraVariant,
+        bind: &Bind,
+        frame: &CameraFrame,
+    ) -> Result<March, String> {
+        self.march_camera_on(&variant.pipeline, bind, frame)
+    }
+
+    fn march_camera_on(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        bind: &Bind,
+        frame: &CameraFrame,
+    ) -> Result<March, String> {
         let Some((max_steps, surface)) = frame.law else {
             return Err(
                 "march_camera_frame on a frame no camera has been written into".to_string(),
@@ -1170,7 +1259,7 @@ impl Interpreter {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&self.camera_pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind.bind, &[]);
             pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
         }
@@ -1221,6 +1310,27 @@ impl Interpreter {
         bind: &Bind,
         frame: &CameraFrame,
     ) -> Result<f64, String> {
+        self.march_camera_no_readback_on(&self.camera_pipeline, bind, frame)
+    }
+
+    /// The no-read-back march through a caller-chosen camera pipeline. This is the leg the cost ladder times:
+    /// a variant's `DEPTH` changes only the stack each invocation carries, so the step work and the byte count
+    /// are the same, and the difference between two rows is the difference in their per-invocation state.
+    pub fn march_camera_variant_no_readback(
+        &self,
+        variant: &CameraVariant,
+        bind: &Bind,
+        frame: &CameraFrame,
+    ) -> Result<f64, String> {
+        self.march_camera_no_readback_on(&variant.pipeline, bind, frame)
+    }
+
+    fn march_camera_no_readback_on(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        bind: &Bind,
+        frame: &CameraFrame,
+    ) -> Result<f64, String> {
         if frame.law.is_none() {
             return Err(
                 "march_camera_frame_no_readback on a frame no camera has been written into"
@@ -1233,7 +1343,7 @@ impl Interpreter {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&self.camera_pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind.bind, &[]);
             pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
         }
