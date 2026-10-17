@@ -770,6 +770,57 @@ against the bound-skip arm's measured **+4.6%** on that same box at the same 64-
 above) — which is why the remaining levers are step budget, resolution and
 streaming, and not more culling micro-optimisation.
 
+**The grid × step frontier, 2026-10-18: one session on the same box at `10659d4`, taken as the baseline before any
+evaluator change.** `R1_GRID=WxH` exists so this table comes from the instrument that already carries the rows above
+rather than from a second harness whose numbers would not be comparable to them. Eleven repeats at 1080p, two at each
+smaller grid. Every row asserts the same integers the table above asserts: bytes back = pixels × 4, **0** bit-differing
+depths between the split legs and the whole path at every cap and every grid, and the 2,040-pixel lattice agreeing with
+`render::march` with **0** hit/miss disagreements. The lattice's *worst deviation* does move with the grid — 0.000001
+at 1080p, 0.000020 at 720p, 0.000005 at 540p, 0.000002 at 360p — because a different grid maps the same 60×34 sample
+onto different pixel centres, which is the sampling fact the example's lattice comment warns about rather than a
+divergence in the law, and it stays two orders below the 0.002 assert. The surfaces found scale with area exactly as
+they should for one field: 80,964 / 35,964 / 20,276 / 9,012.
+
+| grid | pixels | ms whole, cap 1 | ms whole, cap 8 | ms whole, cap 64 | ms read-back at cap 64 |
+|---|---|---|---|---|---|
+| 1920x1080 | 2,073,600 | **15.92** (0.96× budget) | **70.75** (4.24×) | **91.35** (5.48×) | 6.93 |
+| 1280x720 | 921,600 | **7.11** (0.43×) | **31.65** (1.90×) | **40.57** (2.43×) | 2.81 |
+| 960x540 | 518,400 | **3.11** (0.19×) | **17.78** (1.07×) | **23.01** (1.38×) | 1.56 |
+| 640x360 | 230,400 | **1.41** (0.08×) | **7.94** (0.48×) | **10.42** (0.62×) | 0.35 |
+
+Medians; the ratios against 16.67 ms are DERIVED. The spread on this box is small enough to price a change against,
+which is the reason it is the box the baseline comes from: eleven runs of 1080p cap 64 span 91.00–91.46 ms (0.5%) and
+the two runs at each frontier grid agree within 0.06 ms — the opposite of the laptop, whose identical code spread 5.4×
+between runs, and the reason ADR-017 asserts durations nowhere.
+
+Four things this settles, and one of them retracts a sentence above:
+
+- **One field evaluation per pixel has a price, and it is flat across a 9× pixel range.** Cap-1 march ÷ pixels =
+  4.49 / 4.57 / 4.65 / 4.78 ns at 1080p / 720p / 540p / 360p, so the march is throughput-bound, not
+  dispatch-latency-bound, and a full 1080p grid's worth of `interp.wgsl` tree-walks is a stable **9.30 ms**
+  denominator for anything that claims to make a walk cheaper.
+- **Once the depth copy is charged, R1's 1080p envelope affords about one evaluation per pixel.** 16.67 ms minus the
+  7.04 ms median read-back leaves 9.63 ms, and a full-grid walk costs 9.30 ms (DERIVED), so the shipped path's
+  budget is *one walk plus the copy* — which is exactly what the cap-1 row measures, at 0.96×. Deleting the copy
+  instead of shrinking the march would raise that allowance from 1.04 to 1.79 walks per pixel (DERIVED). Neither
+  reaches 64.
+- **The step cap is not where the 5.5× lives, so "step budget" is removed from the list of levers above.** The
+  cap-64 march is 88.20 ms = **9.5 full-grid walks**, not 64 (DERIVED), because both a hit and an escaping miss
+  return early — a miss outside a bounded field roughly doubles `t` per step, so it reaches `max_t` long before the
+  cap bites. That is why cap 8 still costs 4.24× the budget while no cap at 1080p costs less than 0.96× of it: the
+  gate needs *fewer walked pixels* or a *cheaper walk*, and the 96.1% of pixels in this frame that find no surface
+  (80,964 of 2,073,600) is the size of the first.
+- **Resolution is a real lever with a measured exchange rate and a stated ceiling.** Frame cost scales almost exactly
+  with pixel count (91.35 ÷ 4 = 22.8 against 23.01 measured at 540p), so at cap 64 this gate is met at 640×360
+  (0.62×) and missed at 960×540 by 1.38×. Meeting it that way would ship a 230,400-pixel frame against a gate that
+  names 1080p, which is redefining the gate rather than meeting it — recorded here so the number is not quoted as a
+  pass later.
+
+No evaluator change is measured in this table; it is the baseline. The two structural changes its shape points at are
+a device-side cull that removes whole walks (the CPU raster already has per-tile enclosure culling; the camera path
+has none) and a per-walk cost cut inside the interpreter, whose `DEPTH = 32` frame stack is allocated at 1 KB per
+invocation whatever the loaded tree's depth happens to be — the scene above is depth 2.
+
 **Why buildbox reported no adapters at all, when its Vulkan loader sees the GPU (2026-10-14).** Not the driver,
 not permissions, not the ICD: its `gcc` is a **Nix-store wrapper** (`/nix/store/…gcc-wrapper-13.4.0`), and
 binaries linked by it don't consult the system `ld.so.cache`, so `dlopen("libvulkan.so.1")` — and `libEGL.so` —
