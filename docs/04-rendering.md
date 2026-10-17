@@ -528,9 +528,17 @@ reads **2,204** on both sides. A single sphere reads **0** on both, which is the
 descents or steps could not read zero there. And a smooth union reads **0** on the device against **2,172** avoided
 on the CPU — OQ-54's refusal measured from both sides instead of asserted in a comment. Depths are bit-identical to
 the un-tallied stride-1 march on all four scenes, and match `render::march` with **0** hit/miss disagreements and
-worst deviation **0.000000**. What is still open: this example is not yet a CI step, so these are named-device
-numbers rather than trunk's, and the demo scene's 42,240 stays an upper bound until the same tally runs over its
-3,072 rays.
+worst deviation **0.000000**. **The device's own number on the demo scene, and it is smaller than the upper bound.** `boot_scene_on_device` now
+marches the same 3,072 rays through `march_counted` too, and the device refused **22,237** union second children on
+**2,640** of those rays — a little over half of what the CPU layer's 42,240 offered. The gap is exactly where the CPU
+layer is known to be wider: the demo scene is built from smooth unions, whose skips OQ-54 keeps on the CPU, and its
+clamped lower bounds fire where the unclamped device test does not. The counted dispatch's depths are bit-identical
+to the one-shot march's over all 3,072 rays, and the anchor is unmoved — **605** surfaces, **0** hit/miss
+disagreements, worst deviation **0.000001**, the reused frame still differing from the one-shot in no bit at all.
+Both examples are CI steps now: `arm_skips_on_device` sits beside `boot_scene_on_device` in the gates job, so a
+runner with no adapter prints its own SKIP line and the ARM64 macOS paravirtual Metal adapter counts for real. R1's
+16.67 ms is still untouched: this lever changes how many nodes a step evaluates, not how many rays are in flight,
+and 22,237 refusals spread over 3,072 rays is 7.2 per ray against a march of up to 96 steps each.
 
 And the run that mattered was red. CI `39022931480` on the ARM64 macOS runner died with `index out of bounds:
 the len is 5 but the index is 5` in `cull.rs`'s `collect`, reached from `as4_asset_reupload`: making `upload`

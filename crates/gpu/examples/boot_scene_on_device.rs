@@ -234,6 +234,7 @@ fn main() {
         }
     }
     let (licensed_visits, baseline_visits) = (licensed.visits(), baseline.visits());
+    let avoided = baseline_visits - licensed_visits;
     assert_eq!(
         flipped, 0,
         "the bound table changed hit/miss status for {flipped} of {} rays, so an enclosure is too small: \
@@ -254,7 +255,6 @@ fn main() {
          only plain union and leaves the bound unclamped, so it skips a subset of what the CPU may.",
         table.len(),
         table.len() - rows_licensed,
-        avoided = baseline_visits - licensed_visits,
         rays_count = rays.len(),
     );
 
@@ -296,6 +296,43 @@ fn main() {
     let one_shot = interpreter
         .march_uploaded(&shape, ROOT, &rays)
         .expect("the same scene must march through the one-shot path too");
+
+    // 3b. The arm counted by the device itself, on the demo scene's own rays — the measurement the CPU
+    // figure above was labelled an upper bound for. The assert is that the tally costs the picture nothing:
+    // the counted stride-2 dispatch must hand back the one-shot march's depths word for word, so the number
+    // printed beside the CPU's describes the frame the demo draws rather than a second renderer's.
+    let counted = interpreter
+        .march_counted(&shape, ROOT, &rays)
+        .expect("the demo scene must march through the counted path too");
+    let stride_flips = counted
+        .march
+        .depths
+        .iter()
+        .zip(&one_shot.depths)
+        .filter(|(counted, plain)| counted.to_bits() != plain.to_bits())
+        .count();
+    assert_eq!(
+        stride_flips, 0,
+        "the counted dispatch moved {stride_flips} of {} rays between surface and sky against the one-shot \
+         march, so the tally is a second renderer rather than the same walk with a word appended",
+        rays.len()
+    );
+    let device_refusals: u64 = counted.skips.iter().map(|count| u64::from(*count)).sum();
+    let device_firing = counted.skips.iter().filter(|count| **count > 0).count();
+    assert!(
+        device_refusals <= avoided,
+        "the device counted {device_refusals} refusals while the CPU layer avoided {avoided} node entries \
+         over the same rays and the same table. The CPU arm is the superset by construction — it also skips \
+         smooth unions and clamps its bound — so a device count above it means the two instruments are not \
+         counting the same thing"
+    );
+    println!(
+        "// arm measured     : the device refused {device_refusals} union second children, on \
+         {device_firing} of {} rays, against the CPU layer's {avoided} entries avoided. The gap between the \
+         two is the smooth unions and the clamped bounds the CPU takes and this arm refuses; on a scene \
+         with neither, the two numbers are equal (see `arm_skips_on_device`).",
+        rays.len(),
+    );
 
     assert_eq!(
         marched.max_steps, MAX_STEPS,

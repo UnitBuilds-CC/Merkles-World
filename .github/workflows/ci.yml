@@ -323,6 +323,11 @@ jobs:
       # SKIP line, and the asserts that do run are integers and geometry, never a duration.
       - name: Demo scene from content on a device (informational)
         run: cargo run --release -p gpu --example boot_scene_on_device
+      # The bound-skip arm counted by the device's own walk, on four scenes: zero refusals asserted on the
+      # tree that has no second child and on the blend the arm refuses, and the CPU layer's avoided count
+      # printed beside the device's for the scene where it does fire. Integers only, same SKIP discipline.
+      - name: Bound-skip arm counted on a device (informational)
+        run: cargo run --release -p gpu --example arm_skips_on_device
       # The shipped binary booting from the same .ron, with its own falsifying arm. `shell: bash` because
       # the Windows default shell is PowerShell, where `set -euo pipefail` is a no-op.
       - name: The demo boots from a compiled asset
