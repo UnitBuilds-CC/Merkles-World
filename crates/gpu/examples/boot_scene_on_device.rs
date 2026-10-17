@@ -205,6 +205,59 @@ fn main() {
         loaded.label.len(),
     );
 
+    // The arm's layer, priced on the demo scene's own rays — printed before the device opens, because it is
+    // a CPU quantity and a GPU-less runner should still report it.
+    //
+    // `interp.wgsl` has no visit counter: its stage already binds the four storage buffers
+    // `Limits::downlevel_defaults()` allows, so a counter would have to displace a real binding. That means
+    // the one thing this seam cannot print is how often the device actually took a skip. What it *can* print
+    // is the same question put to the evaluator the arm was transcribed from — `march_bnb` consults a bound
+    // table and `SceneBounds::visits` counts the node entries it entered, while `counting_bounds` charges the
+    // identical walk and refuses every skip, which is the baseline that makes the difference mean something.
+    // No third implementation of A-07 is written here, deliberately: two walks of one grammar are the fork
+    // this repository's whole interpreter suite exists to prevent.
+    //
+    // The device arm is a *subset* of the saving below (plain union only, bound unclamped, so it skips less
+    // than the CPU may), and `rows licensed` is the part that applies to it directly: an infinite-radius row
+    // is the table's own spelling of "nothing bounds this subtree", and the arm cannot fire on one.
+    let rays = probe_rays();
+    let licensed = render::cull::scene_bounds(&tree);
+    let baseline = render::cull::counting_bounds(&tree);
+    let table = licensed.encoded();
+    let rows_licensed = table.iter().filter(|row| row[3].is_finite()).count();
+    let mut flipped = 0usize;
+    for ray in &rays {
+        let pruned = render::march_bnb(&tree, &licensed, ROOT, *ray).is_some();
+        let charged = render::march_bnb(&tree, &baseline, ROOT, *ray).is_some();
+        if pruned != charged {
+            flipped += 1;
+        }
+    }
+    let (licensed_visits, baseline_visits) = (licensed.visits(), baseline.visits());
+    assert_eq!(
+        flipped, 0,
+        "the bound table changed hit/miss status for {flipped} of {} rays, so an enclosure is too small: \
+         skipping work that was load-bearing is the failure this arm exists to avoid",
+        rays.len()
+    );
+    assert!(
+        licensed_visits <= baseline_visits,
+        "the pruned walk entered {licensed_visits} nodes and the refusal baseline entered {baseline_visits} — \
+         a bound table that costs more entries than the walk it skips is a bug in the table"
+    );
+    println!(
+        "// arm pricing     : {} table rows uploaded, {rows_licensed} with a finite radius and {} as +inf (an \
+         +inf row bounds nothing, so the device arm cannot fire on it); over {rays_count} rays the walk entered \
+         {licensed_visits} nodes with the table against {baseline_visits} with every skip refused — \
+         {avoided} entries avoided, the pruned walk reaching the same hit/miss set on all of them \
+         ({flipped} flipped). Upper bound on the device arm's saving, not a measurement of it: the arm asks \
+         only plain union and leaves the bound unclamped, so it skips a subset of what the CPU may.",
+        table.len(),
+        table.len() - rows_licensed,
+        avoided = baseline_visits - licensed_visits,
+        rays_count = rays.len(),
+    );
+
     let interpreter = match Interpreter::open_hardware() {
         Ok(interpreter) => interpreter,
         Err(error) => {
@@ -219,7 +272,6 @@ fn main() {
     };
     println!("// adapter          : {}", interpreter.adapter());
 
-    let rays = probe_rays();
     let shape = interpreter.upload(&tree);
     println!(
         "// uploaded         : {} node records, {} bytes resident, one allocation for the scene",

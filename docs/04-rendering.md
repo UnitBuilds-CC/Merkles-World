@@ -504,6 +504,31 @@ unused rather than beside the march it counts. The saving is therefore still pri
 and R1's 16.67 ms stays unmet, since this changes how many nodes a step evaluates, not how many rays are in
 flight or what the frame costs on this bench.
 
+**What the arm is worth, and the CI run that found a second bug in it (later the same day).** The paragraph
+above said the arm's saving was "not measured as taking effect on the device", and that is now half-superseded:
+`boot_scene_on_device` prints the arm's own layer priced on the demo scene's own rays, using the evaluator the
+arm was transcribed from rather than a third walk of the grammar. Over the anchor's **3,072 rays** the bound
+table entered **348,953** nodes where the same walk with every skip refused entered **391,193 — 42,240 node
+entries avoided**, and **0 of the 3,072 rays changed hit/miss status**; all **11** uploaded rows carry a finite
+radius, so on this scene the table is not offering an inert table of infinities. That number is an **upper
+bound** on the device arm's saving, not its measurement: the CPU also skips a smooth union's second child once
+the children are `k` apart (OQ-54) and clamps its bound at zero, while the device asks only plain union and
+refuses to clamp, so it takes a subset. A device-side count is still the missing instrument, and the reason is
+structural — the stage is at the four-storage-buffer ceiling, so a counter has to displace or reuse a binding.
+
+And the run that mattered was red. CI `39022931480` on the ARM64 macOS runner died with `index out of bounds:
+the len is 5 but the index is 5` in `cull.rs`'s `collect`, reached from `as4_asset_reupload`: making `upload`
+build a bound table for *every* shape put `scene_bounds` on trees it had never been asked about, including
+fixtures with a trailing record whose derived second-child index is the array's own length. An evaluator only
+walks records reachable from `ROOT`, so a malformed asset is `validate`'s business; a bound table is built over
+**every** index before any walk happens, and a refusal structure that panics is worse than a refusal. `collect`
+now bounds an out-of-range child as unbounded-and-unlicenced, and
+`a_record_whose_child_index_lands_past_the_array_bounds_nothing_instead_of_panicking` in `crates/render/tests/cull.rs`
+pins it on all three CI architectures (the example only reproduces it on a device runner, which is why the test
+exists). The test found its own boundary: walking that fixture with `sdf_eval_bnb` still panics, in
+`lower_bound`, and that is left as the correct behaviour — the contract that refuses malformed assets is
+`validate`, not the hot branch of a walk that is already invalid. Suite size is **202 tests in 31 suites**.
+
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
 The previous section's closing claim was made on a 640×360 grid and its own text flagged the gap: "cap-independent

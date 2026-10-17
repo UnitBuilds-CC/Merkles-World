@@ -901,3 +901,55 @@ fn the_encoded_table_widens_exactly_the_rows_a_device_may_not_skip() {
         }
     }
 }
+
+/// `collect` sweeps **every** record in the array, while an evaluator walks only what `ROOT` reaches, so a
+/// tree with a trailing or padded record can hold a node whose derived child index is the array's own
+/// length. CI run `39022931480` found exactly that on the ARM64 macOS runner and nowhere else: `upload`
+/// started building a bound table for every shape, `as4_asset_reupload`'s grown-tree section reached
+/// `scene_bounds` on GPU-less runners for the first time, and the step died with
+/// `index out of bounds: the len is 5 but the index is 5` at `cull.rs:138` — a *bound table*, which is a
+/// refusal structure, panicking over a record no field query would ever have visited. The example still
+/// reproduces it on any device runner; this test reproduces it on all three CI architectures, which is why
+/// it exists.
+#[test]
+fn a_record_whose_child_index_lands_past_the_array_bounds_nothing_instead_of_panicking() {
+    // A union with one child in the array and the second child's index exactly at `nodes.len()`.
+    let truncated = Tree {
+        nodes: vec![
+            branch(NODE_UNION, 2, 2, 0, 0),
+            leaf(NODE_SPHERE, 0, 4, false),
+        ],
+        params: vec![1.0, 0.0, 0.0, 0.0],
+    };
+
+    let table = scene_bounds(&truncated);
+    let encoded = table.encoded();
+    assert_eq!(
+        encoded.len(),
+        truncated.nodes.len(),
+        "one row per node is the layout `interp.wgsl` locates the tail by, so a table that is short of a \
+         row would put every later row at the wrong offset"
+    );
+    // The missing child bounds nothing, so neither does its parent: unbounded, and spelled for a device as
+    // an infinite radius rather than a flag.
+    assert_eq!(
+        encoded[0],
+        [0.0, 0.0, 0.0, f32::INFINITY],
+        "a union with an out-of-range second child must not offer a radius, because its field is the min of \
+         a subtree nothing bounds"
+    );
+    assert_eq!(
+        table.lower_bound(0, [4.0, 0.0, 0.0]),
+        None,
+        "the licensed query must refuse the same node the row refuses, or the two refusal spellings drift"
+    );
+
+    // Where this test stops is deliberate. `sdf_eval_bnb` over the same tree panics in `lower_bound` on the
+    // same out-of-range child, and that is the correct behaviour: an evaluator *walks* the array, so a record
+    // whose children do not exist is an asset `validate` exists to refuse —
+    // `every_way_to_lie_about_a_tree_is_refused_with_the_right_reason` is that gate. A bound table is
+    // different in kind: it is *built* over every index before any walk happens, and `upload` now builds one
+    // for every shape, so the builder has to be total where the walker is entitled to be strict. Guarding
+    // `lower_bound` as well would move the check into the hottest branch of a walk that is already invalid and
+    // buy nothing.
+}

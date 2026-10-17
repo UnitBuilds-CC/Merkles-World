@@ -129,13 +129,27 @@ fn collect(tree: &Tree, pruning: bool) -> SceneBounds {
         let record = tree.nodes[index];
         let params = tree.params_of(record);
         let first = if record.arity() > 0 { index + 1 } else { index };
-        let second = if record.arity() > 1 {
+        let second = if record.arity() > 1 && first < tree.nodes.len() {
             first + tree.nodes[first].subtree_len() as usize
         } else {
             first
         };
-        let (first_enc, first_ok) = (bounds.enclosure[first], bounds.respects[first]);
-        let (second_enc, second_ok) = (bounds.enclosure[second], bounds.respects[second]);
+        // Both child reads are range-guarded, and the guard is load-bearing since `upload` started calling
+        // this: `collect` sweeps **every** index in the array, while an evaluator only ever walks records
+        // reachable from `ROOT`. A tree with trailing padding, or one built to be refused for a different
+        // reason, can therefore hold a record whose derived child index is the array's own length — and a
+        // *bound table* is a refusal structure, so it must not panic where a field query would never have
+        // looked. An out-of-range child bounds nothing, which makes its parent unbounded and unlicenced:
+        // the same answer the `Plane`/`Twist` arms give when the geometry itself has no provable enclosure.
+        let child_bound = |i: usize| {
+            if i < tree.nodes.len() {
+                (bounds.enclosure[i], bounds.respects[i])
+            } else {
+                (Enclosure::Unbounded, false)
+            }
+        };
+        let (first_enc, first_ok) = child_bound(first);
+        let (second_enc, second_ok) = child_bound(second);
         let (enclosure, respects) = match record.kind() {
             NODE_SPHERE => (
                 Enclosure::Bounded {
