@@ -136,6 +136,20 @@ touch is SM1's other half — *identically for two clients* — because that nee
 A-04's schema and A-05's tag registry do not exist yet. The field here is the spike's own stand-in, and
 nothing in it is hashed.
 
+**(The final two sentences are half superseded, 2026-10-17.)** SM1's consensus half has since been run and is
+now *asserted*: `cargo run --release --example s7_field_root -p engine` takes two clients that applied the same
+600 commits — one simulating all 512 regions, one using stage 3's frontier — hashes each `i32` field with
+`crates/ledger`, and reaches **one final field root `4a99a06ad6c1180d…`**, with the equilibrium root
+`134d7a3fc5efab7a…` pinned beside it. Both are `assert_eq!` constants, so a target that disagrees goes red
+rather than printing a different number politely — and CI run `38933143080` prints that pinned line on all three
+`gates` jobs, each reporting the same 512 / 257 / 129 / 66 windows and the same final digest. The window in which
+the two roots legitimately differ while
+both peers hold the same commits is **512 / 257 / 129 / 66 commits at ring 1 / 2 / 4 / 8** — OQ-01's
+"acceptable multi-epoch lag" with a measured cost in front of it, though *choosing* an acceptable value is still
+OQ-01's open half. What remains true from the sentences above: **A-04 and A-05 still have no contract file**, so
+the field leaf rooted there is deliberately spike-local — its `FIELD_KIND` borrows no frozen `contracts::tree`
+kind — which means SM1's clause is measured against a stand-in schema, not the one content will ship with.
+
 ## Rule library (what content can express)
 
 | Family | Example | Form | Jump method |
@@ -189,7 +203,7 @@ upgrades are invisible (silent world corruption).
 
 | Gate | Test | Status |
 |------|------|--------|
-| SM1 | Dam built in region A; region B (far, never loaded) evaluates to a dry lake bed at the next epoch, identically for two clients | **spike S7 — the project's key unknown.** Latency and cost measured (S7 first run above): distance over ring, 57% → 95% of whole-river work across ring 1 → 8, and the no-far-region-touched property holding. Consensus untested and untestable until A-04 and A-05 exist. |
+| SM1 | Dam built in region A; region B (far, never loaded) evaluates to a dry lake bed at the next epoch, identically for two clients | **spike S7 — the project's key unknown.** Latency and cost measured (S7 first run above): distance over ring, 57% → 95% of whole-river work across ring 1 → 8, and the no-far-region-touched property holding. Consensus half now measured and asserted (`examples/s7_field_root.rs`, a CI step): the frontier client and the whole-river client reach the same final field root `4a99a06a…` after 600 commits, with the disagreement window 512 / 257 / 129 / 66 commits at ring 1 / 2 / 4 / 8, and both digests pinned as `assert_eq!` constants. What still keeps SM1 unmet as a gate: the rooted field is spike-local, because A-04's schema and A-05's tag registry have no file, and OQ-01's acceptable-lag half is an uncalled decision. |
 | SM2 | Fast-forward 100,000 ticks of macro state in `< 50 ms` | invented target |
 | SM3 | Two runs of the same seed + transaction sequence produce identical epoch roots | ADR-017 |
 | SM4 | A rule upgraded mid-world does not teleport existing fields | § Determinism across versions |
