@@ -7,7 +7,11 @@
 //! `+inf`, so `second_child_may_skip` can only answer no) at 32x24 = 768 rays and found the saving inside the
 //! instrument's own noise floor: armed 3.635 ms against control 3.654, far pair 2.134 against 2.112, and 0.044 ms
 //! of 3.776 of spread on a scene the arm never touches. A null at 768 rays is not the same claim as a null at
-//! 2,073,600 rays, and R1's 16.67 ms is stated at 1080p, so this file runs the identical A/B at that grid.
+//! 2,073,600 rays, and R1's 16.67 ms is stated at 1080p, so this file runs the identical A/B at that grid — and then
+//! re-prices the 768-ray pair with the corrected statistic, which is the test of whether the earlier null was the
+//! arm or the arithmetic. The corrected statistic keeps the null — the paired figure at 768 rays is microseconds —
+//! while at R1's grid the same arm is worth tens of milliseconds. The lever is grid-dependent, and that is now
+//! measured at both ends instead of argued at one.
 //!
 //! The verdict is in the printed rows, not in this comment, because the figures move between runs. What does not
 //! move is the two design lessons. The pooled scatter of two interleaved medians is not this instrument's
@@ -155,7 +159,7 @@ fn main() {
     // 1. Admissibility first, at the grid where a march costs milliseconds: the armed shape's own walk reports
     //    refusals and the +inf control reports none. Without this the two 1080p timings below would be one
     //    walk measured twice and called a saving.
-    let probe = fan(PROBE_WIDTH, PROBE_HEIGHT);
+    let mut probe = fan(PROBE_WIDTH, PROBE_HEIGHT);
     let armed_counted = interpreter
         .march_counted(&interpreter.upload(&tree), ROOT, &probe)
         .expect("the probe grid must march through the counted path");
@@ -328,7 +332,104 @@ fn main() {
          instrument measures against and cannot reach",
     );
 
-    // 3. The whole-buffer identity above says the two device walks agree. This says the device walk agrees with
+    // 3b. `bbc07c3`'s null, re-priced with this statistic. That row measured the same 32x24 grid with medians of 30
+    //     and a pooled spread and found the arm's saving inside the noise; the 1080p pair above showed that a single
+    //     throttled march can inflate a pooled spread fifteen-fold around a steady gap, so the null was never about
+    //     the arm. Same rays, same cap (96, the one that file uses), order-alternating pairs instead of medians.
+    const NULL_CAP: u32 = 96;
+    const NULL_REPEATS: usize = 30;
+    for ray in &mut probe {
+        ray.max_steps = NULL_CAP;
+    }
+    let null_armed_shape = interpreter.upload(&tree);
+    let null_control_shape = interpreter.upload_bounds_refused(&tree);
+    let mut null_frame = interpreter.begin_frame(probe.len());
+    let null_armed_bind = interpreter.bind(&null_armed_shape, &null_frame);
+    let null_control_bind = interpreter.bind(&null_control_shape, &null_frame);
+    interpreter
+        .write_rays(&mut null_frame, ROOT, &probe)
+        .expect("the probe grid must fit its own frame");
+    let mut null_diffs = Vec::with_capacity(NULL_REPEATS);
+    let mut null_position = Vec::with_capacity(NULL_REPEATS);
+    let mut null_flips = 0usize;
+    let mut null_hits = 0usize;
+    for repeat in 0..NULL_REPEATS {
+        let armed_first = repeat % 2 == 0;
+        let first = interpreter
+            .march_frame(
+                if armed_first {
+                    &null_armed_bind
+                } else {
+                    &null_control_bind
+                },
+                &null_frame,
+            )
+            .unwrap_or_else(|error| panic!("null-reprice pair {repeat}, first march: {error}"));
+        let second = interpreter
+            .march_frame(
+                if armed_first {
+                    &null_control_bind
+                } else {
+                    &null_armed_bind
+                },
+                &null_frame,
+            )
+            .unwrap_or_else(|error| panic!("null-reprice pair {repeat}, second march: {error}"));
+        null_position.push(second.ms_frame_with_read - first.ms_frame_with_read);
+        let (arm, armless) = if armed_first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        null_flips += arm
+            .depths
+            .iter()
+            .zip(&armless.depths)
+            .filter(|(a, c)| a.to_bits() != c.to_bits())
+            .count();
+        null_hits = null_hits.max(arm.hits);
+        null_diffs.push(armless.ms_frame_with_read - arm.ms_frame_with_read);
+    }
+    assert_eq!(
+        null_flips, 0,
+        "at cap {NULL_CAP} the armed and armless walks disagree on {null_flips} of {} rays' depths across \
+         {NULL_REPEATS} pairs, so this is not one renderer measured twice and neither the 1080p row nor this one \
+         means anything",
+        probe.len()
+    );
+    let null_med = median(&mut null_diffs.clone());
+    let mut null_deviations: Vec<f64> = null_diffs
+        .iter()
+        .map(|diff| (diff - null_med).abs())
+        .collect();
+    let null_mad = median(&mut null_deviations);
+    let null_se = 1.4826 * null_mad / (NULL_REPEATS as f64).sqrt();
+    let null_sigma = if null_se > 0.0 {
+        null_med / null_se
+    } else {
+        0.0
+    };
+    let null_positives = null_diffs.iter().filter(|diff| **diff > 0.0).count();
+    let null_position_med = median(&mut null_position.clone());
+    println!(
+        "null re-price    : {} rays at cap {NULL_CAP}, {NULL_REPEATS} order-alternating pairs - {null_hits} \
+         surfaces on the device; paired median {null_med:.3} ms (MAD {null_mad:.3} ms, robust standard error \
+         {null_se:.3} ms, {null_sigma:.1} sigma), {null_positives}/{NULL_REPEATS} pairs slower without the arm, \
+         position term {null_position_med:.3} ms",
+        probe.len()
+    );
+    println!(
+        "null verdict     : {} - the claim under test is `bbc07c3`'s, that at this grid the arm's saving is \
+         inside the noise floor; overturning it here means the null was the arithmetic, and leaving it standing \
+         means the 1080p gap is a property of the grid rather than of the statistic",
+        if null_sigma > 2.0 && null_positives * 5 > NULL_REPEATS * 4 {
+            "the 768-ray null is overturned"
+        } else {
+            "the 768-ray null stands"
+        }
+    );
+
+    // 4. The whole-buffer identity above says the two device walks agree. This says the device walk agrees with
     //    `render::march` at R1's grid, sampled on a stride because the CPU reference costs a scan of the tree per
     //    ray and 2,073,600 of them is minutes of nothing but the anchor the CI examples already hold.
     let stride = (rays.len() / SAMPLED_TARGET).max(1);

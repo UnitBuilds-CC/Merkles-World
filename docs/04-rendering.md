@@ -544,7 +544,8 @@ registered in `docs/evidence.json` as phrase claims (`device_arm_skips_on_demo_s
 line prints the bare integer (`the device refused 22237 union second children`).
 
 **And then the arm was priced against itself: at 768 rays the saving did not resolve, and at 1080p with a paired
-statistic it does — 24 ms, 3.8%.** `arm_skips_on_device` now also
+statistic it does — ~19 to 24 ms, about 3.5%. Re-pricing the 768-ray grid with that same statistic leaves its null
+standing at 0.005 ms, so the lever is grid-dependent and both ends of it are measured rather than argued.** `arm_skips_on_device` now also
 uploads the same tree through `Interpreter::upload_bounds_refused`, which keeps the node records, the pool layout and the
 walk byte-identical and makes every bound radius `+inf` — a control whose bound test can only answer *no*. Three things
 are asserted before any number is read: the control's own tally is **0** refusals where the armed shape tallied
@@ -572,11 +573,19 @@ sign — a **3.5%** saving; three runs of the shipped build put that median betw
 to be true before that number meant anything, and the first corrects the sentence above: the pooled scatter answers
 this question badly — one throttled march in an early sample put **351 ms** of pooled standard deviation on a steady
 24 ms gap and called it *0.2 sigma* — so the 768-ray null is a statement about that instrument's statistic rather than
-settled geometry, and the paired treatment is owed there. The second is that the paired difference carries dispatch
+settled geometry. The re-price is in the same file and the null survives it: **768 rays at cap 96, 30
+order-alternating pairs, 32 surfaces**, paired median **0.005 ms** (MAD 0.073 ms, robust standard error 0.020 ms,
+**0.3 sigma**) with **15 of 30** pairs on either side of zero — a five-microsecond gap under an instrument that
+resolves milliseconds. So the lever is grid-dependent and both ends are now measured rather than argued: at 768 rays a
+march is 3.6 ms of dispatch and read-back and the arm's node work is microseconds inside that, while at 2,073,600 rays
+the device's own work finally dominates the queue and the same arm is worth ~24 ms. The second is that the paired
+difference carries dispatch
 **position** as well as the arm, found by hand-swapping the example so the control ran first in every pair: the same
 statistic then read **−20.103 ms** with only 4 of 15 pairs agreeing, and the second dispatch of each pair measured
 ~150 ms slower whichever walk it was. So the shipped instrument alternates the order per pair and prints the two terms
-separately — the position term now measures **1.903 ms** with 9/15 pairs, ten times smaller than the gap beside it,
+separately — the position term measures **1.903 ms** with 9/15 pairs on that run (the others: **0.717 ms** at 8/15 and
+**−6.909 ms** at 7/15), smaller than the arm's gap and with no consistent sign of its own, which is what a term kept
+out of the arm's column should look like,
 while the arm's term survives the separation with an almost unanimous sign. An effect that flips sign when you change
 which march runs first and survives when you alternate is an effect worth a row. Depths are bit-identical across the
 whole 1080p buffer on all fifteen pairs, and the 512 sampled rays agree with `render::march` (**0** hit/miss

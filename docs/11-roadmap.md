@@ -293,7 +293,9 @@ median of **19.189 ms** (MAD **5.612 ms**, **8.9 sigma**, **14/15** pairs agreei
 three runs put that median between **19.189** and **24.475 ms**, so the width is a few milliseconds and the sign is
 not in question.
 The pooled scatter had called the same gap *0.2 sigma* until one throttled march inflated it to 351 ms, so the
-768-ray reading above is owed the paired treatment; and the paired difference was shown to be contaminated by dispatch
+768-ray reading above is re-priced with it in the same file — **0.005 ms** paired median at cap 96 over 30
+order-alternating pairs, 15/30 signs, **0.3 sigma**, 32 surfaces — so that null stands and the lever is
+grid-dependent rather than statistic-dependent; and the paired difference was shown to be contaminated by dispatch
 position — a hand-swap that ran the control first in every pair turned the gap into **−20.103 ms** with 4/15 pairs
 agreeing — which is why the instrument now alternates and prints the position term (**1.903 ms**, 9/15) beside the
 arm's. The milliseconds are informational and never a
