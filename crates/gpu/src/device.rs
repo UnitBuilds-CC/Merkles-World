@@ -38,6 +38,7 @@ pub struct Interpreter {
     pipeline: wgpu::ComputePipeline,
     march_pipeline: wgpu::ComputePipeline,
     camera_pipeline: wgpu::ComputePipeline,
+    counted_pipeline: wgpu::ComputePipeline,
     adapter: String,
 }
 
@@ -70,6 +71,19 @@ pub struct March {
     /// Dispatch plus the copy-and-map: the interval a caller actually waits on.
     pub ms_frame_with_read: f64,
     pub depths: Vec<f32>,
+}
+
+/// A march, plus the arm's tally as the device itself counted it.
+///
+/// `March` alone cannot answer "did the bound-skip arm do anything on a GPU": the depths are the same by
+/// design, since a skip is only sound when the picture is unchanged. This carries the one integer that
+/// distinguishes an arm that fires from an arm that never fires — per ray, so a scene where only a few
+/// rays pass a union's second child reads differently from one where all of them do.
+#[derive(Debug, Clone)]
+pub struct Counted {
+    pub march: March,
+    /// Union second children this ray's walk refused to evaluate, one entry per ray in ray order.
+    pub skips: Vec<u32>,
 }
 
 /// One read-back, priced on its own: the copy of `pixels * 4` depth bytes and the map that makes them
@@ -341,6 +355,18 @@ impl Interpreter {
             compilation_options: Default::default(),
             cache: None,
         });
+        // The counted march: one pipeline over the same module, whose entry point differs only in writing
+        // its depth at a doubled stride so the arm's per-ray tally has somewhere to go. Derived layout as
+        // above, so a binding the counted entry point stops reading would show up here as a validation
+        // error rather than as a tally that silently counts nothing.
+        let counted_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("march_rays_counted"),
+            layout: None,
+            module: &module,
+            entry_point: Some("march_rays_counted"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         Ok(Interpreter {
             device,
@@ -348,6 +374,7 @@ impl Interpreter {
             pipeline,
             march_pipeline,
             camera_pipeline,
+            counted_pipeline,
             adapter: adapter_name,
         })
     }
@@ -668,6 +695,31 @@ impl Interpreter {
 
     /// Everything a march does with a shape that is already resident — the half a reused frame pays.
     pub fn march_uploaded(&self, shape: &Shape, root: u32, rays: &[Ray]) -> Result<March, String> {
+        self.march_with(&self.march_pipeline, shape, root, rays, 1)
+            .map(|(march, _)| march)
+    }
+
+    /// The same dispatch as `march_uploaded`, plus the device's own per-ray tally of the union second
+    /// children its bound arm refused to evaluate. Two words come back per ray, so the buffer and the
+    /// copy-back are twice the size — which is why this is an instrument and not the frame path:
+    /// `march_frame` keeps its one-word-per-ray layout, and with it AS4's buffer-reuse clause.
+    pub fn march_counted(&self, shape: &Shape, root: u32, rays: &[Ray]) -> Result<Counted, String> {
+        self.march_with(&self.counted_pipeline, shape, root, rays, 2)
+            .map(|(march, skips)| Counted { march, skips })
+    }
+
+    /// One march dispatch, for either output layout: `words_per_ray` is 1 for `march_rays` and 2 for
+    /// `march_rays_counted`, whose extra word per ray is the arm's tally. The plumbing is shared on
+    /// purpose — a second copy of dispatch-and-read-back is the fork this file has avoided since
+    /// `march_one` was extracted so the camera path could reuse the law.
+    fn march_with(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        shape: &Shape,
+        root: u32,
+        rays: &[Ray],
+        words_per_ray: usize,
+    ) -> Result<(March, Vec<u32>), String> {
         let Some(first) = rays.first() else {
             return Err("no rays to march".to_string());
         };
@@ -720,7 +772,7 @@ impl Interpreter {
                 ]),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-        let size = (rays.len() * 4) as u64;
+        let size = (rays.len() * 4 * words_per_ray) as u64;
         let traced = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("march-depths"),
             size,
@@ -735,7 +787,7 @@ impl Interpreter {
         });
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &self.march_pipeline.get_bind_group_layout(0),
+            layout: &pipeline.get_bind_group_layout(0),
             entries: &[
                 entry(0, nodes),
                 entry(1, pool),
@@ -752,7 +804,7 @@ impl Interpreter {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&self.march_pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
@@ -762,30 +814,44 @@ impl Interpreter {
         let raw = self.read(&staging, size)?;
         let ms_frame_with_read = start.elapsed().as_secs_f64() * 1000.0;
 
+        // Depth words and tally words arrive interleaved when the entry point appends one per ray, so a
+        // lane index decides where each word goes. The tallies come back as the integers they were written
+        // as — `bitcast<f32>` in, `to_bits` out — never compared through a float.
         let mut depths = Vec::with_capacity(rays.len());
+        let mut skips = Vec::with_capacity(if words_per_ray > 1 { rays.len() } else { 0 });
         let mut offset = 0usize;
+        let mut lane = 0usize;
         while offset + 4 <= raw.len() {
-            depths.push(f32::from_le_bytes(
+            let word = f32::from_le_bytes(
                 raw[offset..offset + 4]
                     .try_into()
                     .map_err(|_| "short read")?,
-            ));
+            );
+            if lane == 0 {
+                depths.push(word);
+            } else {
+                skips.push(word.to_bits());
+            }
+            lane = (lane + 1) % words_per_ray;
             offset += 4;
         }
         let hits = depths
             .iter()
             .filter(|depth| **depth < UNSUPPORTED_HALF)
             .count();
-        Ok(March {
-            adapter: self.adapter.clone(),
-            rays: rays.len(),
-            max_steps: first.max_steps,
-            surface: first.surface,
-            hits,
-            ms_submit_only,
-            ms_frame_with_read,
-            depths,
-        })
+        Ok((
+            March {
+                adapter: self.adapter.clone(),
+                rays: rays.len(),
+                max_steps: first.max_steps,
+                surface: first.surface,
+                hits,
+                ms_submit_only,
+                ms_frame_with_read,
+                depths,
+            },
+            skips,
+        ))
     }
 
     /// The buffers a frame owns once, for a fixed ray count: packed rays in, depths out, plus the header

@@ -270,6 +270,18 @@ meets a budget, and the demo has never been shown on one.
 
 ### Phase 1 exit, gate by gate — measured 2026-10-12, reconciled against this device and this session's runs on 2026-10-13
 
+**Updated 2026-10-17 (later the same day) — the device counts its own refusals, and on a blendless scene they are
+the CPU's number.** `march_rays_counted` appends one word per ray to the march's output, fed by a `var<private>`
+tally zero-initialised per workgroup item: no fifth storage buffer, no atomic, and the frame path's one-word layout
+(AS4's clause) untouched. `crates/gpu/examples/arm_skips_on_device.rs` prices it on a GeForce MX250 over 768 rays —
+**3,422** second children refused where the CPU layer avoids **3,422** node entries on a plain union (identical, so
+the unclamped bound is free once no blend is in the tree), **2,204** on both sides for a far/small pair, **0** on
+both for a single sphere — the falsification, since a step counter cannot read zero there — and **0** on the device
+against **2,172** avoided on the CPU for a smooth union, which is OQ-54's refusal measured rather than asserted.
+Depths bit-identical to the untallied march on all four scenes, 0 hit/miss disagreements, worst deviation 0.000000.
+R1's 16.67 ms is still untouched by a lever that changes how many nodes a step evaluates, and the example is not
+yet a CI step, so the demo scene's own 42,240 remains an upper bound.
+
 **Updated 2026-10-17 — the device march now refuses work it can prove unnecessary, and the layer is priced on the
 demo scene's own rays.** `interp.wgsl`'s `second_child_may_skip` is doc 04 § Culling's bound-per-node-inside-a-step
 layer running on a GPU: at a plain `NODE_UNION`'s unwind — the only sound point, where `value` still holds the left

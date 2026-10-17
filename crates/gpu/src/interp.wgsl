@@ -76,6 +76,14 @@ struct Frame {
     left: f32,
 }
 
+// How many union second children this invocation refused to evaluate. One per workgroup *item*, not one
+// per dispatch: a module-scope `var<private>` is zero-initialised at the start of every invocation, so each
+// ray counts its own skips and no cross-item sharing is needed — which is why the four-storage-buffer
+// downlevel ceiling is not an obstacle to counting at all. `march_rays_counted` hands the number back in a
+// spare output word; the three other entry points never read it, so for the frame path the increment is
+// dead code and the instrument costs nothing.
+var<private> union_skips: u32;
+
 fn param(node: Node, offset: u32) -> f32 {
     return pool[(node.first_and_flags & 0xffffu) + offset];
 }
@@ -344,6 +352,7 @@ fn eval_from(root: u32, origin: vec3<f32>) -> f32 {
                     let child = second_child(parent_frame.node);
                     if kind_of(parent) == NODE_UNION {
                         if second_child_may_skip(child, parent_frame.p, value) {
+                            union_skips = union_skips + 1u;
                             continue;
                         }
                     }
@@ -438,6 +447,36 @@ fn march_rays(@builtin(global_invocation_id) id: vec3<u32>) {
         direction_and_max_t.xyz,
         direction_and_max_t.w,
     );
+}
+
+// The same march, with the arm's own tally appended. Not a fourth pipeline for a new law — `march_one` is
+// called exactly as `march_rays` calls it, only with its output slot doubled so a second word is free per
+// ray. The stride is the whole trick: a per-invocation counter needs a per-invocation place to land, and
+// the alternative carriers (a fifth storage buffer, or an atomic on `distances` so all items could share
+// one word) are respectively over the downlevel limit and a change to how every depth is written.
+//
+// The spare word carries `bitcast<f32>(u32)`, so the integer reaches the host as exactly the bits the
+// shader had; the reader undoes the cast with `to_bits`. Skip counts per ray are bounded by steps x tree
+// depth — four orders of magnitude below 2^24 — but the cast means that bound is not even load-bearing.
+//
+// This is the instrument task #65 asked for: the arm's saving on the device has been priced only as a CPU
+// upper bound until now.
+@compute @workgroup_size(64)
+fn march_rays_counted(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= header.point_count {
+        return;
+    }
+    let origin_and_root = queries[index * 2u];
+    let direction_and_max_t = queries[index * 2u + 1u];
+    march_one(
+        index * 2u,
+        u32(origin_and_root.w),
+        origin_and_root.xyz,
+        direction_and_max_t.xyz,
+        direction_and_max_t.w,
+    );
+    distances[index * 2u + 1u] = bitcast<f32>(union_skips);
 }
 
 // A frame's rays, built on the device from a camera instead of handed up 32 bytes at a time.

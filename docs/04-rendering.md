@@ -516,6 +516,22 @@ the children are `k` apart (OQ-54) and clamps its bound at zero, while the devic
 refuses to clamp, so it takes a subset. A device-side count is still the missing instrument, and the reason is
 structural — the stage is at the four-storage-buffer ceiling, so a counter has to displace or reuse a binding.
 
+**The counter landed the same day, and where the scene allows it the device's number equals the CPU's.** It needed
+neither a fifth buffer nor an atomic: a module-scope `var<private>` is zero-initialised per workgroup *item*, so each
+ray counts its own refusals and the tally rides out in a second word per ray — `march_one` called with a doubled
+output slot, its law untouched, and the frame path's one-word-per-ray layout and AS4's buffer clause unchanged.
+`cargo run --release -p gpu --example arm_skips_on_device` runs it on a GeForce MX250 over a 32×24 fan (768 rays,
+`max_t` 40, surface 1e-3, 96 steps): on a plain union of two spheres the device refused **3,422** second children
+while the CPU layer avoided **3,422** node entries over the same rays and the same tree — the same integer, so on a
+blendless scene the "strict subset" is an *equality* and leaving the bound unclamped costs nothing. A far/small pair
+reads **2,204** on both sides. A single sphere reads **0** on both, which is the falsification: a counter wired to
+descents or steps could not read zero there. And a smooth union reads **0** on the device against **2,172** avoided
+on the CPU — OQ-54's refusal measured from both sides instead of asserted in a comment. Depths are bit-identical to
+the un-tallied stride-1 march on all four scenes, and match `render::march` with **0** hit/miss disagreements and
+worst deviation **0.000000**. What is still open: this example is not yet a CI step, so these are named-device
+numbers rather than trunk's, and the demo scene's 42,240 stays an upper bound until the same tally runs over its
+3,072 rays.
+
 And the run that mattered was red. CI `39022931480` on the ARM64 macOS runner died with `index out of bounds:
 the len is 5 but the index is 5` in `cull.rs`'s `collect`, reached from `as4_asset_reupload`: making `upload`
 build a bound table for *every* shape put `scene_bounds` on trees it had never been asked about, including
