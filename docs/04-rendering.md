@@ -1921,3 +1921,97 @@ camera path puts cap 1 at 15.17 ms — inside the budget — and the 64-step mar
 read-back near cap-independent at 6.89–7.41 ms (the block above). x86-64 Linux and Windows print
 `SKIP r1_march_alone: no device (NoAdapter)`: no CI runner is a GPU, so the device rows stay one Apple paravirtual
 adapter, this laptop, and buildbox's 1070.
+
+
+## The interpreter's per-invocation stack is 93% of the price of a tree walk (2026-10-18, `cargo run --release -p gpu --example r1_walk_cost_ladder`, buildbox)
+
+R1's remaining 5.5x gap is step work, and the baseline named two structural causes it had not priced: a device-side
+cull that would remove walks, and `interp.wgsl`'s `var stack: array<Frame, DEPTH>` with `const DEPTH: u32 = 32u`
+serving a demo tree two frames deep — 1,024 bytes of per-invocation `var<private>` state, indexed dynamically by
+`sp`, which is the shape that cannot become registers. This section prices the second. `cargo fmt`, clippy and the
+crate tests are green and `tools/local_gate.sh`'s seven `ok:` lines are at the end of the unit; nothing here changes
+what the shipped pipeline compiles.
+
+The instrument is `Interpreter::camera_variant(depth)`: read the shipped `interp.wgsl` source, refuse unless its
+`const DEPTH: u32 = 32u;` line is present **exactly once**, substitute one literal, compile it as a second module,
+and dispatch a frame through the same bindings, the same walk and the same march law. So a difference between rows is
+the difference in the state each invocation carries, and the falsifier is the capacity that cannot hold a root plus a
+child: `DEPTH = 1` must **break** the picture. It does — on the 64x48 anchor it returns **0 surfaces and 132 of 3,072
+depth bit patterns differing** from the shipped pipeline's 132, which is also the proof that the substituted literal
+reaches the shader rather than being decoration on a module the device already built.
+
+| stack capacity | modelled B/item | cap | ms march (median of 5) | ns per pixel | vs shipped | surfaces | bit diffs |
+|---|---|---|---|---|---|---|---|
+| **32 (shipped)** | 1,024 | 1 | **9.273** | 4.472 | — | 0 | 0 |
+| 2 | 64 | 1 | 0.611 | 0.295 | −93.41% | 0 | 0 |
+| 4 | 128 | 1 | 1.668 | 0.805 | −82.01% | 0 | 0 |
+| 8 | 256 | 1 | 3.146 | 1.517 | −66.07% | 0 | 0 |
+| 16 | 512 | 1 | 5.454 | 2.630 | −41.19% | 0 | 0 |
+| 32 (twin) | 1,024 | 1 | 9.292 | 4.481 | +0.20% | 0 | 0 |
+| 64 | 2,048 | 1 | 31.541 | 15.211 | +240.13% | 0 | 0 |
+| **32 (shipped)** | 1,024 | 64 | **88.264** | 42.566 | — | 80,964 | 0 |
+| 2 | 64 | 64 | 4.281 | 2.065 | −95.15% | 80,964 | 0 |
+| 4 | 128 | 64 | 14.794 | 7.135 | −83.24% | 80,964 | 0 |
+| 8 | 256 | 64 | 28.897 | 13.936 | −67.26% | 80,964 | 0 |
+| 16 | 512 | 64 | 51.382 | 24.779 | −41.79% | 80,964 | 0 |
+| 32 (twin) | 1,024 | 64 | 88.272 | 42.570 | +0.01% | 80,964 | 0 |
+| 64 | 2,048 | 64 | 296.335 | 142.908 | +235.74% | 80,964 | 0 |
+
+All 1080p, `NVIDIA GeForce GTX 1070 [Vulkan, DiscreteGpu]`, R1's own grid. The integers that make the rows one frame
+rather than thirteen pictures: every capacity at or above the depth the tree reaches returns the shipped pipeline's
+depths with **0 differing bit patterns over 2,073,600 f32s**, and **80,964 surfaces at cap 64 and 0 at cap 1 at every
+capacity** — a smaller stack that quietly refused a subtree would show up there as changed depths before it showed up
+as a faster millisecond. The spreads are 0.011–0.466 ms, and the shipped row reproduces the baseline independently:
+**9.273 ms against 9.33 ms** for cap 1 and **88.264 against 88.11** for the cap-64 march leg, from a different harness
+on a different commit. Durations assert nothing (ADR-017).
+
+Four readings, in the order the instrument supports them.
+
+**The stack is the dominant term in a tree walk, not a rounding error.** One evaluation per pixel at capacity 2 costs
+**0.295 ns** against the shipped capacity's **4.472** — **−93.4%, 15.2×** — for a whole 1080p grid: **0.611 ms against
+9.273 ms**. The curve is steep and not linear in bytes: halving the capacity from 32 buys 1.7×, from 16 buys
+1.6×, from 8 buys 1.9×, from 4 buys 2.7×, and doubling to 64 costs 3.4×. Whatever the driver does with 64 bytes of
+per-thread state, it can evidently keep it in registers; what it does with 1,024 indexed by a runtime `sp`, it cannot.
+That is the mechanism the "zero-alloc in the registers" proposal named, now priced — and it is *inferred* from the
+shape of the curve, not observed from a compiler.
+
+**The 64-step march on R1's grid goes from 5.5× over budget to inside it, as a DERIVED figure rather than a measured
+frame.** At capacity 2 the cap-64 march leg is **4.281 ms** where the shipped capacity is **88.264** (−95.15%,
+20.6×); add the baseline's near cap-independent 6.93 ms read-back and the whole frame is about **11.2 ms against R1's
+16.67 ms**. That is arithmetic on two legs measured minutes apart on the same box, not a frame this instrument timed,
+and the read-back leg only survives until something shades on the device. **The gate is not met and no row here is
+claimed as its row.**
+
+**The capacity is a correctness contract, so `const DEPTH = 2` is not a shippable change.** The falsifier is exactly
+the failure a smaller constant causes: a tree the capacity cannot hold does not render slowly, it renders **empty**,
+because the walk's guard returns the no-surface sentinel. The demo scene is two frames deep; a scene with a `repeat`
+wrapping a `mirror` wrapping a union is four. So the lever is **per-asset specialization** — compile the interpreter
+with the loaded tree's depth plus a margin, which is precisely what `camera_variant` demonstrates is possible at
+runtime — and the declared depth `assetc` already carries (the one task #19's refusal checks against the grammar cap)
+is the number to compile from. That is open work with a measured payoff, not a saving already banked.
+
+**The instrument had an ordering bias, and the twin row is what caught it.** Taken one capacity at a time in a fixed
+order, the first run put the shipped row **2× faster than its own `DEPTH = 32` twin** at cap 64 (427 against 855
+ns/pixel on the laptop) — the shipped leg was dispatched first, in the coolest part of the run. The twin is the same
+literal through the same substitution path, so it must read the same, and its disagreement was the instrument's fault,
+not the interpreter's. The timings are now interleaved — every leg dispatched once per pass, the start position
+rotating by one per pass, the shipped pipeline a leg inside the rotation rather than a preamble to it — and the twin
+then agrees to **+0.01% at cap 64 and +0.20% at cap 1**, which is what makes the capacity rows comparable at all.
+
+**The `DEPTH = 64` row is a control, not a deeper walk.** The guard is `sp >= header.stack_depth || sp >= DEPTH` and
+the host writes `stack_depth = 32`, so a 64-slot stack can never be used past 32 frames: its depths are identical by
+construction (asserted, 0 bit diffs) and the +236% it pays is therefore pure allocation size, uncontaminated by any
+change in what the shader computes.
+
+One edge this instrument found and deliberately did not probe past the falsifier: `eval_from` checks `sp >= DEPTH`
+before *reading* a frame and then pushes the child at `sp + 1`, so a refusal writes one element past the array's end
+and relies on the backend's index handling to stay in memory. Every ladder capacity is at or above the depth this tree
+reaches, so no ladder row takes that path — only the 64x48 falsifier does, which is why the falsifier stays on 3,072
+pixels and never at R1's grid. `assetc`'s depth cap makes it unreachable in shipped assets, and it is recorded here
+rather than fixed, because the fix changes the module every other R1 row is priced against.
+
+The laptop's rows (GeForce RTX 3050, 320x240, same binary) put the same ratio in a different range: −88.13% at
+capacity 2 and +270.19% at 64, with its twin agreeing to −0.44% / −0.06%. So the *shape* — stack capacity dominates a
+walk, superlinearly — travels to a second vendor; the magnitudes do not, and only the 1070 is the instrument R1 names
+(ADR-017). What this section is **not**: not a cull (the same 96.1% of the grid finds nothing at every capacity), not
+a shipped change to the interpreter, and not R1's gate row.
