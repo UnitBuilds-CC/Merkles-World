@@ -284,9 +284,21 @@ R1's 16.67 ms is still untouched, and the lever is now **measured rather than ar
 two marches' depths asserted bit-identical on all 30 repeats and the control's own tally asserted at **0** against the
 armed shape's **3,422** — the armed march is **3.635 ms against 3.654** on the union and **2.134 against 2.112** on the
 far pair, while the smooth union, where the arm never fires and both numbers are the same walk, spreads **0.044 ms of
-3.776 ms (≈1.2%)**. **At this grid the arm's saving is inside its own noise floor**, which is the second time an
-asymptotically-obvious GPU saving has failed to appear as a number here; the milliseconds are informational and never a
-gate (ADR-017). The device's tally now
+3.776 ms (≈1.2%)**. **At 768 rays the saving is inside that instrument's noise floor — and at R1's own grid it is
+not**, which is a statistic problem rather than a geometry one: `arm_price_at_1080p` prices the same armed / `+inf`
+pair on the reused-buffer frame path over **2,073,600** rays on the same MX250, at **cap 1** because cap 64 at that
+grid trips the driver's watchdog (`Parent device is lost`, twice, on both paths, while cap 1 completes with identical
+buffers), and fifteen order-alternating pairs give armed **634.158 ms** against control **657.354 ms** — a paired
+median of **19.189 ms** (MAD **5.612 ms**, **8.9 sigma**, **14/15** pairs agreeing on the sign), a **3.5%** saving;
+three runs put that median between **19.189** and **24.475 ms**, so the width is a few milliseconds and the sign is
+not in question.
+The pooled scatter had called the same gap *0.2 sigma* until one throttled march inflated it to 351 ms, so the
+768-ray reading above is owed the paired treatment; and the paired difference was shown to be contaminated by dispatch
+position — a hand-swap that ran the control first in every pair turned the gap into **−20.103 ms** with 4/15 pairs
+agreeing — which is why the instrument now alternates and prints the position term (**1.903 ms**, 9/15) beside the
+arm's. The milliseconds are informational and never a
+gate (ADR-017), and the frame still costs ~634 ms against a 16.67 ms budget — a factor of 38 that no culling lever
+closes. The device's tally now
 runs over the demo scene's own rays too: **22,237** refusals on **2,640** of 3,072 rays against the CPU layer's
 **42,240** avoided — a little over half, and the gap is the smooth unions OQ-54 keeps on the CPU plus the clamped
 bounds the device refuses. Both examples are CI steps, so the upper-bound wording is superseded on trunk as well as

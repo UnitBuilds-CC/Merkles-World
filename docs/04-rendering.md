@@ -543,7 +543,8 @@ registered in `docs/evidence.json` as phrase claims (`device_arm_skips_on_demo_s
 `tools/check_docs.mjs` fails if either doc drops or rewrites one; the claims record the docs' spelling, while the CI
 line prints the bare integer (`the device refused 22237 union second children`).
 
-**And then the arm was priced against itself, and the saving is not resolvable.** `arm_skips_on_device` now also
+**And then the arm was priced against itself: at 768 rays the saving did not resolve, and at 1080p with a paired
+statistic it does — 24 ms, 3.8%.** `arm_skips_on_device` now also
 uploads the same tree through `Interpreter::upload_bounds_refused`, which keeps the node records, the pool layout and the
 walk byte-identical and makes every bound radius `+inf` — a control whose bound test can only answer *no*. Three things
 are asserted before any number is read: the control's own tally is **0** refusals where the armed shape tallied
@@ -556,7 +557,31 @@ differ by **0.044 ms of 3.776, about 1.2%**, which is the instrument's own sprea
 grid is inside its own noise floor.** That is a measurement replacing an argument: the paragraph above said the lever
 could not move R1 because it changes nodes-per-step rather than rays-in-flight, and the arithmetic was right for a
 reason the argument did not name — a march whose whole frame costs 3.6 ms at 768 rays is nowhere near the 16.67 ms
-budget at 1080p, and the per-node work the arm removes is a fraction of a step's cost that the noise floor swallows.
+budget at 1080p, and the per-node work the arm removes is a fraction of a step's cost that the noise floor swallows. **The grid R1's budget is stated at gives the other answer, and what changed is the statistic, not the
+geometry.** `arm_price_at_1080p` runs the identical armed / `+inf` A/B on the **reused-buffer frame path**
+(`begin_frame` + `write_rays` + `march_frame`) over **2,073,600** rays on the same MX250 — the per-call path is not an
+option there, and the first version of the file lost the device to `Parent device is lost` on the second repeat, which
+is the `as4_upload_reuse` history biting a new example. The step cap is a device limit rather than a choice: the same
+grid at the 64-step cap the historical 1080p rows were taken at **trips the driver's watchdog** — `Parent device is
+lost`, twice, on both paths — while the cap-1 run completes in about 0.64 s per march with the same buffers and the
+same ray count, so the loss is work per dispatch, not memory, and a panic is not a measurement. Fifteen interleaved
+pairs: armed median **634.158 ms**, control **657.354 ms**, paired median difference **19.189 ms** with a **5.612 ms**
+median absolute deviation (robust standard error **2.148 ms**, **8.9 sigma**) and **14 of 15** pairs agreeing on the
+sign — a **3.5%** saving; three runs of the shipped build put that median between **19.189** and **24.475 ms** with
+13–15 of 15 pairs agreeing, so the figure is a few milliseconds wide but the sign is not in question. Two things had
+to be true before that number meant anything, and the first corrects the sentence above: the pooled scatter answers
+this question badly — one throttled march in an early sample put **351 ms** of pooled standard deviation on a steady
+24 ms gap and called it *0.2 sigma* — so the 768-ray null is a statement about that instrument's statistic rather than
+settled geometry, and the paired treatment is owed there. The second is that the paired difference carries dispatch
+**position** as well as the arm, found by hand-swapping the example so the control ran first in every pair: the same
+statistic then read **−20.103 ms** with only 4 of 15 pairs agreeing, and the second dispatch of each pair measured
+~150 ms slower whichever walk it was. So the shipped instrument alternates the order per pair and prints the two terms
+separately — the position term now measures **1.903 ms** with 9/15 pairs, ten times smaller than the gap beside it,
+while the arm's term survives the separation with an almost unanimous sign. An effect that flips sign when you change
+which march runs first and survives when you alternate is an effect worth a row. Depths are bit-identical across the
+whole 1080p buffer on all fifteen pairs, and the 512 sampled rays agree with `render::march` (**0** hit/miss
+disagreements, worst deviation **0.000000**) — though a cap-1 frame finds **0** surfaces, so that anchor compares miss
+markers and the picture claim that matters still lives in the CI examples.
 The durations are informational and are not registered in `docs/evidence.json` (ADR-017); what is registered is the
 refusal counts. `r1_device_rays` found the same shape of result when it deleted 66 MB of per-frame ray bytes and the
 frame did not get faster by a resolvable amount, and this is the second time in this repository that an
