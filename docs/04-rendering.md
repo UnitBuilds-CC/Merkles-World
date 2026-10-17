@@ -710,6 +710,36 @@ the argument rests on, and even it is a rate, not a frame. This is exactly why t
 surface (ADR-017) and why R1's verification will need repeated runs reported as a distribution rather than a
 single quoted figure.
 
+**Then the march itself ran at 1080p on that desktop GPU, on the camera path** — 2026-10-17,
+`cargo run --release -p gpu --example r1_march_alone` on buildbox at `5757b11`,
+`NVIDIA GeForce GTX 1070 [Vulkan, DiscreteGpu]`. Before this run the 1070's 1080p rows came from the 46-dispatch
+harness (551.5 ms), and a single-dispatch march at that grid had only ever been priced on the laptop, where
+repeating a 66 MB ray-buffer dispatch loses the device. The camera path is what removes the upload: the device
+generates its own rays from a 112-byte camera block, so 8,294,400 bytes come *back* and nothing but a header and
+that block goes out. The integers are asserted, not printed — the split legs rebuild the whole path's depths bit for
+bit (**0 of 3,072 anchor pixels differ**, and 0 bit differences on all three 1080p rows), the 2,040-pixel lattice
+agrees with `render::march` at every cap (**0 disagreements**, worst deviation 0.000001), and the falsification row
+shows a frame written but never dispatched reading 3,072 hits and 2,940 disagreements where the marched one reads
+132 and 0.
+
+| step cap | surfaces found of 2,073,600 | ms march | ms read-back | ms whole frame | ms submit |
+|---|---|---|---|---|---|
+| 1 | 0 | 9.33 | 7.41 | **15.17** | 0.09 |
+| 8 | 65,148 | 67.62 | 6.89 | **70.76** | 0.07 |
+| 64 | 80,964 | 88.11 | 6.93 | **91.15** | 0.08 |
+
+Three things here were hypotheses and are rows now. The budget buys **one field evaluation per pixel and no more**:
+cap 1 lands at 15.17 ms, *inside* 16.67 ms, independently reproducing the 13.46 ms one-evaluation figure above at a
+different date and a different harness — while the 64-step march lands at 91.15 ms, **5.5× over budget on the very
+instrument R1 names**. The read-back is near cap-independent (6.89–7.41 ms across a 64× step spread) and the submit
+is 0.07–0.09 ms, so on this path the frame is dominated by device step work rather than by the bus; that inverts the
+laptop's split, and it inverts because the camera path never uploads 66 MB of rays to begin with. And **the 551.5 ms
+46-pass row is no longer the march's price**: the same grid, same field, same cap costs 91.15 ms in one dispatch,
+6.1× cheaper, so moving `march_rays` onto the device was worth that factor and the old harness had been measuring
+itself. Durations stay informational (ADR-017); what this settles is the shape of the gap — 5.5× on a desktop GPU,
+against the bound-skip arm's measured ~3.5% — which is why the remaining levers are step budget, resolution and
+streaming, and not more culling micro-optimisation.
+
 **Why buildbox reported no adapters at all, when its Vulkan loader sees the GPU (2026-10-14).** Not the driver,
 not permissions, not the ICD: its `gcc` is a **Nix-store wrapper** (`/nix/store/…gcc-wrapper-13.4.0`), and
 binaries linked by it don't consult the system `ld.so.cache`, so `dlopen("libvulkan.so.1")` — and `libEGL.so` —
@@ -1804,6 +1834,9 @@ second vendor was ever asked to corroborate: the retraction's *direction*, not i
 column in this paragraph is R1 budget evidence and none is quoted as any:** a paravirtual device is the wrong
 instrument for a frame budget, not a slow one — the rule this doc's R1 row and docs/11's S9 row already carry — and
 a *printed* duration is not evidence even when the device is admissible, which is why ADR-017 keeps the split
-asserted only in its integers. The 16.67 ms claim above therefore rests on the MX250 rows and on the GTX 1070
-buildbox row this example still owes. x86-64 Linux and Windows print `SKIP r1_march_alone: no device (NoAdapter)`:
-no CI runner is a GPU, so the device rows stay one Apple paravirtual adapter plus this laptop.
+asserted only in its integers. **And the buildbox row that sentence said this example still owed has now landed**, so
+the 16.67 ms question reads against it rather than against the laptop: the same `r1_march_alone` on the GTX 1070's
+camera path puts cap 1 at 15.17 ms — inside the budget — and the 64-step march at 91.15 ms, 5.5× outside it, with the
+read-back near cap-independent at 6.89–7.41 ms (the block above). x86-64 Linux and Windows print
+`SKIP r1_march_alone: no device (NoAdapter)`: no CI runner is a GPU, so the device rows stay one Apple paravirtual
+adapter, this laptop, and buildbox's 1070.
