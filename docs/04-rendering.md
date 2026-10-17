@@ -1601,11 +1601,12 @@ MX250: anchor 132 / 132 / 132 hits for reference / legs / whole path, **0 of 3,0
 shape **0 / 65,148 / 80,964**, **8,294,400 bytes** on all three 1080p rows, lattice 0 / 33 / 53 hits with **zero**
 disagreements and worst 0.000001, and its own in-run falsifier reporting the same **3,072 hits and 2,940
 disagreements** for a written-but-never-dispatched frame. Its clock puts the read-back at 9.96 ms of a 421.97 ms
-cap-64 frame — **2.4%** (DERIVED) against this laptop's 0.74–1.40% — so "on-device shading is not an R1 lever" is
-now two vendors wide rather than one box's quirk, and the legs' sum against the whole path is again unstable in
-both directions (cap 1: 67.84 vs 51.11; cap 8: 324.97 vs 329.66; cap 64: 443.57 vs 421.97 ms). One figure from
-that row deserves the floor paragraph above: the paravirtual device's cap-1 whole frame is **51.11 ms**, which is
-3.1x R1's budget where the MX250's cheapest whole frame was 90.66 ms — a different vendor, a different absolute
-cost, and the same verdict that one step per ray over 2,073,600 of them does not fit in 16.67 ms. x86-64 Linux and
-Windows print `SKIP r1_march_alone: no device (NoAdapter)`: no CI runner is a GPU, so the device rows stay one
-Apple paravirtual adapter plus this laptop, and the GTX 1070 buildbox row for this example is still owed.
+cap-64 frame — 2.4% (DERIVED) against this laptop's 0.74–1.40% — so the *ordering* of the two terms, the copy far
+below the stepping, is not one box's quirk, and the legs' sum against the whole path is again unstable in both
+directions (cap 1: 67.84 vs 51.11; cap 8: 324.97 vs 329.66; cap 64: 443.57 vs 421.97 ms). **Neither of those
+millisecond columns is R1 budget evidence and neither is quoted as any:** a paravirtual device is the wrong
+instrument for a frame budget, not a slow one — the rule this doc's R1 row and docs/11's S9 row already carry — so
+the 16.67 ms claim above rests on the MX250 rows and on the GTX 1070 buildbox row this example still owes. The one
+thing the second vendor adds is that the retraction's *direction* travels: two devices, both with the copy the
+small term. x86-64 Linux and Windows print `SKIP r1_march_alone: no device (NoAdapter)`: no CI runner is a GPU, so
+the device rows stay one Apple paravirtual adapter plus this laptop.

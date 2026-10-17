@@ -37,9 +37,10 @@
 //! CI reads the asserted terms on a second vendor (run `39016251784`): the ARM64 macOS job's `Apple Paravirtual
 //! device [Metal, IntegratedGpu]` reports the same 132/132/132 anchor, 0 bit-differing depths, the same
 //! 0 / 65,148 / 80,964 cap shape, 8,294,400 bytes per row and 0 lattice disagreements, and its own clock puts the
-//! read-back at 9.96 ms of a 421.97 ms cap-64 frame — 2.4% where this laptop measured 0.74–1.40%, so the verdict
-//! is two vendors wide. x86-64 Linux and Windows print `SKIP r1_march_alone: no device (NoAdapter)`, because no CI
-//! runner is a GPU.
+//! read-back at 9.96 ms of a 421.97 ms cap-64 frame — 2.4% where this laptop measured 0.74–1.40%, so the *ordering*
+//! of the two terms is not one box's quirk. Its milliseconds are not R1 budget evidence and are not quoted as any:
+//! a paravirtual adapter is the wrong instrument for a frame budget, not a slow one. x86-64 Linux and Windows print
+//! `SKIP r1_march_alone: no device (NoAdapter)`, because no CI runner is a GPU.
 
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
