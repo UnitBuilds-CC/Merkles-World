@@ -1,6 +1,6 @@
 {
   "_purpose": "Numbers the documentation publishes as measured evidence, in one place, so a claim and the thing it claims cannot drift apart silently. Each claim lists where docs cite it and what measures it; two mechanical checks close the loop. tools/check_docs.mjs fails if a cited_in file stops containing the value's prefix (a doc that quietly drops or rewrites an evidence number is caught). CI's roots-in-a-browser job fails if the boot's actual output hash differs from the value here (a boot that changes its printed line without updating the claim is caught). A green run therefore means the published number IS the measured number, not that someone remembered.",
-  "_updated": "2026-10-13",
+  "_updated": "2026-10-17",
   "claims": {
     "suite_size": {
       "kind": "phrase",
@@ -9,6 +9,26 @@
       "measured_by": "`cargo test -q` - the sum of the `test result: ok.` lines",
       "cited_in": [
         "README.md",
+        "docs/11-roadmap.md"
+      ]
+    },
+    "device_arm_skips_on_demo_scene": {
+      "kind": "phrase",
+      "value": "22,237",
+      "what": "How many union second children the device's own bound-skip arm refused to evaluate while marching the demo scene's 3,072 rays, tallied per ray inside the shader by `march_rays_counted` and summed on the host. The published form carries a thousands separator; the CI line prints the bare integer (`the device refused 22237 union second children, on 2640 of 3072 rays`), so this claim is the docs' spelling of a measured number, not a separately-derived one.",
+      "measured_by": "the `Demo scene from content on a device` step's `arm measured` line on the ARM64 macOS runner (Apple Paravirtual device); it is an informational row, and nothing hashes it",
+      "cited_in": [
+        "docs/04-rendering.md",
+        "docs/11-roadmap.md"
+      ]
+    },
+    "cpu_bound_layer_avoided_on_demo_scene": {
+      "kind": "phrase",
+      "value": "42,240",
+      "what": "The CPU cull layer's node entries avoided over the same 3,072 rays and the same tree, measured by counting `visit`s with the table against counting them with every skip refused. It is the upper bound the device figure above is a subset of, so the two claims move together or not at all: the arm on the device asks only plain unions and leaves its bound unclamped, while this layer also takes smooth unions (OQ-54) and clamps.",
+      "measured_by": "the `Demo scene from content on a device` step's `arm pricing` line on all three architectures, and `crates/render/tests/cull.rs`'s enclosure tests for the bound arithmetic underneath it",
+      "cited_in": [
+        "docs/04-rendering.md",
         "docs/11-roadmap.md"
       ]
     },

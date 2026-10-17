@@ -538,7 +538,10 @@ disagreements, worst deviation **0.000001**, the reused frame still differing fr
 Both examples are CI steps now: `arm_skips_on_device` sits beside `boot_scene_on_device` in the gates job, so a
 runner with no adapter prints its own SKIP line and the ARM64 macOS paravirtual Metal adapter counts for real. R1's
 16.67 ms is still untouched: this lever changes how many nodes a step evaluates, not how many rays are in flight,
-and 22,237 refusals spread over 3,072 rays is 7.2 per ray against a march of up to 96 steps each.
+and 22,237 refusals spread over 3,072 rays is 7.2 per ray against a march of up to 96 steps each. Both figures are
+registered in `docs/evidence.json` as phrase claims (`device_arm_skips_on_demo_scene`, `cpu_bound_layer_avoided_on_demo_scene`), so
+`tools/check_docs.mjs` fails if either doc drops or rewrites one; the claims record the docs' spelling, while the CI
+line prints the bare integer (`the device refused 22237 union second children`).
 
 And the run that mattered was red. CI `39022931480` on the ARM64 macOS runner died with `index out of bounds:
 the len is 5 but the index is 5` in `cull.rs`'s `collect`, reached from `as4_asset_reupload`: making `upload`
