@@ -435,6 +435,18 @@ where the enclosures live rather than how to write the test — and OQ-57's inte
 question from the multi-region side. It is the one remaining lever aimed at the dominant term, which is why it sits
 ahead of any further scheduling trick in the queue.
 
+**Which of its three layers, priced by the cull table above.** § Culling already measured all three on the CPU: a
+*single bound per ray* proves 99.9% of rays empty on a compact scene and **exactly 0.0%** when the same spheres are
+laid along a line — the enclosure grows to r 19.0 and 76.6, contains the frustum, and merely *permits* every ray to
+march; a *descent through the bounds per ray* recovers 97.1% of those line rays at 443x fewer charged steps; and a
+*bound per node inside a step* is the layer that survives the spread, 98.1% and 98.3% of node visits avoided on those
+same zero-saving rows. So the cheap carrier — one `vec4` added to the header uniform, or the camera path's unused
+slot 2 — buys only the fragile layer. It would show a large saving on this 3-node demo field, whose rays miss
+96.1% of the time at cap 64 (80,964 of 2,073,600), and nothing at all on the spread world the demo is headed toward.
+The layer worth a device port is the per-node one, and that is a table rather than a bound, which is exactly why the
+storage ceiling is the design question and not an implementation detail. Task #64's first increment is therefore
+*which layer*, and the measurements answer: the third.
+
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
 The previous section's closing claim was made on a 640×360 grid and its own text flagged the gap: "cap-independent
