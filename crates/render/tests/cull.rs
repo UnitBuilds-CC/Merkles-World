@@ -15,7 +15,9 @@ use contracts::sdf::{
     NODE_CYLINDER, NODE_MIRROR, NODE_PLANE, NODE_REPEAT, NODE_ROUNDED_BOX, NODE_SMOOTH_UNION,
     NODE_SPHERE, NODE_SUBTRACT, NODE_TORUS, NODE_UNION,
 };
-use render::cull::{enclose, ray_may_hit, scene_bounds, scene_enclosure, Enclosure};
+use render::cull::{
+    counting_bounds, enclose, may_reach, ray_may_hit, scene_bounds, scene_enclosure, Enclosure,
+};
 use render::raster::{render, render_bnb, render_culled, Camera};
 use render::{sdf_eval, validate, Tree, ROOT};
 
@@ -804,6 +806,98 @@ fn the_k_aware_arm_skips_a_second_child_the_blend_cannot_have_touched() {
                 counting.visits - pruned.visits,
                 counting.visits
             );
+        }
+    }
+}
+
+#[test]
+fn the_encoded_table_widens_exactly_the_rows_a_device_may_not_skip() {
+    // The per-node table in the layout a storage buffer holds, so that the device port's safety property is
+    // checked here rather than in shader code. A row narrower than the host's own decision is a frame with
+    // geometry missing, and it looks correct - so licensed rows must be the host bound bit for bit, and every
+    // other row must be an infinite sphere, which no ray fails to reach.
+    let decode = |row: [f32; 4]| {
+        if row[3].is_infinite() {
+            Enclosure::Unbounded
+        } else {
+            Enclosure::Bounded {
+                centre: [row[0], row[1], row[2]],
+                radius: row[3],
+            }
+        }
+    };
+
+    let scenes = [
+        (union(2.0), "two spheres under a plain union"),
+        (smooth_union(0.2, 1.5), "a blended pair"),
+        (subtract(2.0, 1.0, 0.5), "a carved ball"),
+        (mirrored_sphere(), "a mirrored sphere"),
+    ];
+
+    let origins: [[f32; 3]; 3] = [[0.0, 0.0, -6.0], [-3.0, 2.0, -4.0], [5.0, -1.0, -2.0]];
+    let dirs: [[f32; 3]; 6] = [
+        [0.0, 0.0, 1.0],
+        [0.4, 0.2, 1.0],
+        [-0.6, 0.3, 1.0],
+        [0.1, -0.7, 1.0],
+        [1.0, 0.0, 0.2],
+        [-1.0, 0.4, 0.1],
+    ];
+
+    for (tree, label) in scenes {
+        let bounds = scene_bounds(&tree);
+        let rows = bounds.encoded();
+        assert_eq!(rows.len(), tree.nodes.len(), "{label}: one row per node");
+
+        for (node, row) in rows.iter().enumerate() {
+            let enclosure = bounds.enclosure_of(node);
+            let licensed = bounds.prunes()
+                && bounds.respects(node)
+                && matches!(enclosure, Enclosure::Bounded { .. });
+            if licensed {
+                let Enclosure::Bounded { centre, radius } = enclosure else {
+                    unreachable!("a licensed row is only built from a bounded enclosure");
+                };
+                assert_eq!(
+                    *row,
+                    [centre[0], centre[1], centre[2], radius],
+                    "{label} node {node}: a licensed row is the host bound, bit for bit"
+                );
+            } else {
+                assert!(
+                    row[3].is_infinite(),
+                    "{label} node {node}: a row the host will not skip must reach every ray, got {row:?}"
+                );
+            }
+
+            for origin in origins {
+                for dir in dirs {
+                    let host_evaluates = !licensed || may_reach(enclosure, origin, dir);
+                    assert_eq!(
+                        may_reach(decode(*row), origin, dir),
+                        host_evaluates,
+                        "{label} node {node}: the row and the host disagree about the ray from {origin:?} toward {dir:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    // The counting baseline is the case a device must never be able to turn into an optimisation: it refuses
+    // every skip, so its whole table is infinite radii and no sampled ray is skipped by any row.
+    let counting = counting_bounds(&union(2.0));
+    for (node, row) in counting.encoded().iter().enumerate() {
+        assert!(
+            row[3].is_infinite(),
+            "the counting table licenses nothing, and node {node}'s row says {row:?}"
+        );
+        for origin in origins {
+            for dir in dirs {
+                assert!(
+                    may_reach(decode(*row), origin, dir),
+                    "the counting table may not skip node {node} from {origin:?} toward {dir:?}"
+                );
+            }
         }
     }
 }

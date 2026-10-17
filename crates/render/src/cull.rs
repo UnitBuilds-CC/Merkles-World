@@ -264,6 +264,34 @@ impl SceneBounds {
         self.enclosure[node]
     }
 
+    /// The table in the form a device can read it: one `[f32; 4]` row per node, laid out as the WGSL
+    /// `vec4` `[centre.x, centre.y, centre.z, radius]`.
+    ///
+    /// A row for a node this table will not skip carries an **infinite radius** instead of a flag bit, so
+    /// every row is a valid conservative enclosure and the shader needs no special case: an infinite sphere
+    /// is reached by every ray, and the skip arm simply never fires. Folding the licence into the radius
+    /// rather than into a second array is what keeps the whole table in one storage buffer, which matters
+    /// because the WGSL interpreter already sits at `wgpu::Limits::downlevel_defaults()`'
+    /// four-storage-buffer-per-stage ceiling.
+    ///
+    /// The `respects` half of the guard is contract shape rather than a live branch today: the two arrays are
+    /// filled in the same pass, and on the licensed tables a bounded enclosure and a granted licence arrive
+    /// together. What the guard does provably carry is the counting baseline, which fills the same real
+    /// enclosures and refuses them only because `pruning` is `false` - delete the guard and that table hands a
+    /// device radii for nodes the baseline never licensed, which is the failure the test catches.
+    pub fn encoded(&self) -> Vec<[f32; 4]> {
+        self.enclosure
+            .iter()
+            .enumerate()
+            .map(|(node, enclosure)| match *enclosure {
+                Enclosure::Bounded { centre, radius } if self.pruning && self.respects[node] => {
+                    [centre[0], centre[1], centre[2], radius]
+                }
+                _ => [0.0, 0.0, 0.0, f32::INFINITY],
+            })
+            .collect()
+    }
+
     /// Whether this table is allowed to license work avoidance at all.
     ///
     /// The counting table answers `false` and every licensed query then returns the neutral value, which is

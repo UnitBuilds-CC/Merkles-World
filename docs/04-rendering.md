@@ -447,6 +447,20 @@ The layer worth a device port is the per-node one, and that is a table rather th
 storage ceiling is the design question and not an implementation detail. Task #64's first increment is therefore
 *which layer*, and the measurements answer: the third.
 
+**The table now has a device layout.** `SceneBounds::encoded` emits one `[f32; 4]` row per node -
+`[centre.x, centre.y, centre.z, radius]` - and every node the table will not skip gets `f32::INFINITY` in the
+radius instead of a separate licence array, because an infinite sphere is reached by every ray, so a shader
+needs no special case and one storage buffer carries geometry and licence together. That choice was forced by
+the ceiling named above (`interp.wgsl` is already at four storage buffers per stage), and its size is
+arithmetic on the published boot: 16 bytes per node, so the demo's 11-node scene is **176 bytes** and a
+128-node scene 2 KB - the carrier question is a layout question, not a capacity one.
+`crates/render/tests/cull.rs`'s `the_encoded_table_widens_exactly_the_rows_a_device_may_not_skip` asserts the
+safety property in both directions on four hand-built scenes (licensed rows equal the host bound bit for bit;
+every other row reaches every sampled ray) and on the counting baseline, whose table must be all-infinite -
+the plant that deletes the guard turns exactly that assertion red, with node 0 of a `counting_bounds` table
+leaking `[1.0, 0.0, 0.0, 2.0]`. What the layout does *not* yet have is a caller: no WGSL arm reads it, and the
+frame it would price is still `march_one` evaluating the whole tree every step.
+
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
 The previous section's closing claim was made on a 640×360 grid and its own text flagged the gap: "cap-independent
