@@ -1466,3 +1466,59 @@ ring-recycled across epochs, so nothing is allocated mid-frame.
 | R3 | Region entry after LRU eviction shows prior edits with no visible pop-in | gate P1.4. **The work half is measured 2026-10-13** (`examples/pop_in.rs`): with `render_bnb_refined` spending a ceiling across frames, the demo region is fully drawn in 5 frames at a ceiling of 1/4 the culled frame's cost, and its first frame keeps 25.1% of the hits — centre-out. Same ceiling, corner-first order: 9 frames, first frame 1.4%. "No visible" still needs a display (OQ-51); what no longer needs one is the number. The streamed case is now measured too, and performed in the binary: step 9b of `cargo run -p engine` refines a three-cell frame at a one-ray-charge ceiling and settles all 3,072 rays in 813 frames for exactly the single pass's charge (57,665), asserting the settled frame equals the unbudgeted picture. `pop_in`'s five-versus-nine frames remain the one-tree figure; what the demo adds is that refinement is free in work and expensive in frames, and that most of the frame's empty rays sit uncollected behind the charge check (OQ-60). |
 | R4 | Frame hash of a scripted camera path is identical across `wgpu` backends | **informational only** — must not gate shipping, per ADR-017 |
 | R5 | Zoom to 1e-6 world units on a pig snout with no polygonation | ADR-011's central claim. `examples/deep_zoom.rs` measures the numerics at four coordinate regimes (the far camera-relative frame is bit-identical to the local one; the absolute one is 0.146 rad off in its worst normal) and found the streaming path's subtraction order in the process - see § A far cell rounds geometry away. Still not met as a gate: it is a claim about a displayed image, and there is no device yet (OQ-51) |
+
+## Device-generated rays: the 66 MB was real, and it was not the floor (2026-10-17)
+
+`r1_step_price` and `r1_round_trip_split` left R1 with a shape: at 1080p the cap-1 frame — one step per ray,
+essentially no march — costs 66–74 ms in `write_rays` plus a 114–126 ms wait, and the step term saturates. The
+reading everyone (including the earlier draft of this doc) took from that was that the fixed cost is the host
+round trip, and that its dominant term is the rays: 2,073,600 of them at 32 bytes apiece, packed by the host and
+pushed down the bus every frame. So `crates/gpu/examples/r1_device_rays.rs` builds the smallest possible version
+of the other world, where none of those bytes exist.
+
+The mechanism: `interp.wgsl`'s march law was lifted out of `march_rays` into `march_one` (duplicating the loop
+would have forked the law, which is what this file's tests exist to prevent), and a second entry point,
+`march_rays_from_camera`, derives each thread's ray from `gl_global_invocation_id` and a `CameraUniform` —
+`origin`/`right`/`up`/`forward` plus `(half_height, aspect, max_t)` and the grid — using `render::raster::ray_for`
+transcribed in the same operation order. On the host side `begin_camera_frame` / `write_camera` / `bind_camera` /
+`march_camera_frame` allocate a 16-byte header, a 96-byte camera and the depth buffers, and **no ray buffer**.
+The camera block rides binding 5 as a *uniform* rather than a fifth storage buffer, because
+`Limits::downlevel_defaults()` caps a stage at four storage buffers and `interp.wgsl` is already at that ceiling.
+
+What is asserted, on a GeForce MX250:
+
+| Term | Value |
+|---|---|
+| Anchor grid, device rays vs `render::march` (64×48) | 132 hits both sides, **0** hit/miss disagreements, worst depth deviation 0.000001 |
+| Same frame, host rays vs device rays | 132 / 132, **0** set differences, worst 0.000001 |
+| Bytes per anchor frame | 98,304 (rays) vs **112** (header + camera) |
+| Falsification — host given `half_height` 0.25 against the device's 0.5 | 364 hit/miss differences, so the comparison sees a camera |
+| Camera moved 3.5 units, 112 bytes rewritten | 1,276 pixels change, 0 disagreements against the host path — the uniform is an input |
+| Degenerate camera (zero-length rays) | 0 surfaces of 3,072, matching `render`'s `unit` through the shader's `select` arm |
+| **1080p, one frame per path** | **80,964 surfaces both sides, 0 of 2,073,600 set differences, worst deviation 0.000005; 66,355,200 bytes vs 112** |
+
+And the duration hypothesis died there. Three completed runs put the 1080p pair (host / camera, each including its
+read-back) at 893.00 / 967.56 ms, 832.59 / 827.18 ms and 822.83 / 799.37 ms — the camera path *slower* by 74 ms in
+one run and *faster* by 5 and 23 ms in the other two, so even the sign of the difference does not reproduce — while
+the same 3,072-ray anchor frame on that same laptop timed 1.95, 1.82, 18.91 and 1.91 ms. The only stable timing term,
+submit-only at 0.11–0.50 ms for both paths, says the dispatch was never where the frame went either. A machine that cannot resolve 1.82 vs
+18.91 ms for identical work cannot support "deleting a 66–74 ms term changed nothing" as a *measurement of* zero;
+what it supports is that the copy is not the floor R1 is stuck against, because if it were, the frame would have
+got 8–9% faster and it did not. Two further attempts did not reach a verdict at all: they lost the device mid-leg
+with `Parent device is lost`, which wgpu 27 raises as a panic from `Device::poll` rather than an `Err`, so the
+1080p leg runs under `catch_unwind` exactly as `r1_round_trip_split` does, and only a payload naming a lost device
+prints a SKIP — any other unwind exits 101 rather than hiding a failure behind a friendly line.
+
+**Consequence for the roadmap.** The retraction is of the specific claim that the per-frame host round trip is
+what R1 cannot get under: the ray bytes are deletable and deleting them buys nothing measurable, so what remains
+in a 1080p frame is the march's own device time and the **8,294,400-byte depth buffer copied back to the host per
+frame**. A renderer that shades on the device copies neither — depths become a texture the same device reads — and
+that leg is not built, because it is the material/lighting pipeline doc 04 § Materials describes and not a
+scheduling trick. The next R1 number should come from there, not from fewer ray bytes.
+
+**What still stands unchanged:** the host path is not retired. `render::raster`'s cull, enclosure bounds and
+per-ray budget charge all need to know which pixels were thrown away, and a device that invents its own rays does
+not answer that; the device-ray path is for a march that wants every pixel in the grid. And nothing here touches
+§4 or SPEC-02: a camera ray is doc 02's presentation `f32` that no root reads, and the field it walks is still the
+one interpreter the CPU reference agrees with — the reference anchor row above is the assertion that guards it.
+The step-cap sweep is unchanged; the shipped `march_rays` path and its gates still run.

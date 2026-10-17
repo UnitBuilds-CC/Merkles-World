@@ -269,6 +269,14 @@ jobs:
       - name: R1 round-trip split at 1080p (informational)
         run: cargo run --release -p gpu --example r1_round_trip_split
 
+      # One frame, two ray sources: the host's 32 B/ray list against a 112-byte camera block the shader turns
+      # into rays itself. Its asserted terms are integers - bytes written by each path, per-pixel hit/miss set
+      # equality against render::march and against the other path, and that a moved camera moves the picture.
+      # This is the instrument that retracted "the 66 MB ray copy is R1's fixed term": the bytes are real and
+      # deleting them changed no duration this adapter could resolve. A runner with no adapter prints SKIP.
+      - name: R1 device-generated rays vs host rays (informational)
+        run: cargo run --release -p gpu --example r1_device_rays
+
       # R2's edit loop: the frame re-marched at four slab occupancies, asserting placement every frame and
       # equal charged evaluations (18,284) across a 6000x change in occupancy. The medians are informational
       # and asserted nowhere - a laptop's median moved 2.5x between runs of identical code.

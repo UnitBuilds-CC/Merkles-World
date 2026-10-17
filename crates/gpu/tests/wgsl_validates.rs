@@ -38,10 +38,55 @@ fn evaluate_points() {
 
 #[test]
 fn the_bindings_the_cpu_side_would_upload_are_the_ones_declared() {
-    // Five storage buffers: nodes, pool, queries, header, distances. The order is the bind group's
-    // order, and a silent insertion between two of them would have the shader read the wrong buffer -
-    // the class of mistake that produces a plausible picture rather than an error.
-    assert_eq!(declared_bindings(INTERP), vec![0, 1, 2, 3, 4]);
+    // Six declared bindings, and only four of them are storage buffers: nodes, pool, queries and distances
+    // are the stage's whole storage budget under `Limits::downlevel_defaults()`, which is why the header
+    // arrived as a uniform at 3 and the camera block arrived as a uniform at 5 rather than as a fifth
+    // storage buffer. The order is the bind group's order, and a silent insertion between two of them would
+    // have the shader read the wrong buffer - the class of mistake that produces a plausible picture rather
+    // than an error.
+    assert_eq!(declared_bindings(INTERP), vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn camera_bytes_is_the_uniform_layout() {
+    // `write_camera` fills a 96-byte block by row offset and `interp.wgsl` reads it by field name, so the
+    // two files share a layout that neither checks against a schema. The rows are the ones a uniform block
+    // forces - each `vec3` is aligned to 16, so four direction rows, then geometry, then the grid - and a
+    // reordering on either side silently reinterprets every camera ever written.
+    //
+    // This is a text guard rather than a device one on purpose: the Linux and Windows CI runners have no
+    // adapter, so the example that would catch a fused read-write disagreement (`r1_device_rays`) prints
+    // SKIP there, while the field order it depends on is checkable without a GPU.
+    let start = INTERP
+        .find("struct CameraUniform {")
+        .expect("the camera entry point reads a CameraUniform; the struct is gone");
+    let body = &INTERP[start..];
+    let body = &body[..body.find('}').expect("CameraUniform is unterminated")];
+    let mut last = 0usize;
+    for field in [
+        "origin: vec3<f32>",
+        "right: vec3<f32>",
+        "up: vec3<f32>",
+        "forward: vec3<f32>",
+        "geom: vec4<f32>",
+        "grid: vec4<f32>",
+    ] {
+        let at = body
+            .find(field)
+            .unwrap_or_else(|| panic!("{field} is not a field of CameraUniform: {body}"));
+        assert!(
+            at > last,
+            "{field} is out of order in CameraUniform, and the host writes it by row offset"
+        );
+        last = at;
+    }
+    // The six rows are 16 bytes each: four direction rows at 0/16/32/48, geometry at 64, grid at 80, for the
+    // 96-byte block `write_camera` asserts it wrote. `vec3` aligns to 16 in a uniform block, which is what
+    // makes the row pitch 16 rather than 12 and what the third word of the first row is `root` for.
+    assert!(
+        INTERP.contains("@group(0) @binding(5) var<uniform> cam: CameraUniform"),
+        "the camera has to be a uniform at binding 5; a fifth storage buffer is a validation error downlevel"
+    );
 }
 
 #[test]

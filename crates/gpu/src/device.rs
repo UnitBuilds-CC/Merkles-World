@@ -37,6 +37,7 @@ pub struct Interpreter {
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     march_pipeline: wgpu::ComputePipeline,
+    camera_pipeline: wgpu::ComputePipeline,
     adapter: String,
 }
 
@@ -112,6 +113,46 @@ pub struct Frame {
 #[derive(Debug)]
 pub struct Bind {
     bind: wgpu::BindGroup,
+}
+
+/// A frame whose rays the device generates itself, from a camera block instead of a ray list.
+///
+/// The difference from `Frame` is the absence of `packed` and `queries`: at 1920x1080 those are
+/// 66,355,200 bytes the host builds and pushes down the bus every frame, which `r1_step_price` measured as
+/// the fixed term that puts a single step over 16.67 ms. What remains is a 16-byte header, a 96-byte camera,
+/// and the depths coming back.
+#[derive(Debug)]
+pub struct CameraFrame {
+    pub pixels: usize,
+    header: wgpu::Buffer,
+    camera: wgpu::Buffer,
+    traced: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    /// The step cap and surface tolerance `write_camera` last put on the device for this frame, so a march
+    /// cannot report a law the frame never received.
+    law: Option<(u32, f32)>,
+}
+
+/// Where the camera is, in the form `interp.wgsl`'s `CameraUniform` wants.
+///
+/// The basis vectors arrive pre-built rather than as an eye/target/up triple because `render::raster::Camera`
+/// already derives them, and a second derivation in the shader would be a second place for the two to
+/// disagree. Every field here is presentation: `ray_for`'s output is what the host path uploads today, so
+/// nothing a root depends on changes hands (AGENTS.md §4, SPEC-02).
+#[derive(Debug, Clone)]
+pub struct GpuCamera {
+    pub origin: Vec3,
+    pub right: Vec3,
+    pub up: Vec3,
+    pub forward: Vec3,
+    /// Half the viewport height in world units at the near plane — `render::raster`'s `half_height`.
+    pub half_height: f32,
+    pub max_t: f32,
+    pub surface: f32,
+    pub max_steps: u32,
+    pub root: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// One distance comparison.
@@ -255,12 +296,24 @@ impl Interpreter {
             compilation_options: Default::default(),
             cache: None,
         });
+        // Derived from the entry point, like the other two, so the bindings this pipeline requires are
+        // exactly the ones `march_rays_from_camera` reads: no ray buffer at all, plus the camera block.
+        // If the shader and this file disagree, validation says so at open() rather than as a wrong picture.
+        let camera_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("march_rays_from_camera"),
+            layout: None,
+            module: &module,
+            entry_point: Some("march_rays_from_camera"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         Ok(Interpreter {
             device,
             queue,
             pipeline,
             march_pipeline,
+            camera_pipeline,
             adapter: adapter_name,
         })
     }
@@ -855,6 +908,170 @@ impl Interpreter {
         Ok(March {
             adapter: self.adapter.clone(),
             rays: frame.rays,
+            max_steps,
+            surface,
+            hits,
+            ms_submit_only,
+            ms_frame_with_read,
+            depths,
+        })
+    }
+
+    /// The buffers a device-generated frame owns once: a header, a camera block, the depths out. There is
+    /// deliberately **no ray buffer**, which is the whole point of the path. At 1920x1080 the host-written
+    /// frame is 66,355,200 bytes of rays down the bus per frame (`begin_frame` allocates `rays * 32` and
+    /// `write_rays` uploads all of it); this one moves 16 + 96 bytes in and the depths back.
+    ///
+    /// Like `begin_frame`, the allocation is once per run rather than once per frame, so a repeated frame
+    /// still touches no new device memory (AS4's clause).
+    pub fn begin_camera_frame(&self, width: u32, height: u32) -> CameraFrame {
+        let pixels = width as usize * height as usize;
+        let depth_bytes = (pixels * 4) as u64;
+        CameraFrame {
+            pixels,
+            header: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("camera-header"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            camera: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("camera-uniform"),
+                size: 96,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            traced: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("camera-depths"),
+                size: depth_bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            }),
+            staging: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("camera-staging"),
+                size: depth_bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            law: None,
+        }
+    }
+
+    /// Put the header and the camera block on the device, and record the law the frame now carries.
+    ///
+    /// The layout is `interp.wgsl`'s `CameraUniform`, word for word: four 16-byte rows of direction and
+    /// position (the fourth word of the first row is the root index), then geometry as
+    /// `(half_height, aspect, max_t, unused)` and the grid as `(width, height, unused, unused)`. Aspect is
+    /// computed here rather than passed in, because the shader derives `ndc_x` from it exactly the way
+    /// `render::raster::ray_for` does, and a caller-supplied aspect is a second place for it to be wrong.
+    ///
+    /// Returns the byte count it wrote to the bus, which is the number the host-ray path is compared on.
+    pub fn write_camera(&self, frame: &mut CameraFrame, camera: &GpuCamera) -> usize {
+        let aspect = camera.width as f32 / camera.height as f32;
+        let mut header = [0u8; 16];
+        for (offset, word) in [
+            frame.pixels as u32,
+            STACK_DEPTH,
+            camera.max_steps,
+            camera.surface.to_bits(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            header[offset * 4..offset * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        let mut block = [0u8; 96];
+        let rows: [(usize, Vec3); 4] = [
+            (0, camera.origin),
+            (16, camera.right),
+            (32, camera.up),
+            (48, camera.forward),
+        ];
+        for (offset, vector) in rows {
+            for (axis, word) in vector.iter().enumerate() {
+                block[offset + axis * 4..offset + axis * 4 + 4]
+                    .copy_from_slice(&word.to_le_bytes());
+            }
+        }
+        block[12..16].copy_from_slice(&camera.root.to_le_bytes());
+        for (index, word) in [camera.half_height, aspect, camera.max_t, 0.0f32]
+            .iter()
+            .enumerate()
+        {
+            block[64 + index * 4..68 + index * 4].copy_from_slice(&word.to_le_bytes());
+        }
+        for (index, word) in [camera.width as f32, camera.height as f32, 0.0f32, 0.0f32]
+            .iter()
+            .enumerate()
+        {
+            block[80 + index * 4..84 + index * 4].copy_from_slice(&word.to_le_bytes());
+        }
+        self.queue.write_buffer(&frame.header, 0, &header);
+        self.queue.write_buffer(&frame.camera, 0, &block);
+        frame.law = Some((camera.max_steps, camera.surface));
+        header.len() + block.len()
+    }
+
+    /// Bind a resident shape to a camera frame. Slot 2 - the ray buffer - is absent, because the entry
+    /// point this pipeline was derived from never names it.
+    pub fn bind_camera(&self, shape: &Shape, frame: &CameraFrame) -> Bind {
+        Bind {
+            bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("camera-march"),
+                layout: &self.camera_pipeline.get_bind_group_layout(0),
+                entries: &[
+                    entry(0, &shape.nodes),
+                    entry(1, &shape.pool),
+                    entry(3, &frame.header),
+                    entry(4, &frame.traced),
+                    entry(5, &frame.camera),
+                ],
+            }),
+        }
+    }
+
+    /// March a device-generated frame: one dispatch of width x height rays, then the depths back. The law
+    /// reported is the one `write_camera` recorded, so this cannot state a law the device never received.
+    pub fn march_camera_frame(&self, bind: &Bind, frame: &CameraFrame) -> Result<March, String> {
+        let Some((max_steps, surface)) = frame.law else {
+            return Err(
+                "march_camera_frame on a frame no camera has been written into".to_string(),
+            );
+        };
+        let size = (frame.pixels * 4) as u64;
+        let start = std::time::Instant::now();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&self.camera_pipeline);
+            pass.set_bind_group(0, &bind.bind, &[]);
+            pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&frame.traced, 0, &frame.staging, 0, size);
+        self.queue.submit([encoder.finish()]);
+        let ms_submit_only = start.elapsed().as_secs_f64() * 1000.0;
+        let raw = self.read(&frame.staging, size)?;
+        let ms_frame_with_read = start.elapsed().as_secs_f64() * 1000.0;
+
+        let mut depths = Vec::with_capacity(frame.pixels);
+        let mut offset = 0usize;
+        while offset + 4 <= raw.len() {
+            depths.push(f32::from_le_bytes(
+                raw[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| "short read")?,
+            ));
+            offset += 4;
+        }
+        let hits = depths
+            .iter()
+            .filter(|depth| **depth < UNSUPPORTED_HALF)
+            .count();
+        Ok(March {
+            adapter: self.adapter.clone(),
+            rays: frame.pixels,
             max_steps,
             surface,
             hits,

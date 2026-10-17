@@ -333,7 +333,7 @@ fn evaluate_points(@builtin(global_invocation_id) id: vec3<u32>) {
     distances[index] = eval_from(u32(query.w), query.xyz);
 }
 
-// The march, on the device. `frame_curve` priced a frame as 46 separate dispatches of `evaluate_points`
+// The march, on a device. `frame_curve` priced a frame as 46 separate dispatches of `evaluate_points`
 // over the same grid, each one submitting and copying back, and the resulting 4,005 ms was mostly the
 // harness carrying a 2M-point grid around 46 times. This entry point asks the question R1 actually
 // poses: how long does a frame take when the ray loop is the shader and the only bytes that cross the bus
@@ -347,18 +347,17 @@ fn evaluate_points(@builtin(global_invocation_id) id: vec3<u32>) {
 // two loop conditions and the `max(distance, surface)` advance: two implementations of one march that
 // differ by a step count are the same fork the interpreter's tests exist to prevent, and the agreement
 // example measures it rather than asserting it away.
-@compute @workgroup_size(64)
-fn march_rays(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = id.x;
-    if index >= header.point_count {
-        return;
-    }
-    let origin_and_root = queries[index * 2u];
-    let direction_and_max_t = queries[index * 2u + 1u];
-    let root = u32(origin_and_root.w);
-    let origin = origin_and_root.xyz;
-    let direction = direction_and_max_t.xyz;
-    let max_t = direction_and_max_t.w;
+//
+// The law itself now lives in `march_one` so a second entry point can hand it a ray it built itself.
+// Duplicating the loop would have been the cheaper edit and the wrong one: two copies of the advance
+// are the fork this file's whole existence is written against.
+fn march_one(
+    index: u32,
+    root: u32,
+    origin: vec3<f32>,
+    direction: vec3<f32>,
+    max_t: f32,
+) {
     let surface = bitcast<f32>(header.march_surface_bits);
     let max_steps = header.march_steps;
 
@@ -377,4 +376,80 @@ fn march_rays(@builtin(global_invocation_id) id: vec3<u32>) {
         t = t + max(distance, surface);
         steps = steps + 1u;
     }
+}
+
+@compute @workgroup_size(64)
+fn march_rays(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= header.point_count {
+        return;
+    }
+    let origin_and_root = queries[index * 2u];
+    let direction_and_max_t = queries[index * 2u + 1u];
+    march_one(
+        index,
+        u32(origin_and_root.w),
+        origin_and_root.xyz,
+        direction_and_max_t.xyz,
+        direction_and_max_t.w,
+    );
+}
+
+// A frame's rays, built on the device from a camera instead of handed up 32 bytes at a time.
+//
+// Why this exists as a measurement and not as a convenience: at 1920x1080 the host-written path moves
+// 2,073,600 x 32 = 66,355,200 bytes down the bus every frame before a single ray moves, and `r1_step_price`
+// measured that the frame at cap 1 - one step per ray, so almost no marching at all - is already over R1's
+// 16.67 ms. That says the budget is being spent on the round trip. This entry point is how small that round
+// trip can get: one 16-byte header and one 96-byte camera, and the depths back.
+//
+// The pinhole math is `crates/render::raster::ray_for` transcribed, in the same order: `ndc_x` carries the
+// aspect, `ndc_y` flips the row, the basis combination is `forward + right * ndc_x + up * ndc_y`, and the
+// normalisation is the same divide-by-length with the zero-length case returning a zero vector. Fusing a
+// multiply and an add into one FMA is legal here and is not legal on the CPU, so depths are compared within
+// a tolerance and the hit/miss set exactly - which is the anchor the other device examples already use,
+// because it is the one that survives a last-ulp difference.
+//
+// AGENTS.md §4 and SPEC-02 both clear this: a camera ray is presentation (doc 02's camera-relative `f32`,
+// nothing hashed), and the field being marched is still evaluated by the same interpreter the CPU reference
+// agrees with. The shader is not computing simulation state; it is computing where to look.
+struct CameraUniform {
+    // Each vec3 pads to 16 bytes because this is a uniform block, so the layout is six rows of four words
+    // and the host writes exactly that. Nothing is read by name on the host side; the row order is the
+    // contract between the two files, and `camera_bytes_is_the_uniform_layout` keeps them honest.
+    origin: vec3<f32>,
+    root: u32,
+    right: vec3<f32>,
+    pad_right: u32,
+    up: vec3<f32>,
+    pad_up: u32,
+    forward: vec3<f32>,
+    pad_forward: u32,
+    geom: vec4<f32>,
+    grid: vec4<f32>,
+}
+
+@group(0) @binding(5) var<uniform> cam: CameraUniform;
+
+@compute @workgroup_size(64)
+fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= header.point_count {
+        return;
+    }
+    let width = u32(cam.grid.x);
+    let height = u32(cam.grid.y);
+    let px = index % width;
+    let py = index / width;
+    let u = (f32(px) + 0.5) / f32(width);
+    let v = (f32(py) + 0.5) / f32(height);
+    let ndc_x = (2.0 * u - 1.0) * cam.geom.x * cam.geom.y;
+    let ndc_y = (1.0 - 2.0 * v) * cam.geom.x;
+    let span = cam.forward + cam.right * ndc_x + cam.up * ndc_y;
+    let length = sqrt(span.x * span.x + span.y * span.y + span.z * span.z);
+    // `select(fallback, chosen, condition)` reads as "use `chosen` when the condition holds", so the
+    // zero-length ray collapses to the same zero vector `render`'s `unit` returns. The division is
+    // computed either way; it is simply not used when length is zero.
+    let direction = select(span / vec3(length), vec3(0.0, 0.0, 0.0), length == 0.0);
+    march_one(index, cam.root, cam.origin, direction, cam.geom.z);
 }
