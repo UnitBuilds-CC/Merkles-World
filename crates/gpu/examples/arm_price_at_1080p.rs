@@ -46,6 +46,9 @@
 //! instrument survives; shipping the panic instead would be reporting a crash as a measurement. Cap 1 is not a
 //! softer place to ask the question: every ray takes exactly one step, so the armed walk differs from the armless
 //! one only in how many nodes that step evaluates — the arm's per-step cost with no deeper history to dilute it.
+//! `R1_ARM_CAP` raises that cap on a machine with no watchdog to answer (buildbox's GTX 1070), which is the only way
+//! to price the arm at the cap the march actually runs at; every row names the cap it was taken at, because a saving
+//! measured at cap 1 and a saving measured at cap 64 are different claims.
 //! What this says about R1 is the uncomfortable half: a 1080p host-ray frame at cap 1 already costs several hundred
 //! ms on this GPU, and no culling lever closes a factor of tens.
 //!
@@ -65,12 +68,23 @@ const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const MAX_T: f32 = 40.0;
 const SURFACE: f32 = 1e-3;
-/// The step cap this device survives at 1080p. **Not** the cap the historical march figures were taken at: the
-/// same grid, same buffers and same ray count at `MAX_STEPS = 64` lost the MX250 to `Parent device is lost`
+/// The step cap this device survives at 1080p by default. **Not** the cap the historical march figures were taken
+/// at: the same grid, same buffers and same ray count at `MAX_STEPS = 64` lost the MX250 to `Parent device is lost`
 /// twice, on both the per-call and the reused-buffer path, while this cap-1 run completes in 0.6 s per march —
 /// so the loss is work per dispatch (a Windows driver watchdog), not device memory. Pricing the arm at a cap
 /// the device cannot reach would mean shipping a panic as a measurement.
 const MAX_STEPS: u32 = 1;
+/// `R1_ARM_CAP` raises the 1080p pair's step cap on a machine without such a watchdog — buildbox's GTX 1070 has
+/// none, so it is where the arm gets priced at the cap the march actually runs at. The run prints the cap it used,
+/// because a saving measured at cap 1 and a saving measured at cap 64 are different claims and the log has to say
+/// which one it is.
+fn arm_cap() -> u32 {
+    std::env::var("R1_ARM_CAP")
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .filter(|cap| *cap > 0)
+        .unwrap_or(MAX_STEPS)
+}
 /// Enough marches to see a spread. At 0.6 s each this is a few tens of seconds on a laptop GPU.
 const REPEATS: usize = 15;
 /// The tally is checked at a small grid, where one march costs milliseconds instead of seconds.
@@ -108,8 +122,8 @@ fn union_two(separation: f32, radius: f32) -> Tree {
     }
 }
 
-/// A pinhole fan with no trig, at `width` x `height`.
-fn fan(width: u32, height: u32) -> Vec<Ray> {
+/// A pinhole fan with no trig, at `width` x `height`, marched at `cap` steps per ray.
+fn fan(width: u32, height: u32, cap: u32) -> Vec<Ray> {
     let mut rays = Vec::with_capacity((width * height) as usize);
     for py in 0..height {
         let v = (py as f32 + 0.5) / height as f32;
@@ -121,7 +135,7 @@ fn fan(width: u32, height: u32) -> Vec<Ray> {
                 dir: d,
                 max_t: MAX_T,
                 surface: SURFACE,
-                max_steps: MAX_STEPS,
+                max_steps: cap,
             });
         }
     }
@@ -154,12 +168,17 @@ fn main() {
         }
     };
     println!("adapter          : {}", interpreter.adapter());
+    let cap = arm_cap();
+    println!(
+        "1080p cap        : {cap} - the default is 1 because this laptop's watchdog loses the device at 64; \
+         R1_ARM_CAP names a higher one on a machine that survives it"
+    );
     let tree = union_two(1.2, 1.0);
 
     // 1. Admissibility first, at the grid where a march costs milliseconds: the armed shape's own walk reports
     //    refusals and the +inf control reports none. Without this the two 1080p timings below would be one
     //    walk measured twice and called a saving.
-    let mut probe = fan(PROBE_WIDTH, PROBE_HEIGHT);
+    let mut probe = fan(PROBE_WIDTH, PROBE_HEIGHT, MAX_STEPS);
     let armed_counted = interpreter
         .march_counted(&interpreter.upload(&tree), ROOT, &probe)
         .expect("the probe grid must march through the counted path");
@@ -212,7 +231,7 @@ fn main() {
     //    repeat. The frame path is also the one a running renderer is on, so it is the path worth pricing.
     //    If the arm changed a single bit of the picture, the two medians would be two renderers, not one renderer
     //    with and without a shortcut.
-    let rays = fan(WIDTH, HEIGHT);
+    let rays = fan(WIDTH, HEIGHT, cap);
     let armed_shape = interpreter.upload(&tree);
     let control_shape = interpreter.upload_bounds_refused(&tree);
     let mut frame = interpreter.begin_frame(rays.len());
@@ -320,7 +339,7 @@ fn main() {
     let (a, c) = (median(&mut armed_ms), median(&mut control_ms));
     let share = (c - a) / c * 100.0;
     println!(
-        "1080p            : {} rays, cap {MAX_STEPS}, max_t {MAX_T} - {hits} surfaces found; armed median \
+        "1080p            : {} rays, cap {cap}, max_t {MAX_T} - {hits} surfaces found; armed median \
          {a:.3} ms, control median {c:.3} ms over {REPEATS} interleaved pairs each, the arm's share \
          {share:+.1}%, depths bit-identical on every repeat",
         rays.len()
@@ -472,7 +491,7 @@ fn main() {
     );
     println!(
         "result           : the bound-skip arm at R1's own grid on {} - armed {a:.3} ms against control {c:.3} \
-         ms over {} rays at cap {MAX_STEPS}, a paired median of {med_diff:.3} ms ({share:+.1}%) at \
+         ms over {} rays at cap {cap}, a paired median of {med_diff:.3} ms ({share:+.1}%) at \
          {sigma:.1} sigma with {positives}/{REPEATS} repeats agreeing on the sign; the frame it lives in costs \
          {a:.0} ms against a 16.67 ms budget, a factor of {:.0}, which no culling lever closes (durations gate \
          nothing, ADR-017).",
