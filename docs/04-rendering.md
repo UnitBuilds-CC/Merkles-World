@@ -1595,18 +1595,24 @@ reporting **3,072 hits against the reference's 132, 2,940 set disagreements, and
 in their bits** — so a march leg that quietly stopped dispatching cannot pass this file, which is the failure the
 whole split would silently depend on.
 
-**CI reproduces the integers on a second vendor, and the share with them** (run `39016251784`). The ARM64 macOS
-`gates` job opens `Apple Paravirtual device [Metal, IntegratedGpu]` and prints the same asserted shape as the
-MX250: anchor 132 / 132 / 132 hits for reference / legs / whole path, **0 of 3,072 bit-differing depths**, cap
-shape **0 / 65,148 / 80,964**, **8,294,400 bytes** on all three 1080p rows, lattice 0 / 33 / 53 hits with **zero**
-disagreements and worst 0.000001, and its own in-run falsifier reporting the same **3,072 hits and 2,940
-disagreements** for a written-but-never-dispatched frame. Its clock puts the read-back at 9.96 ms of a 421.97 ms
-cap-64 frame — 2.4% (DERIVED) against this laptop's 0.74–1.40% — so the *ordering* of the two terms, the copy far
-below the stepping, is not one box's quirk, and the legs' sum against the whole path is again unstable in both
-directions (cap 1: 67.84 vs 51.11; cap 8: 324.97 vs 329.66; cap 64: 443.57 vs 421.97 ms). **Neither of those
-millisecond columns is R1 budget evidence and neither is quoted as any:** a paravirtual device is the wrong
-instrument for a frame budget, not a slow one — the rule this doc's R1 row and docs/11's S9 row already carry — so
-the 16.67 ms claim above rests on the MX250 rows and on the GTX 1070 buildbox row this example still owes. The one
-thing the second vendor adds is that the retraction's *direction* travels: two devices, both with the copy the
-small term. x86-64 Linux and Windows print `SKIP r1_march_alone: no device (NoAdapter)`: no CI runner is a GPU, so
-the device rows stay one Apple paravirtual adapter plus this laptop.
+**CI reproduces the integers on a second vendor — twice — and not the milliseconds** (runs `39016251784`,
+`39017300889`). The ARM64 macOS `gates` job opens `Apple Paravirtual device [Metal, IntegratedGpu]` and prints the
+same asserted shape as the MX250: anchor 132 / 132 / 132 hits for reference / legs / whole path, **0 of 3,072
+bit-differing depths**, cap shape **0 / 65,148 / 80,964**, **8,294,400 bytes** on all three 1080p rows, lattice
+0 / 33 / 53 hits with **zero** disagreements and worst 0.000001, and its own in-run falsifier reporting the same
+**3,072 hits and 2,940 disagreements** for a written-but-never-dispatched frame. Every one of those integers is
+identical across the two CI runs; none of its milliseconds are, and it is the second run that makes this paragraph
+honest rather than flattering. The same example on the same kind of adapter put the cap-64 read-back at **9.96 of a
+421.97 ms frame** (2.4%, DERIVED) in the first run and **18.98 of 317.09 ms** (6.0%) in the second, against this
+laptop's 0.74–1.40% over three runs — so the *share* is a one-reading number on every vendor, and the legs' sum
+against the whole path stays unstable in both directions (run `39017300889`: 67.63 vs 44.36, 256.50 vs 240.51,
+333.65 vs 317.09 ms; run `39016251784`: 67.84 vs 51.11, 324.97 vs 329.66, 443.57 vs 421.97). What does survive both
+vendors and all five readings is the **ordering**: the copy is the smaller of the two legs at caps 8 and 64
+everywhere — on the second CI run by 18x and 17x (243.15 vs 13.35, 314.68 vs 18.98) — which is the whole of what a
+second vendor was ever asked to corroborate: the retraction's *direction*, not its magnitude. **No millisecond
+column in this paragraph is R1 budget evidence and none is quoted as any:** a paravirtual device is the wrong
+instrument for a frame budget, not a slow one — the rule this doc's R1 row and docs/11's S9 row already carry — and
+a *printed* duration is not evidence even when the device is admissible, which is why ADR-017 keeps the split
+asserted only in its integers. The 16.67 ms claim above therefore rests on the MX250 rows and on the GTX 1070
+buildbox row this example still owes. x86-64 Linux and Windows print `SKIP r1_march_alone: no device (NoAdapter)`:
+no CI runner is a GPU, so the device rows stay one Apple paravirtual adapter plus this laptop.
