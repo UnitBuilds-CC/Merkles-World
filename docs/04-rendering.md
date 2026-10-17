@@ -1516,9 +1516,81 @@ frame**. A renderer that shades on the device copies neither — depths become a
 that leg is not built, because it is the material/lighting pipeline doc 04 § Materials describes and not a
 scheduling trick. The next R1 number should come from there, not from fewer ray bytes.
 
+*(Superseded by its own last sentence, 2026-10-17: the two terms this paragraph names as what remains were then
+priced apart, and the read-back term is 0.7-1.4% of the frame. The proposal that the next number come from on-device
+shading is measured against in § The march and the read-back, priced apart below. The retraction of the round-trip
+floor stands on its own; only the recommendation did not survive.)*
+
 **What still stands unchanged:** the host path is not retired. `render::raster`'s cull, enclosure bounds and
 per-ray budget charge all need to know which pixels were thrown away, and a device that invents its own rays does
 not answer that; the device-ray path is for a march that wants every pixel in the grid. And nothing here touches
 §4 or SPEC-02: a camera ray is doc 02's presentation `f32` that no root reads, and the field it walks is still the
 one interpreter the CPU reference agrees with — the reference anchor row above is the assertion that guards it.
 The step-cap sweep is unchanged; the shipped `march_rays` path and its gates still run.
+
+## The march and the read-back, priced apart: the 8 MB copy is 0.7-1.4% of the frame (2026-10-17)
+
+`cargo run --release -p gpu --example r1_march_alone` (a CI step) splits the camera path's `march_camera_frame`
+into its two intervals — `march_camera_frame_no_readback` (encode, dispatch, drain the queue, copy and map
+nothing) and `read_camera_depths` (copy and map `pixels * 4`, dispatch nothing) — and runs the legs plus the whole
+path on one 1920x1080 camera frame at step caps 1, 8 and 64. The buffers are the frame's own: no ray list is
+uploaded at any point, so this is the frame § Device-generated rays left off with, not the shipped host path.
+
+| | cap 1 | cap 8 | cap 64 |
+|---|---|---|---|
+| Surfaces found — legs, and the whole path, identically | 0 | 65,148 | 80,964 |
+| Depths differing in their bit patterns, legs vs whole path | 0 of 2,073,600 | 0 of 2,073,600 | 0 of 2,073,600 |
+| Bytes the read-back's own copy moved | 8,294,400 | 8,294,400 | 8,294,400 |
+| 2,040-pixel lattice vs `render::march` — hits, disagreements, worst | 0, 0, 0.000000 | 33, 0, 0.000001 | 53, 0, 0.000001 |
+| ms, march leg only (three runs) | 87.06, 85.66, **657.13** | 604.67, 710.48, 871.66 | 786.38, 788.19, 793.52 |
+| ms, read-back leg only | 10.21, 10.13, 13.54 | 8.18, 9.89, 11.57 | 11.10, 10.43, 6.64 |
+| ms, whole path | 90.66, 91.38, 663.76 | 610.37, 751.13, 701.32 | 795.55, 802.01, 893.51 |
+
+**Why the split is admissible.** The two legs are not trusted to be the same frame as the shipped path; they are
+compared against it. Dispatch-then-copy returns **zero** differing depth bit patterns out of 2,073,600 at every
+cap, and the read-back's hit count equals the whole path's, so the interval being priced is one march, twice. The
+anchor grid (64x48) carries the same check against the CPU reference — 132 hits, 0 set differences, worst
+0.000001 — and the falsifier runs in the same binary: a frame that was *written but never dispatched* reads back
+as **3,072 hits and 2,940 disagreements** against the reference at that grid (the copy returns the zeroed buffer),
+so the rows above cannot be a buffer's contents standing in for a march. And the header's step count is not
+decoration: 0 / 65,148 / 80,964, asserted strictly increasing, reproducing `r1_round_trip_split`'s host-ray hit
+counts exactly on rays the device derived itself — one frame, two harnesses.
+
+**What it settles.** The read-back is the smaller term by two orders of magnitude: across the three runs it prices
+**6.64–13.54 ms** regardless of cap — 10.21/8.18/11.10, then 10.13/9.89/10.43, then 13.54/11.57/6.64 — while the
+march's leg moves 86–657 ms to 794–871 ms over the same rows. Against the cap-64 frame the copy is **0.74–1.40%**
+(11.10 of 795.55, 10.43 of 802.01, 6.64 of 893.51; DERIVED), and even at cap 1, where the march has almost nothing
+to do, it is 11% of a 91 ms frame. A copy leg that were absorbing the stepping would have to grow with it, and it
+does not. So on-device shading, the leg § Device-generated rays proposed as the next number, deletes 7–14 ms of a
+664–894 ms frame on this GPU. It is worth building for what doc 04 § Materials and § VRAM describe, and it is not
+an R1 lever; that recommendation is retracted above and here.
+
+**What the frame's floor is.** Cap 1 is one step per ray: the march switched off in all but name, zero surfaces
+found, no ray bytes uploaded and no read-back in the interval — and it still costs **87.06, 85.66 and 657.13 ms**
+for 2,073,600 rays on the MX250. The first two reproduce to 1.6% and the third does not, so no figure here is
+asserted and none is needed for the verdict: **all nine whole-frame rows across three runs are over budget**, from
+90.66 ms (5.4x R1's 16.67 ms) to 893.51 ms (53.6x). The one claim that does not depend on the clock is that the
+frame's cost is per-ray stepping, not per-frame copying — because the copy's own price is the same 7–14 ms whether
+the march finds nothing or 80,964 surfaces.
+Three of the four levers `r1_round_trip_split` listed are now measured and dismissed — the ray bytes (deletable,
+bought nothing), the read-back (0.7-1.4%), and the step cap (which does still buy pixels at this grid, 0 → 65,148 →
+80,964, but at 1 step the frame is already 5x over). What remains in the dominant term is *rays in flight*: fewer
+rays per frame, or a cheaper per-ray law. Fewer rays is the cull and residency work's job (doc 04 § Culling, gate
+R5's reachability), not a scheduling trick — so R1's next number comes from a smaller grid, a coarser march, or a
+scene the SDF walk reaches sooner, and 1080p/60 on an MX250-class device with this per-ray law is not met.
+
+**Instrument notes.** Every integer above reproduced in all three runs - the same 0 / 65,148 / 80,964, zero
+bit-differing depths in all nine rows, the same 8,294,400 bytes, the same 0 / 33 / 53 lattice hits with zero
+disagreements - and no duration did. The legs' sum against the whole path has no stable sign either (cap 1: 97.27 vs
+90.66, 95.79 vs 91.38, 670.67 vs 663.76 ms; cap 8: 720.37 vs 751.13, 883.22 vs 701.32; cap 64: 798.62 vs 802.01,
+800.17 vs 893.51) — the split is two submits and two waits against the
+whole path's one, so the sum is an attribution printed beside the rows, not a quantity asserted to equal them.
+Milliseconds did not reproduce across the three runs - the cap-8 march leg is 604.67, 710.48 and 871.66 ms and cap
+1's is 87.06, 85.66 and 657.13 ms, a 7.6x swing on one machine - and they are
+asserted nowhere, per ADR-017. `r1_round_trip_split`'s lattice lesson is carried: the anchor is a 60x34 grid of
+pixel *centres*, not a flat stride, because at width 1920 a stride of 64 samples one oblique column. The 1080p legs
+run under `catch_unwind` and print a SKIP only for a payload naming a lost device; any other unwind exits 101.
+The admissibility check was planted, once, by hand: with the anchor's dispatch call deleted the run exits 101
+reporting **3,072 hits against the reference's 132, 2,940 set disagreements, and 3,072 of 3,072 depths differing
+in their bits** — so a march leg that quietly stopped dispatching cannot pass this file, which is the failure the
+whole split would silently depend on.

@@ -72,6 +72,20 @@ pub struct March {
     pub depths: Vec<f32>,
 }
 
+/// One read-back, priced on its own: the copy of `pixels * 4` depth bytes and the map that makes them
+/// readable, with no dispatch in the interval. Paired with `march_camera_frame_no_readback` to split an R1
+/// frame's last two terms once the ray bytes are gone.
+#[derive(Debug, Clone)]
+pub struct ReadBack {
+    /// Bytes the copy actually moved, read off the copy this call made rather than computed by the caller.
+    pub bytes: usize,
+    /// Rays that carry a `t` in the buffer as it was read.
+    pub hits: usize,
+    pub depths: Vec<f32>,
+    /// Copy plus map — what a caller waiting on the frame's pixels pays after the march itself.
+    pub ms: f64,
+}
+
 /// A shape tree resident on the device: the two buffers the march binds as slots 0 and 1, created once and
 /// handed to every frame after that. `march` re-uploads them per call because one upload per frame is the
 /// shape a correctness probe wants; gate AS4's clause is different — a frame must not allocate or parse its
@@ -1078,6 +1092,84 @@ impl Interpreter {
             ms_submit_only,
             ms_frame_with_read,
             depths,
+        })
+    }
+
+    /// The march with nothing coming back: encode, submit, and wait for the queue to drain without copying or
+    /// mapping a single depth.
+    ///
+    /// Split from `march_camera_frame` because the two are the last two terms of an R1 frame once the ray bytes
+    /// are gone — the device's own stepping and the `pixels * 4` read-back — and only an on-device shading pass
+    /// deletes the second. Returns the milliseconds the caller waited, which is an attribution attempt rather
+    /// than a frame time: if a driver's wait returns before the compute queue is truly drained, the read-back
+    /// leg absorbs the difference and the split is wrong in the direction its printed line names. What the split
+    /// is *not* taken on trust from is the march's completion — `read_camera_depths` below asserts on the bytes
+    /// this call produced, so a march that had not run would show up there as the wrong hit count.
+    pub fn march_camera_frame_no_readback(
+        &self,
+        bind: &Bind,
+        frame: &CameraFrame,
+    ) -> Result<f64, String> {
+        if frame.law.is_none() {
+            return Err(
+                "march_camera_frame_no_readback on a frame no camera has been written into"
+                    .to_string(),
+            );
+        }
+        let start = std::time::Instant::now();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+            pass.set_pipeline(&self.camera_pipeline);
+            pass.set_bind_group(0, &bind.bind, &[]);
+            pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
+        }
+        self.queue.submit([encoder.finish()]);
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("poll: {error}"))?;
+        Ok(start.elapsed().as_secs_f64() * 1000.0)
+    }
+
+    /// Copy and map the depths of a frame that has already been marched, dispatching nothing. This is the
+    /// read-back term on its own, so a caller can ask whether the bytes or the stepping is what a frame costs.
+    /// The byte count is taken from the copy this call makes, not from an arithmetic figure the caller writes.
+    pub fn read_camera_depths(&self, frame: &CameraFrame) -> Result<ReadBack, String> {
+        if frame.law.is_none() {
+            return Err(
+                "read_camera_depths on a frame no camera has been written into".to_string(),
+            );
+        }
+        let size = (frame.pixels * 4) as u64;
+        let start = std::time::Instant::now();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_buffer_to_buffer(&frame.traced, 0, &frame.staging, 0, size);
+        self.queue.submit([encoder.finish()]);
+        let raw = self.read(&frame.staging, size)?;
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let mut depths = Vec::with_capacity(frame.pixels);
+        let mut offset = 0usize;
+        while offset + 4 <= raw.len() {
+            depths.push(f32::from_le_bytes(
+                raw[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| "short read")?,
+            ));
+            offset += 4;
+        }
+        let hits = depths
+            .iter()
+            .filter(|depth| **depth < UNSUPPORTED_HALF)
+            .count();
+        Ok(ReadBack {
+            bytes: raw.len(),
+            hits,
+            depths,
+            ms,
         })
     }
 
