@@ -44,6 +44,15 @@
 //! Neither vendor's durations are R1 budget evidence and none is quoted as any: a paravirtual adapter is the wrong
 //! instrument for a frame budget, not a slow one, and ADR-017 keeps this file asserting integers and printing ms.
 //! x86-64 Linux and Windows print `SKIP r1_march_alone: no device (NoAdapter)`, because no CI runner is a GPU.
+//!
+//! `R1_GRID=WxH` moves the per-cap legs to another resolution while leaving the 64x48 anchor and every asserted
+//! integer where they are, because the frontier question — what grid and what step cap actually fit inside
+//! 16.67 ms — is answerable on the one machine that survives cap 64 (buildbox's GTX 1070) and answerable best
+//! with an instrument whose rows already agree with the docs. Unset, the file reproduces every 1080p row it has
+//! shipped. A non-default grid labels its own rows `NOT R1's grid`, since a frame that fits at 540p is not the
+//! claim the gate makes; and the grid must be at least as wide and tall as the 60x34 lattice, because the lattice
+//! maps its sample centres onto the image by integer scaling and a narrower grid would collapse several lattice
+//! columns onto the same pixel.
 
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
@@ -87,6 +96,24 @@ const R1_H: u32 = 1080;
 /// image, which is the mistake `r1_round_trip_split` records and corrects.
 const LATTICE_W: usize = 60;
 const LATTICE_H: usize = 34;
+
+/// `R1_GRID` names a `WxH` other than R1's own, so this one instrument can price the grid/step frontier on a
+/// machine that survives cap 64 (buildbox's GTX 1070) instead of requiring a second harness whose rows would not
+/// be comparable to these. The default is 1920x1080, so an unset environment reproduces every row docs/04
+/// already carries. A row taken at another grid says so on its own line, because "inside the budget" at 540p is
+/// not the claim R1 makes.
+fn r1_grid() -> (u32, u32) {
+    std::env::var("R1_GRID")
+        .ok()
+        .and_then(|text| {
+            let (w, h) = text.trim().split_once(['x', 'X'])?;
+            let w = w.trim().parse::<u32>().ok()?;
+            let h = h.trim().parse::<u32>().ok()?;
+            Some((w, h))
+        })
+        .filter(|(w, h)| *w > 0 && *h > 0 && *w >= LATTICE_W as u32 && *h >= LATTICE_H as u32)
+        .unwrap_or((R1_W, R1_H))
+}
 /// The no-surface sentinel `interp.wgsl` writes, shared with `render`'s miss.
 const MISS: f32 = 1.0e37;
 
@@ -185,7 +212,8 @@ fn bit_differences(a: &[f32], b: &[f32]) -> usize {
         .count()
 }
 
-/// One 1080p cap, measured as the two legs and the whole path, plus the lattice anchor.
+/// One cap at the grid `R1_GRID` names (R1's own 1920x1080 unless the environment says otherwise), measured as
+/// the two legs and the whole path, plus the lattice anchor.
 struct Cap {
     max_steps: u32,
     law_reported: u32,
@@ -227,7 +255,7 @@ fn main() {
 
     // ---- The anchor grid: is the split even the same frame? ---------------------------------------
     //
-    // 64x48, walked ray for ray against `render::march` first. Everything the 1080p rows claim rests on this:
+    // 64x48, walked ray for ray against `render::march` first. Everything the grid rows claim rests on this:
     // that dispatch-then-copy, in two calls instead of one, produces the same picture as the shipped path.
     let anchor_rays = rays(ANCHOR_W, ANCHOR_H, origin, HALF_HEIGHT);
     let mut frame = interpreter.begin_camera_frame(ANCHOR_W, ANCHOR_H);
@@ -329,7 +357,7 @@ fn main() {
     assert_eq!(
         bit_diffs, 0,
         "{bit_diffs} depths differ in their bits between dispatch-then-copy and the whole path, so the split \
-         measures a different frame than the shipped one and every 1080p row below is inadmissible"
+         measures a different frame than the shipped one and every grid row below is inadmissible"
     );
     assert_eq!(
         split.hits, whole.hits,
@@ -380,26 +408,43 @@ fn main() {
     // pathology `r1_round_trip_split` records, so the legs run under `catch_unwind` and only a payload naming a
     // lost device prints a skip. Anything else that unwinds exits 101 rather than hiding a failure behind a
     // friendly line.
+    let (r1_w, r1_h) = r1_grid();
+    // Every row from here down labels itself with the grid it was taken on, so a 720p line can never be read as
+    // R1's own claim. The default prints as `1080p`, which is the label docs/04 quotes.
+    let grid_label = if (r1_w, r1_h) == (R1_W, R1_H) {
+        "1080p".to_string()
+    } else {
+        format!("{r1_w}x{r1_h}")
+    };
+    println!(
+        "// grid         : {grid_label:<13} = {} pixels per frame{}",
+        r1_w as usize * r1_h as usize,
+        if grid_label == "1080p" {
+            ""
+        } else {
+            ", NOT R1's grid, so the rows below price the frontier, not the gate"
+        }
+    );
     let caps = [1u32, 8, MAX_STEPS];
     let leg = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
         let mut out = Vec::new();
         for &max_steps in &caps {
-            let mut big = interpreter.begin_camera_frame(R1_W, R1_H);
+            let mut big = interpreter.begin_camera_frame(r1_w, r1_h);
             interpreter.write_camera(
                 &mut big,
-                &camera(R1_W, R1_H, origin, HALF_HEIGHT, max_steps),
+                &camera(r1_w, r1_h, origin, HALF_HEIGHT, max_steps),
             );
             let big_bind = interpreter.bind_camera(&shape, &big);
 
             let march_ms = interpreter
                 .march_camera_frame_no_readback(&big_bind, &big)
-                .expect("1080p must march with no read-back");
+                .expect("the grid must march with no read-back");
             let read = interpreter
                 .read_camera_depths(&big)
-                .expect("1080p depths must come back");
+                .expect("the grid's depths must come back");
             let whole = interpreter
                 .march_camera_frame(&big_bind, &big)
-                .expect("1080p must march on the whole path");
+                .expect("the grid must march on the whole path");
             let bit_diffs = bit_differences(&read.depths, &whole.depths);
 
             // The lattice anchor, against `render::march` at this cap.
@@ -407,9 +452,9 @@ fn main() {
             let mut lattice_depths = Vec::with_capacity(LATTICE_W * LATTICE_H);
             for jy in 0..LATTICE_H {
                 for jx in 0..LATTICE_W {
-                    let px = (jx as u32 * R1_W) / LATTICE_W as u32;
-                    let py = (jy as u32 * R1_H) / LATTICE_H as u32;
-                    let ray = ray_at(px, py, R1_W, R1_H, origin, HALF_HEIGHT, max_steps);
+                    let px = (jx as u32 * r1_w) / LATTICE_W as u32;
+                    let py = (jy as u32 * r1_h) / LATTICE_H as u32;
+                    let ray = ray_at(px, py, r1_w, r1_h, origin, HALF_HEIGHT, max_steps);
                     match march(
                         &tree,
                         ROOT,
@@ -430,9 +475,9 @@ fn main() {
             let mut read_at_lattice = Vec::with_capacity(lattice_depths.len());
             for jy in 0..LATTICE_H {
                 for jx in 0..LATTICE_W {
-                    let px = (jx as u32 * R1_W) / LATTICE_W as u32;
-                    let py = (jy as u32 * R1_H) / LATTICE_H as u32;
-                    read_at_lattice.push(read.depths[py as usize * R1_W as usize + px as usize]);
+                    let px = (jx as u32 * r1_w) / LATTICE_W as u32;
+                    let py = (jy as u32 * r1_h) / LATTICE_H as u32;
+                    read_at_lattice.push(read.depths[py as usize * r1_w as usize + px as usize]);
                 }
             }
             let (lattice_diffs, lattice_worst, _) = compare(&lattice_depths, &read_at_lattice);
@@ -468,19 +513,15 @@ fn main() {
                 .or_else(|| payload.downcast_ref::<&str>().map(|held| held.to_string()))
                 .unwrap_or_else(|| "a panic with no message".to_string());
             if !(text.contains("device is lost") || text.contains("Validation")) {
-                println!("// 1080p        : UNEXPECTED PANIC, not a lost device, so it is a failure: {text}");
+                println!("// {grid_label:<13}: UNEXPECTED PANIC, not a lost device, so it is a failure: {text}");
                 std::process::exit(101);
             }
-            println!("// 1080p        : SKIPPED, the device was lost mid-leg: {text}");
+            println!("// {grid_label:<13}: SKIPPED, the device was lost mid-leg: {text}");
             println!("//                (this row is informational; the anchor rows above are the asserted ones)");
             return;
         }
     };
 
-    println!(
-        "// 1080p        : {R1_W}x{R1_H} = {} pixels per frame, one frame per leg",
-        R1_W as usize * R1_H as usize
-    );
     println!("//   cap | law | hits legs/whole | bit diffs | bytes back | lattice hits/diffs | worst    | ms march | ms read | ms whole | ms submit");
     for row in &rows {
         println!(
@@ -537,11 +578,11 @@ fn main() {
         );
         assert_eq!(
             row.read_bytes,
-            (R1_W as usize) * (R1_H as usize) * 4,
+            r1_w as usize * r1_h as usize * 4,
             "at cap {}, the copy moved {} bytes rather than the frame's {} depth bytes",
             row.max_steps,
             row.read_bytes,
-            R1_W as usize * R1_H as usize * 4
+            r1_w as usize * r1_h as usize * 4
         );
         assert_eq!(
             row.lattice_diffs, 0,
@@ -582,6 +623,6 @@ fn main() {
         "cap 64 found {sixty_four} against cap 8's {eight}, so the extra stepping changed no pixels and the \
          law the header carries is not the law the shader used"
     );
-    println!("// cap shape    : cap 1 finds {one}, cap 8 finds {eight}, cap {MAX_STEPS} finds {sixty_four} of {} pixels - a", R1_W as usize * R1_H as usize);
+    println!("// cap shape    : cap 1 finds {one}, cap 8 finds {eight}, cap {MAX_STEPS} finds {sixty_four} of {} pixels - a", r1_w as usize * r1_h as usize);
     println!("//              header the shader reads, and step work is still buying pixels at this grid.");
 }
