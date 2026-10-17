@@ -279,7 +279,14 @@ the unclamped bound is free once no blend is in the tree), **2,204** on both sid
 both for a single sphere — the falsification, since a step counter cannot read zero there — and **0** on the device
 against **2,172** avoided on the CPU for a smooth union, which is OQ-54's refusal measured rather than asserted.
 Depths bit-identical to the untallied march on all four scenes, 0 hit/miss disagreements, worst deviation 0.000000.
-R1's 16.67 ms is still untouched by a lever that changes how many nodes a step evaluates. The device's tally now
+R1's 16.67 ms is still untouched, and the lever is now **measured rather than argued**: priced against an
+`upload_bounds_refused` control — the same tree with every bound radius `+inf`, so the arm can only answer no, with the
+two marches' depths asserted bit-identical on all 30 repeats and the control's own tally asserted at **0** against the
+armed shape's **3,422** — the armed march is **3.635 ms against 3.654** on the union and **2.134 against 2.112** on the
+far pair, while the smooth union, where the arm never fires and both numbers are the same walk, spreads **0.044 ms of
+3.776 ms (≈1.2%)**. **At this grid the arm's saving is inside its own noise floor**, which is the second time an
+asymptotically-obvious GPU saving has failed to appear as a number here; the milliseconds are informational and never a
+gate (ADR-017). The device's tally now
 runs over the demo scene's own rays too: **22,237** refusals on **2,640** of 3,072 rays against the CPU layer's
 **42,240** avoided — a little over half, and the gap is the smooth unions OQ-54 keeps on the CPU plus the clamped
 bounds the device refuses. Both examples are CI steps, so the upper-bound wording is superseded on trunk as well as
