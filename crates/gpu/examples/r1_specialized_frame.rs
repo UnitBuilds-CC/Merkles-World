@@ -495,7 +495,7 @@ fn main() {
         let shipped = frame(32, cap);
         let specialized = frame(demo_depth, cap);
         println!(
-            "// cap {cap:>3}      : shipped {shipped:.3} ms vs capacity {demo_depth} {specialized:.3} ms - {}% of \
+            "// cap {cap:>3}      : shipped {shipped:.3} ms vs capacity {demo_depth} {specialized:.3} ms - {:.1}% of \
              the frame, {specialized:.2} ms = {:.2} x budget",
             100.0 * (1.0 - specialized / shipped),
             specialized / BUDGET_MS

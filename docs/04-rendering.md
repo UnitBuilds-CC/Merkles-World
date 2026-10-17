@@ -2015,3 +2015,56 @@ capacity 2 and +270.19% at 64, with its twin agreeing to −0.44% / −0.06%. So
 walk, superlinearly — travels to a second vendor; the magnitudes do not, and only the 1070 is the instrument R1 names
 (ADR-017). What this section is **not**: not a cull (the same 96.1% of the grid finds nothing at every capacity), not
 a shipped change to the interpreter, and not R1's gate row.
+## The derived capacity makes R1's 1080p frame a measured interval, not arithmetic (2026-10-18, `cargo run --release -p gpu --example r1_specialized_frame`, buildbox)
+
+The section above ended with the honest caveat that its inside-budget ~11.2 ms frame was **derived from two legs
+timed minutes apart rather than measured as a frame**. That caveat is now discharged:
+`Interpreter::march_camera_variant` dispatches, copies and maps the depths inside one `Instant`, so every row below
+is the interval a caller actually waits on, which is the thing gate R1 spends. The capacity is not typed into the
+file either - `render::tree_depth` counts the frames the walk pushes for the tree being marched, and that count is
+what the measurement module is compiled with.
+
+`NVIDIA GeForce GTX 1070 [Vulkan, DiscreteGpu]`, R1's own 1920x1080 (2,073,600 pixels), medians of 7 paired
+order-alternating rounds per cell, `*` = the shipped capacity:
+
+| capacity | step cap | surfaces | bit-differing depths vs capacity 32 | ms, one interval | spread | x 16.67 ms |
+|---|---|---|---|---|---|---|
+| 32* | 1 | 0 | 0 | 12.992 | 3.722 | 0.78 |
+| 2 | 1 | 0 | 0 | 3.979 | 2.693 | 0.24 |
+| 32* | 8 | 65,148 | 0 | 71.180 | 3.407 | 4.27 |
+| 2 | 8 | 65,148 | 0 | 6.611 | 3.767 | 0.40 |
+| 32* | 64 | 80,964 | 0 | 91.871 | 3.546 | **5.51** |
+| 2 | 64 | 80,964 | 0 | **7.651** | 3.794 | **0.46** |
+
+The asserted terms are integers: `tree_depth` returns 2 for the demo's `union(sphere, rounded_box)` and 3 for the
+built-to-be-wrong-about nested fixture, so the derivation rule has something to fail against in both directions; at
+capacity == depth the anchor grid reproduces the shipped pipeline's depths with **0** differing bits over 3,072
+pixels, 132 surfaces, and 0 hit/miss disagreements against `render::march`; at capacity == depth - 1 both scenes
+return **0** surfaces; and at 1080p the two arms agree on every hit count (0 / 65,148 / 80,964) with 0 bit-differing
+depths, which is what makes the two columns one picture at two capacities rather than two pictures.
+
+Four readings, in the order the numbers support them:
+
+1. **R1's 5.5x is closed on the instrument, as one measured frame.** The shipped row reproduces the baseline it came
+   from - 91.871 ms against the 91.15-91.35 ms `r1_march_alone` and `r1_walk_cost_ladder` carry, and the same 5.51x -
+   and the derived-capacity row on the same frame, same grid, same sequence, is 7.651 ms, **0.46x budget**. The
+   saving is 91.67% at cap 64 and 90.71% at cap 8, so it is not a one-cap artifact.
+2. **What is not met is the product's row, not the instrument's.** The shipped binary still compiles `interp.wgsl`
+   with `const DEPTH = 32u`, and nothing on the boot path renders a frame to a window yet. The gate becomes the
+   binary's own when the interpreter module is compiled from the loaded asset's declared depth - `assetc` already
+   computes `cost.depth` and refuses an asset above its `max_depth` budget, so the number exists in the envelope the
+   boot reads - and when that frame reaches a display. Both are open work, so **R1 stays unmet** and the 7.651 ms row
+   above belongs to this instrument.
+3. **The cap-1 row is the read-back's floor and it did not move with the capacity's 15x.** 12.992 ms shipped against
+   3.979 ms at capacity 2 for a march of one step per ray: the 8,294,400-byte copy-back is inside both numbers, and
+   what changed between them is the allocation, not the work. That is the same ordering `r1_march_alone` measured at
+   caps 8 and 64, now with the copy on the inside of the interval instead of added to it.
+4. **Durations gate nothing here** (ADR-017). The example asserts capacities, hit counts, surface counts and bit
+   patterns; the ms columns and the budget ratios are printed, and R1's row is the one a named device's own frame
+   time will have to answer for.
+
+The method is the paired, order-alternating statistic that the ladder's fixed-order run forced on this repo: the two
+arms differ only in which compiled module the same dispatch list uses, so a 1070's clock ramp lands inside both arms
+instead of inside whichever ran first. The falsifier for the timing claim is the `32*` row itself - it is the shipped
+pipeline recompiled and re-timed in the same sequence as its own control, and it agrees with the baseline's number to
+within 0.8%.
