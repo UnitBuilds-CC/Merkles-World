@@ -412,11 +412,28 @@ The disagreement arm would still have caught the plant, which is exactly why the
 what the reference sees on its own — a check that can only fire in one direction is a check on half the bug
 space.
 
-The consequence for the roadmap queue: **R1's named lever (cull rays, bound hierarchy, fewer rays) attacks the
-term that has stopped costing, and the term that has not is the per-frame host round trip.** AS4's clause — no
-per-frame allocation, one upload — is the same conclusion from the allocation side, and docs/11's R1 row now
-carries this split instead of only the 824 ms. Neither is asserted as a duration (ADR-017): what the binary
-asserts is the seven per-cap hit counts and the seven per-cap depth deviations.
+The consequence for the roadmap queue, **inverted by the two sections further down** (2026-10-17): what this
+paragraph concluded — that R1's named lever (cull rays, bound hierarchy, fewer rays) attacks *the term that has
+stopped costing*, and that the term which has not is the per-frame host round trip — is the hypothesis those
+instruments retired. `r1_device_rays` draws the identical frame from a 112-byte camera block at an unresolvable
+difference, and `r1_march_alone` prices the depth copy at 0.7–1.4% of an MX250 1080p frame with the marching leg
+holding the rest. So a device-side bound hierarchy attacks the **dominant** term after all, and AS4's clause — no
+per-frame allocation, one upload — stands as its own achievement rather than as evidence about the frame budget;
+docs/11's R1 row now carries the split instead of only the 824 ms. All of it is printed, never asserted (ADR-017):
+what the examples assert are hit counts, bit-differing-depth totals, byte totals and the cap shape.
+
+**What the bound-hierarchy lever would actually take**, written down so the next session does not rediscover it:
+`interp.wgsl`'s `march_one` (line 354) has **no skip arm** — every step calls `eval_from(root, p)` and walks the
+whole tree — while the CPU reference prunes through `render::cull`'s `SceneBounds` (line 238, `may_reach_subtree` at
+line 346), whose enclosure table the host derives per scene and whose `respects[node]` gate is where a node the law
+cannot vouch for simply never gets skipped — the same discipline ADR-024 and OQ-54 settled for smooth unions.
+Porting that law means putting a table on the device, and `interp.wgsl`'s own comment gives the reason `march_rays`
+re-reads `queries` instead of adding one: four storage buffers per stage is `Limits::downlevel_defaults()`' ceiling
+and the file is already at it. The camera path shows a `uniform` binding is still available, but a per-node table
+there fights both the 16-byte `vec3` alignment and the minimum uniform-block size, so the first design question is
+where the enclosures live rather than how to write the test — and OQ-57's interval-bounds option is that same
+question from the multi-region side. It is the one remaining lever aimed at the dominant term, which is why it sits
+ahead of any further scheduling trick in the queue.
 
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
