@@ -38,11 +38,14 @@ assetc = { path = "../assetc" }
 # off, the crate the advisory is filed against is absent from the lockfile rather than ignored in
 # `deny.toml`.
 #
-# What that costs, stated rather than discovered: on a Linux runner winit then has no backend to open a window
-# with, so `demo_window` prints its own `SKIP demo_window: no window (…)` line instead of drawing. CI has no
-# display and the buildbox is headless, so no frame that runs today is lost; the Windows and macOS backends
-# are not feature-gated, which is what the laptop's 640x360 run exercises.
-winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+# What that costs, stated rather than discovered: with the defaults off there is no Linux window backend,
+# and winit does not degrade at runtime - its library fails to build at all, from a `compile_error!("The
+# platform you're compiling for is not supported by winit")` in its own `lib.rs`. That is a *build* break on
+# the x86-64 Linux gate, not the `SKIP demo_window: no window (…)` line the example prints when a display is
+# missing. So `x11` is on: it is the one Linux backend that reaches the lockfile without the font stack the
+# advisory is filed against. Windows and macOS backends are not feature-gated, which is what the laptop's
+# 640x360 run exercises.
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11"] }
 
 [lints]
 workspace = true

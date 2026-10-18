@@ -370,12 +370,14 @@ impl ApplicationHandler for Demo {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0 {
-                    let surface = self.surface.take().expect("a window has a surface");
-                    self.resize(&surface, size.width, size.height);
-                    self.surface = Some(surface);
-                }
+            // The guard is the condition rather than an `if` inside the arm: clippy's `collapsible_match`
+            // (Rust 1.99, the CI toolchain) refuses a bare `if` whose whole body is the arm. A zero-sized
+            // resize - what a minimised window reports - falls through to the wildcard and leaves the canvas
+            // at its last real size, which is the same thing the nested `if` did.
+            WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+                let surface = self.surface.take().expect("a window has a surface");
+                self.resize(&surface, size.width, size.height);
+                self.surface = Some(surface);
             }
             _ => {}
         }

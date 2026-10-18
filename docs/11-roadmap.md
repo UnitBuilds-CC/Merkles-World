@@ -393,7 +393,12 @@ that reaches a screen (OQ-51). `winit` arrives with `default-features = false`, 
 than a size preference: its defaults pull the Wayland CSD stack down to `ttf-parser`, which carries
 RUSTSEC-2026-0192 (unmaintained by its own author, **no safe upgrade available**) and failed `cargo-deny` the day
 this dependency landed — so the crate the advisory is filed against is absent from the lockfile instead of ignored
-in `deny.toml`, at the cost of a window on a Linux runner with a display, which no runner here has. R2 left that list when its ten-minute span ran over the device path and became a CI row,
+in `deny.toml`. The price of that read turned out to be bigger than the sentence first claimed: with the defaults
+off and only `rwh_06` on, `winit` has no Linux backend, and it does not fail at runtime — its library refuses to
+compile, from a `compile_error!("The platform you're compiling for is not supported by winit")` that broke the
+x86-64 Linux gate's lint step (run `39114088900`). So `x11` is enabled: the one Linux backend that arrives without
+the font stack the advisory is filed against (58 added lockfile lines, `ttf-parser`/`sctk`/`ab_glyph` still at zero
+occurrences, the whole crate type-checked for `x86_64-unknown-linux-musl`). R2 left that list when its ten-minute span ran over the device path and became a CI row,
 so the gate named here is no longer a claim about work that has not been measured; **no BVH build**, because the enclosures are derived per node from the emitted tree and
 the spatial-index question belongs to `assetc`'s union emission (task 27, ADR-024); **no frame that meets
 R1**, since the nine whole-frame rows on the MX250 - the only admissible instrument here - sit between 90.66
