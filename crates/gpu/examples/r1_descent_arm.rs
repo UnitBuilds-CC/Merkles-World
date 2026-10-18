@@ -8,7 +8,6 @@
 //!
 //! Durations assert nothing (ADR-017); integers are asserted.
 
-use assetc;
 use gpu::device::{GpuCamera, Interpreter};
 use render::{march, Tree, Vec3, ROOT};
 
