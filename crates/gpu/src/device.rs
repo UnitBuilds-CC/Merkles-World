@@ -716,6 +716,24 @@ impl Interpreter {
         self.shape_from(nodes, pool, tree.nodes.len())
     }
 
+    /// The same resident shape with every bound **smaller by `delta` world units**, which is the falsifier a
+    /// ray-level arm needs: `r1_cull_price` counts 1,104 rays that a bare radius refuses where a bound grown by
+    /// the march's own tolerance must march them, and 921,232 more once every enclosure lies by a full unit. An
+    /// arm that cannot lose surfaces when its bounds lie is not reading the bounds, so the count of lost
+    /// surfaces is the assertion that makes the identical-count row above mean something.
+    ///
+    /// Only the radius moves. The node records, the pool layout and the four-words-per-node tail stay
+    /// byte-identical to `upload`'s, and an unlicensed row (`+inf`) is unaffected by the subtraction, so the
+    /// rows the CPU refuses to license still answer "reachable" here.
+    pub fn upload_bounds_shrunk(&self, tree: &Tree, delta: f32) -> Shape {
+        let nodes = node_bytes(tree);
+        let mut pool = bytes_of_f32(&tree.params);
+        for row in render::cull::scene_bounds(tree).encoded() {
+            pool.extend_from_slice(&vec4_bytes([row[0], row[1], row[2], row[3] - delta]));
+        }
+        self.shape_from(nodes, pool, tree.nodes.len())
+    }
+
     /// Create the two storage buffers from already-encoded bytes. `.len()` fields are read before the buffers
     /// move, so the capacities a later `upload_into` checks against are this shape's own.
     fn shape_from(&self, nodes: Vec<u8>, pool: Vec<u8>, node_count: usize) -> Shape {
@@ -1255,6 +1273,44 @@ impl Interpreter {
                 cache: None,
             });
         Ok(CameraVariant { depth, pipeline })
+    }
+
+    /// Compile the shipped interpreter with its entry point moved to the ray-culled camera march, for task #69's
+    /// arm. Nothing else in the module changes - same `const DEPTH`, same `march_one`, same pool tail the
+    /// bound-skip arm already reads - so the two pipelines are one grid apart in a name, which is what lets an
+    /// example compare their depths bit for bit and call the difference the arm's.
+    ///
+    /// Refuses rather than handing back the shipped pipeline: a module whose culled entry point has been renamed
+    /// or deleted would otherwise measure an unculled frame and report it as the armed one, the same failure the
+    /// `DEPTH_LINE` check above exists to make impossible.
+    pub fn camera_cull_variant(&self) -> Result<CameraVariant, String> {
+        const ENTRY: &str = "fn march_rays_from_camera_culled(";
+        let shipped = crate::naga_validate::INTERP;
+        if shipped.matches(ENTRY).count() != 1 {
+            return Err(format!(
+                "interp.wgsl's culled camera entry point `{ENTRY}` is not found exactly once, so the arm has no pipeline to name - a row measured here would be the unculled frame wearing the cull's label"
+            ));
+        }
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("interp-culled-camera"),
+                source: wgpu::ShaderSource::Wgsl(shipped.into()),
+            });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: None,
+                layout: None,
+                module: &module,
+                entry_point: Some("march_rays_from_camera_culled"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        Ok(CameraVariant {
+            depth: STACK_DEPTH,
+            pipeline,
+        })
     }
 
     /// March a device-generated frame: one dispatch of width x height rays, then the depths back. The law

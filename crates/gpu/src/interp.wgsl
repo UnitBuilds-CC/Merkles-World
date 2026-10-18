@@ -549,3 +549,130 @@ fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
     let direction = select(span / vec3(length), vec3(0.0, 0.0, 0.0), length == 0.0);
     march_one(index, cam.root, cam.origin, direction, cam.geom.z);
 }
+
+// Task #69's ray-level cull: the device's own copy of `render::cull::SceneBounds::may_reach_subtree`, asked
+// of a ray before the march starts. Why this is the arm and the root sphere is not: `examples/r1_cull_price.rs`
+// measured the boot's own scene bound as a sphere of radius 10.786 against a frustum that spans 2.0 half-units
+// 4 units out, so the one-test version refuses **0 of 2,073,600 rays** on R1's grid while the descent refuses
+// 851,956. A bound that admits every ray is not a cull, it is a cost.
+//
+// Three things make the transcription sound rather than merely plausible, and all three are the CPU's own law:
+//
+// * The row is read **unclamped and unmodified**, and the comparison is `<= radius + margin`. An unlicensed
+//   node's row spells its radius as `+inf` (see `second_child_may_skip`), and `length(...) <= inf` is true, so
+//   an unlicensed node is *reachable* - the refusal direction is the safe one, exactly as the CPU's `respects`
+//   bit makes `may_reach_subtree` answer `true`.
+// * `margin` is the march's own `surface` tolerance, which is the fix `cull.rs` had to learn twice: a ray that
+//   passes within `surface` of a sphere but outside it is a hit as far as the marcher is concerned. Refusing it
+//   deletes a pixel. `r1_cull_price` counts that mistake at 1,104 rays on R1's grid.
+// * A `SUBTRACT` or `INTERSECT` asks only its **first** child, because its field is a `max` that contains the
+//   first operand's distance, and a `UNION` asks both because its field is a `min`. Any other shape - a unary
+//   transform, a kind with no granted rule, an open list that has run out of room - answers reachable.
+fn cull_row(node: u32) -> vec4<f32> {
+    let rows = arrayLength(&nodes);
+    let words = arrayLength(&pool);
+    // A pool shorter than four words per node carries no table at all, and the answer to that is the neutral
+    // one: an infinite radius, which every reachability test below reads as "may reach".
+    if words < 4u * rows {
+        return vec4<f32>(0.0, 0.0, 0.0, UNSUPPORTED);
+    }
+    let base = words - 4u * rows + 4u * node;
+    return vec4<f32>(pool[base], pool[base + 1u], pool[base + 2u], pool[base + 3u]);
+}
+
+fn node_may_reach(node: u32, origin: vec3<f32>, dir: vec3<f32>, max_t: f32, margin: f32) -> bool {
+    let row = cull_row(node);
+    let to_centre = row.xyz - origin;
+    let along = dot(to_centre, dir);
+    let t = clamp(along, 0.0, max_t);
+    return length(origin + dir * t - row.xyz) <= row.w + margin;
+}
+
+/// Whether `dir` from `origin`, within `max_t`, can still reach any surface of the subtree at `root`.
+/// `OPEN` is the width of the pending list: a tree can have at most one unasked sibling per level, so a
+/// list this deep cannot be exhausted by a tree the interpreter's own stack can hold - and if it ever is,
+/// the answer is "reachable", which costs a march and cannot cost a pixel.
+const OPEN: u32 = 8u;
+
+fn ray_reaches_scene(root: u32, origin: vec3<f32>, dir: vec3<f32>, max_t: f32, margin: f32) -> bool {
+    var open: array<u32, OPEN>;
+    var sp: u32 = 1u;
+    open[0] = root;
+    var result: bool = false;
+
+    loop {
+        if sp == 0u {
+            break;
+        }
+        sp = sp - 1u;
+        let node = open[sp];
+        if !node_may_reach(node, origin, dir, max_t, margin) {
+            continue;
+        }
+        let record = nodes[node];
+        let arity = arity_of(record);
+        if arity == 0u {
+            // A reachable leaf is a reachable scene: this is where the arm spends its whole keep, and it is
+            // the honest answer - the leaf's own distance still has to be marched.
+            result = true;
+            break;
+        }
+        if arity != 2u {
+            result = true;
+            break;
+        }
+        let kind = kind_of(record);
+        if kind == NODE_UNION {
+            if sp + 2u >= OPEN {
+                result = true;
+                break;
+            }
+            let first = first_child(node);
+            open[sp] = first;
+            open[sp + 1u] = second_child(node);
+            sp = sp + 2u;
+            continue;
+        }
+        if kind == NODE_SUBTRACT || kind == NODE_INTERSECT {
+            if sp + 1u >= OPEN {
+                result = true;
+                break;
+            }
+            open[sp] = first_child(node);
+            sp = sp + 1u;
+            continue;
+        }
+        result = true;
+        break;
+    }
+    return result;
+}
+
+/// The camera frame, culled per ray. `march_rays_from_camera` above is unchanged and stays the control: two
+/// pipelines over one grid, one dispatch apart in the module's entry-point name, so the depths the two return
+/// are comparable bit for bit and the saving is a measurement rather than an argument.
+@compute @workgroup_size(64)
+fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= header.point_count {
+        return;
+    }
+    let width = u32(cam.grid.x);
+    let height = u32(cam.grid.y);
+    let px = index % width;
+    let py = index / width;
+    let u = (f32(px) + 0.5) / f32(width);
+    let v = (f32(py) + 0.5) / f32(height);
+    let ndc_x = (2.0 * u - 1.0) * cam.geom.x * cam.geom.y;
+    let ndc_y = (1.0 - 2.0 * v) * cam.geom.x;
+    let span = cam.forward + cam.right * ndc_x + cam.up * ndc_y;
+    let length = sqrt(span.x * span.x + span.y * span.y + span.z * span.z);
+    let direction = select(span / vec3(length), vec3(0.0, 0.0, 0.0), length == 0.0);
+    if !ray_reaches_scene(cam.root, cam.origin, direction, cam.geom.z, bitcast<f32>(header.march_surface_bits)) {
+        // The same sentinel `march_one` writes when it runs out of steps, because that is exactly what this
+        // ray would have done: the bound proved no point of the segment is within `surface` of the field.
+        distances[index] = UNSUPPORTED;
+        return;
+    }
+    march_one(index, cam.root, cam.origin, direction, cam.geom.z);
+}
