@@ -2068,3 +2068,54 @@ arms differ only in which compiled module the same dispatch list uses, so a 1070
 instead of inside whichever ran first. The falsifier for the timing claim is the `32*` row itself - it is the shipped
 pipeline recompiled and re-timed in the same sequence as its own control, and it agrees with the baseline's number to
 within 0.8%.
+
+### The same interval on the demo's own content: 9.76x shipped, 2.97x at the depth its asset declares (2026-10-18, `cargo run --release -p gpu --example r1_specialized_frame`, buildbox)
+
+The table above is not the pitch demo. It is `r1_march_alone`'s three-node fixture, kept because comparable rows
+across three files are worth something, and its depth is 2. The scene the demo shows is a RON file `assetc`
+compiles into 11 node records and 25 parameters and **declares at depth 4**, marched by the boot's own law: camera
+at `[0.0, 0.6, -4.0]` with a -0.1 y tilt, `max_t` 40, surface 1e-3, **96 steps**. That content is now timed in the
+same one-interval form, on the same adapter, in the same run - compiled by the shipped `Watch`, read back through
+the loader, validated by the validator the march requires.
+
+`NVIDIA GeForce GTX 1070 [Vulkan, DiscreteGpu]`, 1920x1080, medians of 7 paired order-alternating rounds, `*` = the
+shipped capacity 32:
+
+| content | capacity | step cap | surfaces | bit-differing depths | ms, one interval | x 16.67 ms |
+|---|---|---|---|---|---|---|
+| fixture, depth 2 | 32* | 64 | 80,964 | 0 | 91.688 | 5.50 |
+| fixture, depth 2 | 2 | 64 | 80,964 | 0 | 7.548 | 0.45 |
+| demo asset, depth 4 | 32* | 8 | 207,743 | 0 | 108.604 | 6.52 |
+| demo asset, depth 4 | 4 | 8 | 207,743 | 0 | 36.184 | 2.17 |
+| demo asset, depth 4 | 32* | 96 | 303,427 | 0 | 162.668 | **9.76** |
+| demo asset, depth 4 | 4 | 96 | 303,427 | 0 | **49.424** | **2.97** |
+
+The asserted integers, first: `assetc`'s declared depth for the boot's scene and `render::tree_depth`'s count of the
+same loaded records are the same number, 4, from two independent implementations - the compiler's walk over the
+grammar and the renderer's walk over the tree; at capacity 4 the 1080p depths agree with capacity 32's with **0**
+differing bit patterns and identical surface counts at both caps; and the 64x48 anchor on the demo content finds
+605 surfaces in the reference march, in the shipped pipeline and in the capacity-4 pipeline, with **0** hit/miss
+disagreements and worst depth deviation **0.000002**.
+
+Three readings, and the first one is a correction:
+
+1. **The 0.45x row above belongs to a depth-2 fixture, and quoting it at the demo's content was wrong.** The demo's
+   own scene at the boot's own law is **162.668 ms = 9.76x budget** at the shipped capacity, not 5.5x: the fixture
+   under-prices the real frame by 1.8x because it is shallower, smaller-footprinted and marched at 64 steps rather
+   than 96. Specializing to the declared depth takes it to **49.424 ms = 2.97x** - a 69.6% cut of the frame, the
+   same order as the fixture's 91.8%, and it leaves roughly 3x still to find. **R1 is unmet on the product's own
+   content by 2.97x, and that is the number the gate is about.**
+2. **The step budget is not the remaining lever, and this row measures why.** Dropping the demo's law from 96 steps
+   to 8 costs 95,684 of 303,427 surfaces - 31.5% of the picture disappears, and what disappears is the far field,
+   which is the part of a region-streamed world a player looks at. The frame at cap 8 is still 2.17x over budget
+   even then, so the trade buys nothing the gate needs. The remaining ~3x is the device-side enclosure/tile cull
+   over the 85.4% of R1's grid that finds no surface at all (303,427 surfaces in 2,073,600 pixels).
+3. **The specialization is still not the binary's.** Nothing on the boot path compiles the interpreter from the
+   depth in the envelope it already reads; `Interpreter::open` still uses `const DEPTH = 32u`. The capacity-4 column
+   is measured through the same substitution instrument as the ladder, so it is the library's and the instrument's
+   row rather than the shipped process's.
+
+Durations assert nothing (ADR-017); spreads here are 0.195-4.149 ms. This laptop's D3D12 backend reproduces the
+shape on a 320x240 and a 400x300 frontier grid (the demo content at its declared capacity is 24-25% of the shipped
+interval, and the shipped interval itself is 5.03x budget at 400x300), and no laptop magnitude is quoted as budget
+evidence.
