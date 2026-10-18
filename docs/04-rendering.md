@@ -847,6 +847,38 @@ the same 64×48 frame is marched (3 warm-up passes discarded, 21 timed), with P1
 asserted per frame inside the loop: the newest edit's surface must sit at `HEIGHT - 0.5`, and it does at every
 occupancy.
 
+### Hardware acceleration approaches explored (2026-10-18)
+
+**Coarse-to-fine hierarchical marching.** A CPU analysis (`cargo run --release -p gpu --example r1_coarse_to_fine`)
+measured what fraction of 1080p pixels could be skipped if we marched at 1/4 resolution first, then only refined
+fine pixels whose coarse block or neighbor had a hit. The boot scene showed **6.5x work reduction potential**:
+only 321,200 of 2,073,600 fine pixels would need full marching (15.5% vs 84.5% sky). Theoretical speedup:
+91.35 ms / 6.5 ≈ 14 ms, inside R1's budget. However, implementing this on GPU requires:
+
+- Two new WGSL entry points (`march_coarse_pass`, `march_fine_pass`)
+- Two additional storage buffers for coarse hit flags and fine skip flags
+- Exceeds wgpu's downlevel limit of 4 storage buffers per compute stage
+- Complex Rust API for managing intermediate buffers and multi-dispatch coordination
+
+The approach was prototyped but reverted because the buffer limit makes it infeasible without splitting into
+separate pipelines, which adds dispatch overhead that may erase the savings.
+
+**Other standard techniques already exhausted:**
+
+- **Bounding volume culling** (`ray_reaches_scene`): Already implemented, refuses 851,956 rays (41%) but still
+  leaves 85.4% sky pixels. A root sphere test proved worthless (refuses 0 rays on the boot scene's frustum).
+- **Adaptive sphere tracing**: Already optimal — `t += max(distance, surface)` takes large steps in empty space.
+- **Step cap reduction**: Doesn't help at 1080p; cap 8 → cap 64 adds 15,816 surfaces (24% more hits), so most
+  rays need those steps.
+- **Lower resolution + upscale**: Proven to work (640×360 at 10.42 ms, 0.62× budget) but violates R1's explicit
+  1080p requirement. Cost scales linearly with pixel count.
+
+**Conclusion:** None of the standard ray marching optimizations close R1's 5.5x gap without violating other
+constraints. The fundamental issue is that sphere tracing inherently requires many SDF evaluations per ray, and
+at 1080p with 2M pixels, even optimized marching costs ~91 ms on a GTX 1070. Meeting R1 at 1080p would require
+either a fundamentally different rendering algorithm (e.g., rasterization instead of ray marching) or accepting
+that the gate's duration target cannot be met on this hardware class.
+
 **What is asserted is a count, not a duration.** Doc 03's claim is that a frame walks a region's compiled
 shape rather than scanning what the player edited, so the charged work per frame must be the same at 6,000
 records as at 1 — and `Stats::evaluations` says exactly that: **18,284 evaluations per frame at every
