@@ -385,7 +385,10 @@ therefore keeps Phase 1's exit open on **performance**, not on **presence**: the
 (`crates/gpu/examples/demo_window.rs` — a 640×360 window, the demo asset compiled by `assetc` and read back off
 disk, the march's depth buffer sampled in place by the fragment stage, 60 frames presented and the last one
 checked ray-for-ray against `render::march`), so R5's "viewable" half has a picture and R1's "visible" half has a
-frame path over which no depth byte crosses the bus; what stays open is a frame that *meets* 16.67 ms, not a frame
+frame path over which no depth byte crosses the bus — and the same day that frame stopped being marched by the
+shipped `const DEPTH = 32u` module: the window shows a frame from an interpreter compiled at **the depth the
+loaded asset declares** (`DEPTH 4` here), which the 32-deep pipeline agrees with bit for bit on all 230,400 rays;
+what stays open is a frame that *meets* 16.67 ms, not a frame
 that reaches a screen (OQ-51). `winit` arrives with `default-features = false`, and that is a security read rather
 than a size preference: its defaults pull the Wayland CSD stack down to `ttf-parser`, which carries
 RUSTSEC-2026-0192 (unmaintained by its own author, **no safe upgrade available**) and failed `cargo-deny` the day

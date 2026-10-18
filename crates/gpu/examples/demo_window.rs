@@ -162,6 +162,9 @@ struct Demo {
     interpreter: Interpreter,
     tree: Tree,
     shape: Shape,
+    /// The interpreter compiled at the depth this asset declares, which is the module the window shows a
+    /// frame from. `Interpreter::open` still compiles `const DEPTH = 32u` for every other path.
+    variant: gpu::device::CameraVariant,
     window: Option<Arc<Window>>,
     surface: Option<wgpu::Surface<'static>>,
     canvas: Option<Canvas>,
@@ -184,7 +187,9 @@ impl Demo {
         let mut frame = self.interpreter.begin_camera_frame(width, height);
         self.interpreter
             .write_camera(&mut frame, &camera(width, height));
-        let bind = self.interpreter.bind_camera(&self.shape, &frame);
+        let bind = self
+            .interpreter
+            .bind_camera_variant(&self.variant, &self.shape, &frame);
         let present =
             self.interpreter
                 .begin_presentation(&frame, config.format, width, height, MAX_T);
@@ -209,7 +214,7 @@ impl Demo {
         // here rather than folded into the arm below, because a frame the device would not march belongs in the
         // log as *that* failure and not as a `drawn != wants` assertion three lines from the end.
         self.interpreter
-            .march_camera_frame_no_readback(&canvas.bind, &canvas.frame)
+            .march_camera_variant_no_readback(&self.variant, &canvas.bind, &canvas.frame)
             .expect("the device must march the frame the window is about to show");
         match surface.get_current_texture() {
             Ok(texture) => self.show(&canvas, texture, start),
@@ -274,6 +279,41 @@ impl Demo {
                 }
             }
         }
+        // The clause that has to survive moving off the shipped module: a smaller stack must not be a second
+        // renderer. The same frame, marched by `Interpreter::open`'s `const DEPTH = 32u` camera pipeline, has
+        // to hand back these depths word for word. `read` is already a host-side copy, so re-marching the
+        // frame's buffer below cannot disturb what the window actually showed.
+        let shipped_bind = self.interpreter.bind_camera(&self.shape, &canvas.frame);
+        let shipped = self
+            .interpreter
+            .march_camera_frame(&shipped_bind, &canvas.frame)
+            .expect("the shipped 32-deep module must march the frame the window showed");
+        let bit_differences = read
+            .depths
+            .iter()
+            .zip(shipped.depths.iter())
+            .filter(|(shown, other)| shown.to_bits() != other.to_bits())
+            .count();
+        assert_eq!(
+            bit_differences, 0,
+            "the interpreter at DEPTH {} and the shipped 32-deep module disagree on {bit_differences} of {} \
+             depths, so the smaller stack is a different renderer rather than the same walk with less state",
+            self.variant.depth,
+            read.depths.len(),
+        );
+        assert_eq!(
+            shipped.hits, read.hits,
+            "the shipped module found {} surfaces where the frame the window showed found {}",
+            shipped.hits, read.hits
+        );
+        println!(
+            "// one renderer     : the window showed a frame marched at DEPTH {}; the shipped \
+             const DEPTH = 32u module marches the same {} rays to {bit_differences} depths differing in any \
+             bit and the same {} surfaces",
+            self.variant.depth,
+            read.depths.len(),
+            read.hits,
+        );
         self.canvas = Some(canvas);
         self.hits = read.hits;
         self.deviation = worst;
@@ -383,6 +423,21 @@ fn main() {
         "// uploaded         : {} bytes resident, one allocation for the scene",
         shape.bytes
     );
+    // The window is marched by an interpreter whose stack capacity is the one this asset's own tree needs -
+    // `boot_scene` has already asserted `tree_depth` equals the boot's published depth, so the number below is
+    // derived from the bytes on disk and not typed in twice. The shipped module's `const DEPTH = 32u` stays
+    // what every other path compiles, and `verify` below proves the two are one renderer.
+    let depth = render::tree_depth(&tree);
+    let variant = match interpreter.camera_variant(depth) {
+        Ok(variant) => variant,
+        Err(reason) => {
+            panic!("the interpreter must compile at the declared depth {depth}: {reason}")
+        }
+    };
+    println!(
+        "// interpreter      : the frame is marched at DEPTH {depth}, the depth this asset declares, against \
+         the shipped module's const DEPTH = 32u"
+    );
 
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,
@@ -399,6 +454,7 @@ fn main() {
         interpreter,
         tree,
         shape,
+        variant,
         window: None,
         surface: None,
         canvas: None,

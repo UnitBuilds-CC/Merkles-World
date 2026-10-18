@@ -2049,15 +2049,17 @@ Four readings, in the order the numbers support them:
    from - 91.871 ms against the 91.15-91.35 ms `r1_march_alone` and `r1_walk_cost_ladder` carry, and the same 5.51x -
    and the derived-capacity row on the same frame, same grid, same sequence, is 7.651 ms, **0.46x budget**. The
    saving is 91.67% at cap 64 and 90.71% at cap 8, so it is not a one-cap artifact.
-2. **What is not met is the product's row, not the instrument's.** The shipped binary still compiles `interp.wgsl`
-   with `const DEPTH = 32u`. The window has arrived since (2026-10-18, `cargo run --release -p gpu --example
-   demo_window`, which prints its own `// displayed` and `// windowed frame` lines), but it is an *example's*
-   window drawing through that same 32-deep module at 433.681 ms
-   a frame on the MX250, and the boot stays headless by design, so the display half of P1's exit is now a real
-   window rather than a missing one while R1's number remains the instrument's. The gate becomes the
-   binary's own when the interpreter module is compiled from the loaded asset's declared depth - `assetc` already
-   computes `cost.depth` and refuses an asset above its `max_depth` budget, so the number exists in the envelope the
-   boot reads - and when that frame reaches a display. Both are open work, so **R1 stays unmet** and the 7.651 ms row
+2. **What is not met is the product's row, not the instrument's.** The window arrived 2026-10-18 (`cargo run
+   --release -p gpu --example demo_window`, which prints its own `// displayed` and `// windowed frame` lines), and
+   the same day it stopped drawing through the shipped module: the windowed frame is now marched by an interpreter
+   compiled at **the depth the loaded asset declares** - `DEPTH 4` for the boot's scene - and the shipped
+   `const DEPTH = 32u` pipeline is checked against it on the same 230,400 rays: **0 depths differing in any bit,
+   the same 33,769 surfaces**. On that one laptop and grid the two means are 433.681 ms (32-deep) and 181.524 ms
+   (declared depth), which is the walk-cost ladder's stack finding reproduced on a product path and *not* an R1
+   number - the MX250 is not the named device. What remains before the gate is the binary's own is R1's 1080p row
+   re-taken on buildbox's GTX 1070 through the declared-depth module; the `engine` boot stays headless by design
+   (`wgpu` in a `wasm32-wasip1` build would change the published 18 lines), so the specialised interpreter is
+   reached through `gpu`, not through the boot. **R1 stays unmet** and the 7.651 ms row
    above belongs to this instrument.
 3. **The cap-1 row is the read-back's floor and it did not move with the capacity's 15x.** 12.992 ms shipped against
    3.979 ms at capacity 2 for a march of one step per ray: the 8,294,400-byte copy-back is inside both numbers, and
