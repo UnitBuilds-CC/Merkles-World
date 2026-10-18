@@ -1380,6 +1380,15 @@ impl Interpreter {
             mapped_at_creation: false,
         });
         
+        // dirty_mask: 1 bit per pixel for delta rendering (u32 words, 32 pixels per word)
+        let dirty_words = (pixels + 31) / 32;
+        let dirty_mask_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temporal-dirty-mask"),
+            size: (dirty_words * 4) as u64, // 4 bytes per u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
         // Initialize all buffers to zero/invalid state
         let zero_bytes_pos = vec![0u8; pixels * 16];
         self.queue.write_buffer(&positions_buf, 0, &zero_bytes_pos);
@@ -1393,6 +1402,10 @@ impl Interpreter {
         let zero_bytes_meta = vec![0u8; pixels * 16];
         self.queue.write_buffer(&metadata_buf, 0, &zero_bytes_meta);
         
+        // Initialize dirty mask: all bits set (all pixels dirty on first frame)
+        let all_dirty: Vec<u8> = vec![0xFF; dirty_words * 4];
+        self.queue.write_buffer(&dirty_mask_buf, 0, &all_dirty);
+        
         // Create bind group 1 using the pipeline's auto-derived layout
         // This should work now that we've increased device limits to support 8 storage buffers
         let cache_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1403,6 +1416,7 @@ impl Interpreter {
                 entry(1, &depths_buf),
                 entry(2, &normals_buf),
                 entry(3, &metadata_buf),
+                entry(4, &dirty_mask_buf),
             ],
         });
         

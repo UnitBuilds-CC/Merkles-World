@@ -74,6 +74,10 @@ const UNSUPPORTED: f32 = 3.402823466e+38;
 @group(1) @binding(2) var<storage, read_write> cached_normals: array<vec3<f32>>;
 @group(1) @binding(3) var<storage, read_write> cached_metadata: array<vec4<u32>>; // [frame_id, entity_node, max_t_bits, flags]
 
+// Delta rendering: dirty mask tracks which pixels changed and need re-marching
+// 1 bit per pixel, packed as u32 words (32 pixels per word)
+@group(1) @binding(4) var<storage, read_write> dirty_mask: array<u32>;
+
 const DEPTH: u32 = 32u;
 
 struct Frame {
@@ -662,10 +666,24 @@ fn ray_reaches_scene(root: u32, origin: vec3<f32>, dir: vec3<f32>, max_t: f32, m
 
 /// The camera frame, culled per ray with temporal surface caching.
 /// Checks cached surface data before marching, reusing valid surfaces from previous frames.
+/// Delta rendering: only marches pixels marked as dirty in the dirty mask.
 @compute @workgroup_size(64)
 fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
     if index >= header.point_count {
+        return;
+    }
+    
+    // Delta rendering: skip pixels that haven't changed
+    let dirty_word_idx = index / 32u;
+    let dirty_bit = 1u << (index % 32u);
+    let is_dirty = (dirty_mask[dirty_word_idx] & dirty_bit) != 0u;
+    
+    if !is_dirty {
+        // Pixel unchanged - reuse cached depth directly, no marching needed
+        if index < arrayLength(&cached_depths) {
+            distances[index] = cached_depths[index];
+        }
         return;
     }
     
@@ -707,14 +725,17 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     
     if use_cache {
-        // Cache hit - reuse cached surface
+        // Cache hit - reuse cached surface and mark pixel as clean
         distances[index] = cached_t;
+        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit; // Clear dirty bit
         return;
     }
     
     // Cache miss or invalid - perform culling check
     if !ray_reaches_scene(cam.root, origin, direction, max_t, surface_tolerance) {
         distances[index] = UNSUPPORTED;
+        // Mark sky pixels as clean (they'll stay sky unless camera moves)
+        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit;
         return;
     }
     
@@ -739,8 +760,12 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
         // Store metadata: [frame_id, entity_node, max_t_bits, flags]
         let current_frame = header.stack_depth;
         cached_metadata[index] = vec4<u32>(current_frame, 0u, bitcast<u32>(max_t), 1u);
+        
+        // Mark pixel as clean after successful march
+        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit;
     } else if index < arrayLength(&cached_positions) {
         // Sky pixel - mark cache as invalid
         cached_metadata[index] = vec4<u32>(0u, 0u, 0u, 0u);
+        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit;
     }
 }
