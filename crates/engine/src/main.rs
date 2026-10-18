@@ -694,7 +694,8 @@ fn main() {
         slab.len(),
         slab.capacity()
     );
-    println!("// boot complete. Not met: a drawn scene, macro sim, compaction, mod loading, four devices.");
+    println!("// boot complete. Not met: macro sim, compaction, mod loading, four devices.");
+    println!("// rendered scene : CPU raster only (64x48 grid); the windowed path lives in crates/gpu/examples/demo_window.rs");
 }
 
 /// The engine's scene, arriving the way content will arrive: authored `Shape` -> `assetc::lower` ->
