@@ -209,3 +209,46 @@ fn the_full_screen_triangle_reaches_the_viewports_far_corner() {
          far corner undrawn: {body}"
     );
 }
+
+#[test]
+fn every_stack_push_is_bounded_before_the_store() {
+    // `eval_from` bounds the *read* of `stack[sp]` (`sp >= header.stack_depth || sp >= DEPTH`) and then, to
+    // descend, stores `stack[sp + 1]`. The read bound does not cover that store: at `sp == DEPTH - 1` the walk
+    // indexes one past `array<Frame, DEPTH>`, and WGSL leaves an out-of-bounds index undefined rather than
+    // diagnosing it, so the only defence is a bound checked before the write. docs/04 records the hazard.
+    //
+    // The guard is a count plus an adjacency test, because both halves fail on a real mistake: a third push
+    // site with no bound moves the count, and deleting one bound leaves a store whose nearest guard is the
+    // read's, 40 lines up.
+    let lines: Vec<&str> = INTERP.lines().collect();
+    let guard = "sp + 1u >= DEPTH || sp + 1u >= header.stack_depth";
+    let mut stores = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains("stack[sp] = Frame(") {
+            let before = lines[..=i]
+                .iter()
+                .rposition(|l| l.contains(guard))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "line {} stores a frame with no bound above it: {line}",
+                        i + 1
+                    )
+                });
+            assert!(
+                i - before <= 12,
+                "the nearest push bound is {} lines above the store on line {}, so this store is not the one \
+                 it guards: {line}",
+                i - before,
+                i + 1
+            );
+            stores.push(i);
+        }
+    }
+    assert_eq!(
+        stores.len(),
+        2,
+        "eval_from has exactly two push sites - the descent and the unwind's second child - and the count \
+         moved to {}, which means a stack store exists that this guard cannot see",
+        stores.len()
+    );
+}

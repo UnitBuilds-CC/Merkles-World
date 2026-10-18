@@ -327,6 +327,14 @@ fn eval_from(root: u32, origin: vec3<f32>) -> f32 {
                 }
                 stack[sp].stage = 1u;
                 let child = first_child(frame.node);
+                if sp + 1u >= DEPTH || sp + 1u >= header.stack_depth {
+                    // The guard above bounds the *read* of `stack[sp]`; this one bounds the write of
+                    // `stack[sp + 1]`. Out-of-bounds on a local array is undefined behaviour in WGSL, not an
+                    // error, so the only defence is the bound that is checked before the store - and the walk
+                    // can be asked to descend one frame deeper than the array by an envelope that under-declares
+                    // its own depth.
+                    return UNSUPPORTED;
+                }
                 sp = sp + 1u;
                 stack[sp] = Frame(child, 0u, map_point(kind_of(node), frame.p, node), 0.0);
                 continue;
@@ -358,6 +366,10 @@ fn eval_from(root: u32, origin: vec3<f32>) -> f32 {
                     }
                     stack[sp].left = value;
                     stack[sp].stage = 2u;
+                    if sp + 1u >= DEPTH || sp + 1u >= header.stack_depth {
+                        // The second-child push is the same store as the descent's, so it needs the same bound.
+                        return UNSUPPORTED;
+                    }
                     sp = sp + 1u;
                     stack[sp] = Frame(child, 0u, parent_frame.p, 0.0);
                     descending = true;

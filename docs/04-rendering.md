@@ -636,7 +636,7 @@ now bounds an out-of-range child as unbounded-and-unlicenced, and
 pins it on all three CI architectures (the example only reproduces it on a device runner, which is why the test
 exists). The test found its own boundary: walking that fixture with `sdf_eval_bnb` still panics, in
 `lower_bound`, and that is left as the correct behaviour — the contract that refuses malformed assets is
-`validate`, not the hot branch of a walk that is already invalid. Suite size is **206 tests in 31 suites**.
+`validate`, not the hot branch of a walk that is already invalid. Suite size is **207 tests in 31 suites**.
 
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
@@ -2003,12 +2003,18 @@ the host writes `stack_depth = 32`, so a 64-slot stack can never be used past 32
 construction (asserted, 0 bit diffs) and the +236% it pays is therefore pure allocation size, uncontaminated by any
 change in what the shader computes.
 
-One edge this instrument found and deliberately did not probe past the falsifier: `eval_from` checks `sp >= DEPTH`
-before *reading* a frame and then pushes the child at `sp + 1`, so a refusal writes one element past the array's end
-and relies on the backend's index handling to stay in memory. Every ladder capacity is at or above the depth this tree
-reaches, so no ladder row takes that path — only the 64x48 falsifier does, which is why the falsifier stays on 3,072
-pixels and never at R1's grid. `assetc`'s depth cap makes it unreachable in shipped assets, and it is recorded here
-rather than fixed, because the fix changes the module every other R1 row is priced against.
+One edge this instrument found, and which is now closed rather than recorded: `eval_from` checked `sp >= DEPTH`
+before *reading* a frame and then pushed the child at `sp + 1`, so the walk could write one element past the array's
+end and rely on the backend's index handling to stay in memory. Both push sites — the descent's and the unwind's
+second-child store — now bound `sp + 1` against `DEPTH` *and* against the asset's declared `stack_depth` before the
+store and return the same `UNSUPPORTED` sentinel the read bound uses. `wgsl_validates::every_stack_push_is_bounded_before_the_store`
+holds the rule without a device: it counts the two stores and requires a bound within twelve lines above each, and
+planting an unguarded second-child push makes it report the read bound 40 lines up. On this content nothing about the
+picture moved — 605 surfaces on the 64x48 anchor, 33,769 of 230,400 in the windowed frame, 0 depths differing in any
+bit against the CPU reference — because a walk that succeeds never touches the new arm. What has not been re-measured
+on the named GTX 1070 is the price of the extra comparison per descent step, so the R1 rows below remain attributed to
+the pre-guard module until `r1_specialized_frame` runs there again (ADR-017: a row belongs to the instrument that
+produced it).
 
 The laptop's rows (GeForce RTX 3050, 320x240, same binary) put the same ratio in a different range: −88.13% at
 capacity 2 and +270.19% at 64, with its twin agreeing to −0.44% / −0.06%. So the *shape* — stack capacity dominates a
