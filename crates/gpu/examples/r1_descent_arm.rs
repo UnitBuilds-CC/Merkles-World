@@ -421,7 +421,22 @@ fn main() {
     }));
 
     match outcome {
-        Ok(_) => {}
+        Ok(rows) => {
+            // Print the timing summary even on success
+            println!();
+            println!("// ---- 1080p timing summary ----------------------------------------------------------");
+            for &(cap, _sh_hits, _cu_hits, sh_ms, cu_ms) in &rows {
+                let label = if cap == PRODUCT_STEPS {
+                    "cap 96"
+                } else {
+                    "cap 8"
+                };
+                println!(
+                    "// {label:<8} : shipped {:.2} ms, culled {:.2} ms, ratio {:.3} x budget",
+                    sh_ms, cu_ms, cu_ms / BUDGET_MS
+                );
+            }
+        }
         Err(payload) => {
             let text = payload
                 .downcast_ref::<String>()
