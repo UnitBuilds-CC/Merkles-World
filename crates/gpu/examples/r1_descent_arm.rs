@@ -432,7 +432,9 @@ fn main() {
                 };
                 println!(
                     "// {label:<8} : shipped {:.2} ms, culled {:.2} ms, ratio {:.3} x budget",
-                    sh_ms, cu_ms, cu_ms / BUDGET_MS
+                    sh_ms,
+                    cu_ms,
+                    cu_ms / BUDGET_MS
                 );
             }
         }
