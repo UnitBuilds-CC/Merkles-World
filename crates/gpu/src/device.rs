@@ -1330,11 +1330,67 @@ impl Interpreter {
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
-        // Temporal cache disabled: wgpu validation errors on get_bind_group_layout(1) 
-        // cannot be caught and cause immediate termination. The culled pipeline should
-        // support bind group 1, but auto-derived layouts aren't exposing it properly.
-        // TODO: Fix by using explicit bind group layouts instead of layout:None
-        let cache_bind = None;
+        // Create temporal cache buffers for bind group 1
+        let pixels = frame.pixels;
+        let pixel_size = std::mem::size_of::<f32>();
+        
+        // cached_positions: vec3<f32> per pixel (12 bytes each, padded to 16)
+        let positions_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temporal-cache-positions"),
+            size: (pixels * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // cached_depths: f32 per pixel
+        let depths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temporal-cache-depths"),
+            size: (pixels * pixel_size) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // cached_normals: vec3<f32> per pixel (12 bytes each, padded to 16)
+        let normals_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temporal-cache-normals"),
+            size: (pixels * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // cached_metadata: vec4<u32> per pixel (16 bytes each)
+        let metadata_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temporal-cache-metadata"),
+            size: (pixels * 16) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
+        // Initialize all buffers to zero/invalid state
+        let zero_bytes_pos = vec![0u8; pixels * 16];
+        self.queue.write_buffer(&positions_buf, 0, &zero_bytes_pos);
+        
+        let zero_bytes_depth = vec![0u8; pixels * pixel_size];
+        self.queue.write_buffer(&depths_buf, 0, &zero_bytes_depth);
+        
+        let zero_bytes_norm = vec![0u8; pixels * 16];
+        self.queue.write_buffer(&normals_buf, 0, &zero_bytes_norm);
+        
+        let zero_bytes_meta = vec![0u8; pixels * 16];
+        self.queue.write_buffer(&metadata_buf, 0, &zero_bytes_meta);
+        
+        // Create bind group 1 using the pipeline's auto-derived layout
+        // This should work now that we've increased device limits to support 8 storage buffers
+        let cache_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("temporal-cache"),
+            layout: &pipeline.get_bind_group_layout(1),
+            entries: &[
+                entry(0, &positions_buf),
+                entry(1, &depths_buf),
+                entry(2, &normals_buf),
+                entry(3, &metadata_buf),
+            ],
+        });
         
         Bind {
             bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1348,7 +1404,7 @@ impl Interpreter {
                     entry(5, &frame.camera),
                 ],
             }),
-            cache_bind,
+            cache_bind: Some(cache_bind),
         }
     }
 
