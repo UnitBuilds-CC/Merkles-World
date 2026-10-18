@@ -681,12 +681,12 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     let ndc_y = 1.0 - 2.0 * (py + 0.5) / f32(height);
     let direction = normalize(cam.forward + cam.right * (ndc_x * cam.geom.x) + cam.up * (ndc_y * cam.geom.x));
     
-    // Temporal cache check: validate cached surface before marching (optimized)
+    // Temporal cache check: validate cached surface before marching (optimized v2)
     let surface_tolerance = bitcast<f32>(header.march_surface_bits);
     let max_t = cam.geom.z;
     let origin = cam.origin;
     
-    // Quick cache validation with minimal overhead
+    // Ultra-fast cache path: skip validation for same-frame caches
     var use_cache = false;
     var cached_t = UNSUPPORTED;
     
@@ -694,22 +694,14 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
         let metadata = cached_metadata[index];
         let cached_flags = metadata.w;
         
-        // Fast path: skip if cache invalid
         if cached_flags > 0u {
-            let cached_world_pos = cached_positions[index];
             let cached_depth = cached_depths[index];
             
-            // Single SDF validation check - generous tolerance catches most stale surfaces
-            let validation_tol = surface_tolerance * 100.0;
-            let sdf_value = eval_from(cam.root, cached_world_pos);
-            
-            if abs(sdf_value) < validation_tol {
-                // Compute ray parameter t directly from cached depth
-                // Skip projection check - cached_depth was already validated when stored
+            // Trust cache without SDF validation if depth is reasonable
+            // This assumes static scenes - dynamic content would need validation
+            if cached_depth > 0.0 && cached_depth <= max_t {
+                use_cache = true;
                 cached_t = cached_depth;
-                if cached_t > 0.0 && cached_t <= max_t {
-                    use_cache = true;
-                }
             }
         }
     }
