@@ -1326,7 +1326,7 @@ impl Interpreter {
 
     fn bind_camera_on(
         &self,
-        _pipeline: &wgpu::ComputePipeline,
+        pipeline: &wgpu::ComputePipeline,
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
