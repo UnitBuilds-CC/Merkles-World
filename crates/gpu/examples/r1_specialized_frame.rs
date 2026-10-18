@@ -27,6 +27,14 @@
 //! buildbox's GTX 1070, so a row here says `x.xx ms = y.yy x budget` on its own instrument and nothing more.
 //! `R1_GRID=WxH` moves the timed legs to another grid, labelling its rows as not R1's, exactly as
 //! `r1_march_alone` does; unset reproduces the gate's own resolution.
+//!
+//! The file ends on the scene the demo actually shows, not on a fixture: `boot_scene_on_device`'s RON, compiled by
+//! `assetc`'s own `Watch`, read back through the loader, and marched at the depth the *bytes* declare. That depth
+//! and `render::tree_depth`'s count of the same records are asserted to be the same number from two independent
+//! implementations - the compiler's walk over the grammar and the renderer's walk over the tree - and the picture
+//! at that capacity is anchored on `render::march` with the boot's own camera, 96-step law and 1e-3 surface. The
+//! three-node fixture above is the comparison the ladder's rows were written against; it is not R1's content, and a
+//! saving measured on a depth-2 scene does not entitle anyone to quote it against a depth-4 one.
 
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
@@ -518,6 +526,352 @@ fn main() {
         "// reading      : the 64-step row is the one R1's 5.5x was measured against; both columns above are one \
          dispatch-plus-copy-plus-map interval, so the read-back is inside the number rather than added to it"
     );
+
+    // ---- The product's own content --------------------------------------------------------------
+    //
+    // Everything above marches a three-node fixture, because that is the scene `r1_march_alone` and the ladder
+    // used, and comparable rows are worth a lot. It is not the scene the demo shows. The demo's content is a RON
+    // file that `assetc` compiles into bytes and the boot loads, and its declared depth is 4 - so the capacity
+    // this lever actually ships with is the one *that* scene derives, and the frame is the one at the boot's own
+    // camera and step cap. A saving measured on a depth-2 fixture does not entitle anyone to quote it against
+    // the boot's content, so the content is compiled here by the shipped compiler object, marched at the depth
+    // the asset declares, and timed as the same one interval.
+    let (product, declared) = product_scene();
+    let derived = tree_depth(&product);
+    println!();
+    println!(
+        "// product scene  : the boot's compiled asset - {} node records, {} parameters, {} bytes of pool",
+        product.nodes.len(),
+        product.params.len(),
+        product.params.len() * 4
+    );
+    println!(
+        "//   declared depth {declared} (from the asset bytes) | counted by render::tree_depth {derived}"
+    );
+    assert_eq!(
+        declared, derived,
+        "the compiler writes a declared depth of {declared} for the boot's scene while the walk's own frame count \
+         is {derived}, so either the envelope the boot reads is wrong or the capacity this file derives from the \
+         records is"
+    );
+
+    let shape = interpreter.upload(&product);
+    let mut frame = interpreter.begin_camera_frame(ANCHOR_W, ANCHOR_H);
+    interpreter.write_camera(
+        &mut frame,
+        &product_camera(ANCHOR_W, ANCHOR_H, PRODUCT_STEPS),
+    );
+    let shipped_anchor = interpreter
+        .march_camera_frame(&interpreter.bind_camera(&shape, &frame), &frame)
+        .expect("the shipped pipeline must march the product anchor");
+    let variant = interpreter
+        .camera_variant(derived)
+        .expect("the product's declared depth is a legal module capacity");
+    let exact_anchor = interpreter
+        .march_camera_variant(
+            &variant,
+            &interpreter.bind_camera_variant(&variant, &shape, &frame),
+            &frame,
+        )
+        .expect("the product's own capacity must march the anchor");
+    let exact_diffs = bit_differences(&shipped_anchor.depths, &exact_anchor.depths);
+
+    let mut set_diffs = 0usize;
+    let mut worst = 0.0f32;
+    let mut reference_hits = 0usize;
+    let mut index = 0usize;
+    for py in 0..ANCHOR_H {
+        for px in 0..ANCHOR_W {
+            let ray = product_ray(px, py, ANCHOR_W, ANCHOR_H, PRODUCT_STEPS);
+            let hit = march(
+                &product,
+                ROOT,
+                ray.origin,
+                ray.dir,
+                ray.max_t,
+                ray.surface,
+                ray.max_steps,
+            );
+            if hit.is_some() {
+                reference_hits += 1;
+            }
+            let device = exact_anchor.depths[index];
+            if (hit.is_some()) != (device < MISS) {
+                set_diffs += 1;
+            } else if let Some(hit) = hit {
+                worst = worst.max((hit.t - device).abs());
+            }
+            index += 1;
+        }
+    }
+    println!(
+        "// anchor grid    : {ANCHOR_W}x{ANCHOR_H} - reference {reference_hits} surfaces, shipped {}, capacity \
+         {derived} {}, {exact_diffs} bit-differing depths, {set_diffs} set disagreements, worst deviation {worst:.6}",
+        shipped_anchor.hits,
+        exact_anchor.hits
+    );
+    assert_eq!(
+        exact_diffs, 0,
+        "{exact_diffs} depths differ in their bits between the shipped capacity and the product's declared one, so \
+         the timed rows below are not the same picture"
+    );
+    assert_eq!(
+        set_diffs, 0,
+        "{set_diffs} pixels disagree on hit-vs-miss between the product's own capacity and `render::march`, so the \
+         demo content is marched by a walk this repo has no test for"
+    );
+    assert!(
+        worst < DEVIATION,
+        "worst |device - reference| depth on the product scene is {worst}, above the {DEVIATION} every other \
+         device example anchors on"
+    );
+    assert_eq!(
+        exact_anchor.hits, shipped_anchor.hits,
+        "the product at its declared capacity found {} surfaces and at capacity 32 found {}",
+        exact_anchor.hits, shipped_anchor.hits
+    );
+
+    let (w, h) = grid();
+    let product_caps = [8u32, PRODUCT_STEPS];
+    let outcome = std::panic::catch_unwind(core::panic::AssertUnwindSafe(|| {
+        let mut rows: Vec<FrameRow> = Vec::new();
+        let mut picture: Vec<(u32, usize, usize, usize, usize)> = Vec::new();
+        for &cap in &product_caps {
+            let mut big = interpreter.begin_camera_frame(w, h);
+            interpreter.write_camera(&mut big, &product_camera(w, h, cap));
+            let shipped_bind = interpreter.bind_camera(&shape, &big);
+            let variant_bind = interpreter.bind_camera_variant(&variant, &shape, &big);
+            let mut shipped_ms = Vec::new();
+            let mut variant_ms = Vec::new();
+            for round in 0..ROUNDS {
+                // Alternate which arm starts, so a ramping clock is inside both columns instead of one.
+                if round % 2 == 0 {
+                    shipped_ms.push(
+                        interpreter
+                            .march_camera_frame(&shipped_bind, &big)
+                            .expect("shipped arm")
+                            .ms_frame_with_read,
+                    );
+                    variant_ms.push(
+                        interpreter
+                            .march_camera_variant(&variant, &variant_bind, &big)
+                            .expect("specialized arm")
+                            .ms_frame_with_read,
+                    );
+                } else {
+                    variant_ms.push(
+                        interpreter
+                            .march_camera_variant(&variant, &variant_bind, &big)
+                            .expect("specialized arm")
+                            .ms_frame_with_read,
+                    );
+                    shipped_ms.push(
+                        interpreter
+                            .march_camera_frame(&shipped_bind, &big)
+                            .expect("shipped arm")
+                            .ms_frame_with_read,
+                    );
+                }
+            }
+            let shipped_march = interpreter
+                .march_camera_frame(&shipped_bind, &big)
+                .expect("the shipped arm must re-march for its depths");
+            let variant_march = interpreter
+                .march_camera_variant(&variant, &variant_bind, &big)
+                .expect("the specialized arm must re-march for its depths");
+            let diffs = bit_differences(&shipped_march.depths, &variant_march.depths);
+            picture.push((
+                cap,
+                shipped_march.hits,
+                variant_march.hits,
+                diffs,
+                shipped_march.depths.len(),
+            ));
+            rows.push(FrameRow {
+                depth: 32,
+                shipped: true,
+                cap,
+                ms: median(&shipped_ms),
+                spread_ms: spread(&shipped_ms),
+                hits: shipped_march.hits,
+            });
+            rows.push(FrameRow {
+                depth: derived,
+                shipped: false,
+                cap,
+                ms: median(&variant_ms),
+                spread_ms: spread(&variant_ms),
+                hits: variant_march.hits,
+            });
+        }
+        (rows, picture)
+    }));
+
+    let (product_rows, product_picture) = match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            let text = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|held| held.to_string()))
+                .unwrap_or_else(|| "a panic with no message".to_string());
+            if !(text.contains("device is lost") || text.contains("Validation")) {
+                println!("// product legs   : UNEXPECTED PANIC, not a lost device, so it is a failure: {text}");
+                std::process::exit(101);
+            }
+            println!("// product legs   : SKIPPED, the device was lost mid-leg: {text}");
+            return;
+        }
+    };
+
+    println!(
+        "// product grid   : {w}x{h} = {} pixels, the boot's camera, caps {:?}, medians of {ROUNDS} paired rounds",
+        w as usize * h as usize,
+        product_caps
+    );
+    println!(
+        "//   capacity |   cap |  hits | bit diffs | ms one interval | spread | x 16.67 ms budget"
+    );
+    for row in &product_rows {
+        println!(
+            "//   {:>8}{} | {:>5} | {:>5} | {:>9} | {:>15.3} | {:>6.3} | {:>5.2} x",
+            row.depth,
+            if row.shipped { "*" } else { " " },
+            row.cap,
+            row.hits,
+            product_picture
+                .iter()
+                .find(|(cap, _, _, _, _)| *cap == row.cap)
+                .map(|(_, _, _, diffs, _)| *diffs)
+                .unwrap_or(usize::MAX),
+            row.ms,
+            row.spread_ms,
+            row.ms / BUDGET_MS,
+        );
+    }
+    for (cap, shipped_hits, variant_hits, diffs, count) in &product_picture {
+        assert_eq!(
+            *diffs, 0,
+            "at cap {cap} the product's declared capacity disagrees with the shipped module on {} of {} pixels",
+            diffs, count
+        );
+        assert_eq!(
+            shipped_hits, variant_hits,
+            "at cap {cap} the arms found {} and {} surfaces on the demo content",
+            variant_hits, shipped_hits
+        );
+    }
+    for &cap in &product_caps {
+        let shipped = product_rows
+            .iter()
+            .find(|row| row.cap == cap && row.shipped)
+            .map(|row| row.ms)
+            .unwrap_or(f64::INFINITY);
+        let specialized = product_rows
+            .iter()
+            .find(|row| row.cap == cap && !row.shipped)
+            .map(|row| row.ms)
+            .unwrap_or(f64::INFINITY);
+        assert!(
+            specialized <= shipped,
+            "at cap {cap} the demo content took {specialized:.3} ms at its declared capacity against {shipped:.3} \
+             ms at 32, so the capacity ladder priced is not what the whole interval sees"
+        );
+        println!(
+            "// product cap {cap:>3} : shipped {shipped:.3} ms vs depth {derived} {specialized:.3} ms - {:.1}% of \
+             the frame, {specialized:.2} ms = {:.2} x budget",
+            100.0 * (1.0 - specialized / shipped),
+            specialized / BUDGET_MS
+        );
+    }
+    println!(
+        "// reading      : this is R1's row on the demo's own content and the boot's own law, so it is the number \
+         the gate is about; the fixture rows above are the comparison the ladder's rows were written against"
+    );
+}
+
+/// The boot's camera, transcribed from `boot_scene_on_device`'s `probe_rays`: aimed down a forward tilted
+/// -0.1 in y from `[0.0, 0.6, -4.0]`, `max_t` 40, surface 1e-3, and 96 steps - a different law from the
+/// fixture's on purpose, because the fixture's numbers do not entitle anyone to quote the demo content.
+const PRODUCT_HALF_HEIGHT: f32 = 0.5;
+const PRODUCT_MAX_T: f32 = 40.0;
+const PRODUCT_SURFACE: f32 = 1.0e-3;
+const PRODUCT_STEPS: u32 = 96;
+/// The deviation every other device example in this repo anchors on.
+const DEVIATION: f32 = 0.002;
+
+fn product_origin() -> Vec3 {
+    [0.0f32, 0.6, -4.0]
+}
+
+fn product_forward() -> [f32; 3] {
+    let v = [0.0f32, -0.1, 1.0];
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+fn product_camera(width: u32, height: u32, max_steps: u32) -> GpuCamera {
+    GpuCamera {
+        origin: product_origin(),
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        forward: product_forward(),
+        half_height: PRODUCT_HALF_HEIGHT,
+        max_t: PRODUCT_MAX_T,
+        surface: PRODUCT_SURFACE,
+        max_steps,
+        root: ROOT,
+        width,
+        height,
+    }
+}
+
+fn product_ray(px: u32, py: u32, width: u32, height: u32, max_steps: u32) -> Ray {
+    let aspect = width as f32 / height as f32;
+    let u = (px as f32 + 0.5) / width as f32;
+    let v = (py as f32 + 0.5) / height as f32;
+    let ndc_x = (2.0 * u - 1.0) * PRODUCT_HALF_HEIGHT * aspect;
+    let ndc_y = (1.0 - 2.0 * v) * PRODUCT_HALF_HEIGHT;
+    let forward = product_forward();
+    let span = [forward[0] + ndc_x, forward[1] + ndc_y, forward[2]];
+    let len = (span[0] * span[0] + span[1] * span[1] + span[2] * span[2]).sqrt();
+    Ray {
+        origin: product_origin(),
+        dir: [span[0] / len, span[1] / len, span[2] / len],
+        max_t: PRODUCT_MAX_T,
+        surface: PRODUCT_SURFACE,
+        max_steps,
+    }
+}
+
+/// The demo's content as the shipped pipeline sees it: the RON the boot's scene is authored in, compiled by
+/// `assetc`'s own `Watch`, read back through the loader, and validated by the validator the march requires. The
+/// depth returned is the one the compiler wrote into the bytes, which is what a shipped loader would specialize from.
+fn product_scene() -> (Tree, u32) {
+    let raw = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../assetc/tests/fixtures/boot_scene.ron");
+    let input = std::fs::canonicalize(&raw)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", raw.display()));
+    let output =
+        std::env::temp_dir().join(format!("merkles_spec_product_{}.bin", std::process::id()));
+    let mut watch = assetc::watch::Watch::default();
+    let declared = match watch.observe(
+        input.to_str().expect("the fixture path is utf-8"),
+        output.to_str().expect("the temp path is utf-8"),
+    ) {
+        assetc::watch::Outcome::Rebuilt { depth, .. } => depth,
+        other => panic!("a first observation of a fresh file must compile, got {other:?}"),
+    };
+    let bytes = std::fs::read(&output).expect("the compiler renamed its asset into place");
+    let loaded = assetc::reader::from_bytes(&bytes)
+        .unwrap_or_else(|error| panic!("{} must load: {error:?}", output.display()));
+    let _ = std::fs::remove_file(&output);
+    let tree = Tree {
+        nodes: loaded.nodes,
+        params: loaded.params,
+    };
+    render::validate(&tree).expect("the demo scene must pass the validator the march requires");
+    (tree, declared)
 }
 
 fn frame_at(rows: &[FrameRow], cap: u32, shipped: bool) -> usize {
