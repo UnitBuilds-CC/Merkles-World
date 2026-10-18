@@ -2169,3 +2169,43 @@ Durations assert nothing (ADR-017); spreads here are 0.195-4.149 ms. This laptop
 shape on a 320x240 and a 400x300 frontier grid (the demo content at its declared capacity is 24-25% of the shipped
 interval, and the shipped interval itself is 5.03x budget at 400x300), and no laptop magnitude is quoted as budget
 evidence.
+
+### The descent armed on the device (`examples/r1_descent_arm.rs`, a CI step)
+
+The CPU-priced refusal counts above are what the arm *could* save; this example measures what it *does* save when
+the descent is transcribed into `interp.wgsl`'s `march_rays_from_camera_culled`. The entry point reads the pool tail's
+four words per node (the same bound table `second_child_may_skip` already uses), walks the tree with a local array of
+capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approaches any subtree enclosure within
+`surface`. Two pipelines over one grid, one dispatch apart in name, so their depths are comparable bit for bit.
+
+| row | anchor 64x48 | 1080p cap 96 | 1080p cap 8 |
+|---|---|---|---|
+| shipped hits | 605 | 303,427 | 207,743 |
+| culled hits | 605 | 303,427 | 207,743 |
+| bit-differing depths | **0** | **0** | **0** |
+| reference set disagreements | **0** | — | — |
+| unlicensed (+inf bounds) diffs | **0** | **0** | — |
+| shrunk by 1.0: culled loss | — | 97,709 | — |
+| bare radius: culled loss ≤ 1,104 | — | 0 | — |
+| shrunk by 100: culled hits | **0** | **0** | — |
+
+1. **Soundness at two resolutions.** On both the anchor grid and at 1080p, the culled pipeline reproduces the shipped
+   depths with 0 bit-differing depths and equal surface counts. At the anchor grid, the culled frame also agrees with
+   `render::march` on hit-vs-miss (0 set disagreements, worst deviation 0.000002).
+2. **Licensing neutrality.** With `upload_bounds_refused` (all radii `+inf`), both arms produce identical pictures at
+   both resolutions — the licensing spelling is neutral, and a shape without a bound table degrades to the honest
+   frame rather than an empty one.
+3. **The arm fires and is in control.** Shrinking every bound by 100 units makes all radii negative; the descent then
+   refuses every ray and the culled pipeline finds exactly 0 surfaces at both resolutions. This is a hard proof that
+   the arm reads the tail and affects the output, not a no-op.
+4. **A lying bound eats geometry, measured.** Shrinking by 1.0 causes the culled pipeline to lose 97,709 surfaces at
+   1080p while the unculled pipeline on the same shape loses 0 — the differential proves the descent fires and the
+   bound lies in the direction that drops pixels. A bare-radius lie (shrunk by exactly `surface`) loses 0 surfaces,
+   well within the CPU-priced upper bound of 1,104.
+5. **Timing on a non-admissible device.** On a GeForce MX250 [Vulkan, DiscreteGpu], the culled frame at cap 96 is
+   ~30% faster (798 ms vs 1140 ms median of 7 rounds). Durations assert nothing (ADR-017); only the integers above
+   are evidence. R1's 16.67 ms budget remains unmet on this device (47.9x), which is expected since the MX250 is not
+   the named GTX 1070 instrument.
+
+Durations assert nothing (ADR-017); spreads here are 4.08-10.49 ms. The example prints SKIP on adapter-less machines
+(CI runners have no GPU), so the CI step is informational there and the asserted rows are the anchor-grid ones.

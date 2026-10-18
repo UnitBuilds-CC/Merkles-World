@@ -349,6 +349,14 @@ jobs:
       # per ray, and two bound-margin rows that must refuse MORE as the bound lies more. No device, no clock.
       - name: R1's ray-level cull priced before the arm
         run: cargo run --release -p gpu --example r1_cull_price
+      # The licensed descent armed inside the camera march: `interp.wgsl`'s `march_rays_from_camera_culled` walks
+      # the tree in WGSL with an 8-entry breadth-first queue, refusing rays whose segments do not approach any
+      # subtree enclosure within surface. Asserted: bit-identical depths at anchor and 1080p (0 of 3,072 and
+      # 0 of 2,073,600 bit-differing), shrunk-by-100 bounds yield exactly 0 hits proving the arm fires, bare-radius
+      # loss ≤ 1,104 CPU-priced bound, and the culled frame ~30% faster on the MX250. Runners with no adapter print
+      # their own SKIP line.
+      - name: R1's descent armed on a device (informational)
+        run: cargo run --release -p gpu --example r1_descent_arm
       # The shipped binary booting from the same .ron, with its own falsifying arm. `shell: bash` because
       # the Windows default shell is PowerShell, where `set -euo pipefail` is a no-op.
       - name: The demo boots from a compiled asset
