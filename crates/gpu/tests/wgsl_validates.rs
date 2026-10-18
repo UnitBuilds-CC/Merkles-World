@@ -273,7 +273,7 @@ fn the_temporal_cache_has_four_storage_buffers_in_group_one() {
 
 #[test]
 fn the_culled_camera_entry_point_checks_cache_before_marching() {
-    // The culled variant must check the temporal cache before performing a full march, reusing valid surfaces.
+    // The culled variant must check the temporal cache and dirty mask before performing a full march.
     assert!(
         INTERP.contains("march_rays_from_camera_culled"),
         "culled camera entry point is missing"
@@ -283,11 +283,15 @@ fn the_culled_camera_entry_point_checks_cache_before_marching() {
         "culled entry point doesn't declare use_cache variable"
     );
     assert!(
-        INTERP.contains("cached_positions[index]"),
-        "culled entry point doesn't read cached positions"
+        INTERP.contains("cached_depths[index]"),
+        "culled entry point doesn't read cached depths"
     );
     assert!(
-        INTERP.contains("validation_tol"),
-        "culled entry point doesn't validate cached surface with tolerance"
+        INTERP.contains("dirty_mask"),
+        "culled entry point doesn't check dirty mask for delta rendering"
+    );
+    assert!(
+        INTERP.contains("is_dirty"),
+        "culled entry point doesn't declare is_dirty variable for delta rendering"
     );
 }
