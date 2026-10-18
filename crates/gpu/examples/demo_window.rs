@@ -205,32 +205,35 @@ impl Demo {
         let surface = self.surface.take().expect("a window has a surface");
         let canvas = self.canvas.take().expect("a sized window has a canvas");
         let start = std::time::Instant::now();
-        // The march, with no read-back: the depths stay on the device for the render pass to sample.
-        let marched = self
-            .interpreter
-            .march_camera_frame_no_readback(&canvas.bind, &canvas.frame);
-        let mut texture = match surface.get_current_texture() {
-            Ok(texture) => Some(texture),
+        // The march, with no read-back: the depths stay on the device for the render pass to sample. Refused
+        // here rather than folded into the arm below, because a frame the device would not march belongs in the
+        // log as *that* failure and not as a `drawn != wants` assertion three lines from the end.
+        self.interpreter
+            .march_camera_frame_no_readback(&canvas.bind, &canvas.frame)
+            .expect("the device must march the frame the window is about to show");
+        match surface.get_current_texture() {
+            Ok(texture) => self.show(&canvas, texture, start),
             Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
                 self.interpreter
                     .configure_surface(&surface, canvas.width, canvas.height)
                     .expect("a lost surface reconfigures at its own size");
-                None
             }
             Err(error) => panic!("the window handed back no texture: {error}"),
-        };
-        if let (Ok(_), Some(texture)) = (marched, texture.take()) {
-            let view = texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            canvas.present.draw(&view);
-            texture.present();
-            self.ms_total += start.elapsed().as_secs_f64() * 1000.0;
-            self.drawn += 1;
-            self.displayed = true;
         }
         self.surface = Some(surface);
         self.canvas = Some(canvas);
+    }
+
+    /// The half no headless harness can reach: the render pass, the submit, and the swapchain hand-off.
+    fn show(&mut self, canvas: &Canvas, texture: wgpu::SurfaceTexture, start: std::time::Instant) {
+        let view = texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        canvas.present.draw(&view);
+        texture.present();
+        self.ms_total += start.elapsed().as_secs_f64() * 1000.0;
+        self.drawn += 1;
+        self.displayed = true;
     }
 
     /// The check the loop cannot make a liar out of: read the frame the window just showed and compare it to
