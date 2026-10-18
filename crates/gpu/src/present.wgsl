@@ -34,10 +34,21 @@ const MISS: f32 = 1.0e+37;
 
 /// One triangle covering the viewport: the two off-screen corners are what makes three vertices enough, so
 /// there is no index buffer and no second draw call.
+///
+/// `4u`, and the arithmetic is the whole story. The triangle through `(-1,-1)`, `(c-1,-1)` and `(-1,c-1)` is
+/// the region `x + y <= c - 2`, and the viewport square's far corner `(1,1)` is on `x + y = 2`, so the
+/// smallest `c` that reaches it is 4 - the classic `(-1,-1) (3,-1) (-1,3)`. An under-covered frame is
+/// invisible in the two places people look: the pixels it never visits keep the pass's clear colour, which is
+/// the shader's own sky colour, and the depth buffer stays entirely correct because nothing in the fragment
+/// stage wrote to them. Measured at 64x48, `2u` left 1536 of 3072 pixel centres outside the triangle and `3u`
+/// left 384 - and the first version of `examples/present_drawable.rs` passed on `3u`, because the demo's
+/// surfaces (rows 6..=35, columns 12..=51) do not reach the corner `3u` still misses. That is why the example
+/// clears its own witness pass to a colour this shader cannot emit and counts what is left: coverage is
+/// asserted as pixels, not inferred from the scene happening to fill the frame.
 @vertex
 fn vs_full_screen(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let cx = select(0u, 2u, index == 1u);
-    let cy = select(0u, 2u, index == 2u);
+    let cx = select(0u, 4u, index == 1u);
+    let cy = select(0u, 4u, index == 2u);
     return vec4<f32>(f32(cx) - 1.0, f32(cy) - 1.0, 0.0, 1.0);
 }
 

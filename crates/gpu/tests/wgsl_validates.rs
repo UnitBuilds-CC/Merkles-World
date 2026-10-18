@@ -182,3 +182,30 @@ fn the_blend_formula_matches_the_reference_rather_than_the_literature() {
         "a zero blend radius has to collapse to the plain min on both sides"
     );
 }
+
+#[test]
+fn the_full_screen_triangle_reaches_the_viewports_far_corner() {
+    // The two off-screen corners are what make three vertices enough. The triangle through (-1,-1), (c-1,-1)
+    // and (-1,c-1) is the region `x + y <= c - 2`, and the viewport square's far corner (1,1) is on
+    // `x + y = 2`, so `2u` (clip 1.0, the original) leaves half of every frame unrasterized and `3u` (clip 2.0)
+    // still leaves an eighth - 1536 and 384 of the 3072 centres at 64x48. Four is the smallest value that
+    // reaches (1,1), which is the classic (-1,-1) (3,-1) (-1,3).
+    //
+    // The invisible part is why this needs a guard at all: an unrasterized pixel keeps the pass's clear colour,
+    // and the window path clears to the shader's own sky, so the frame looks right, the screenshot looks right,
+    // and the depth buffer `demo_window` verifies ray for ray is entirely correct. `examples/present_drawable.rs`
+    // found the bug by clearing its witness pass to magenta and counting what was left; it then passed on the
+    // `3u` fix, because the boot scene's surfaces (rows 6..=35, columns 12..=51) never reach the corner `3u`
+    // still misses. This is the same rule with no device, because two of the three CI runners have no adapter
+    // and the example prints SKIP there.
+    let at = PRESENT
+        .find("fn vs_full_screen")
+        .expect("the presentation pass needs a full-screen triangle; vs_full_screen is gone");
+    let body = &PRESENT[at..];
+    let body = &body[..body.find('}').expect("vs_full_screen is unterminated")];
+    assert!(
+        body.contains("select(0u, 4u, index == 1u)") && body.contains("select(0u, 4u, index == 2u)"),
+        "the full-screen triangle must reach clip 3.0 on both off-screen corners, or it leaves the viewport's \
+         far corner undrawn: {body}"
+    );
+}

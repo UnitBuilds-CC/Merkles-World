@@ -1578,6 +1578,20 @@ impl Present {
     /// display attached, not a frame. Callers that need the march's numbers wait on `march_camera_frame`, which
     /// does poll.
     pub fn draw(&self, view: &wgpu::TextureView) {
+        self.draw_cleared(
+            view,
+            wgpu::Color {
+                r: 0.02,
+                g: 0.03,
+                b: 0.05,
+                a: 1.0,
+            },
+        );
+    }
+
+    /// The same pass with a chosen background. `read_drawable` uses a colour `present.wgsl` cannot emit so
+    /// that a pixel the fragment stage never visited stays distinguishable from a pixel it decided is sky.
+    fn draw_cleared(&self, view: &wgpu::TextureView, clear: wgpu::Color) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1591,12 +1605,7 @@ impl Present {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.03,
-                            b: 0.05,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -1609,6 +1618,102 @@ impl Present {
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// Draw this pass into a texture the call owns and hand the host the bytes it ended up with.
+    ///
+    /// This exists because of one gap `demo_window`'s verification cannot close. That example compares the
+    /// *depth buffer* ray for ray against `render::march`, which pins the march, the camera law and the
+    /// buffer's own row order — but the fragment stage chooses which drawable row a buffer row lands on, and
+    /// a flip there is invisible to a check that never reads the drawable. It would show an upside-down
+    /// world, and every assertion on trunk would still pass. The witness for that class of mistake was a
+    /// screenshot; this makes it a number.
+    ///
+    /// The format is `Rgba8Unorm` rather than the surface's because this is a measurement path, not a
+    /// present path: a surface texture is not necessarily copyable, and an 8-bit linear target stores the
+    /// shader's own fractions byte for byte, so the host can predict them.
+    ///
+    /// The one thing this pass does differ in is its clear colour, and that difference is the instrument:
+    /// magenta `(255, 0, 255)` is a triple `present.wgsl` cannot produce (its sky is `(5, 8, 13)` and its ramp
+    /// never reaches 255 red or 0 green), so a pixel still holding it is a pixel the fragment stage was never
+    /// run for. Clearing to the demo's own sky colour, as the window path does, would make an
+    /// under-covered frame and an all-sky frame the same bytes.
+    pub fn read_drawable(&self, width: u32, height: u32) -> Result<(Vec<u8>, u32), String> {
+        let bytes_per_row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let size = (bytes_per_row * height) as u64;
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("present-witness"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.draw_cleared(
+            &view,
+            wgpu::Color {
+                r: 1.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        );
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("present-witness-staging"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("present-witness-copy"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        // The same map-and-wait `Interpreter::read` performs; it is spelled out here because `Present` owns a
+        // device and a queue, not an interpreter, and this path is the render stage's, not the march's.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        staging.map_async(wgpu::MapMode::Read, 0..size, move |result| {
+            let _ = sender.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("poll: {error}"))?;
+        let status = receiver
+            .recv()
+            .map_err(|_| "the map callback never ran".to_string())?;
+        status.map_err(|error| format!("map_async: {error}"))?;
+        let raw = staging.slice(0..size).get_mapped_range().to_vec();
+        staging.unmap();
+        Ok((raw, bytes_per_row))
     }
 }
 
