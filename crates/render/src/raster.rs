@@ -337,7 +337,10 @@ pub fn render_temporal(
                     let n = normal(tree, ROOT, hit.point, normal_eps);
                     push_rgb(pixels, normal_to_rgb(n));
                     depth.push(hit.t);
-                    cache.cache_surface(idx, hit.point, hit.t, n);
+                    // Attribute surface to ROOT for now - fine-grained entity tracking requires
+                    // march-level attribution which is a larger change. Influence spheres handle
+                    // dynamic invalidation without modifying the evaluator.
+                    cache.cache_surface(idx, hit.point, hit.t, n, ROOT);
                     surfaces_cached += 1;
                 }
                 None => {

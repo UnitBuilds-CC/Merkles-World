@@ -10,8 +10,31 @@
 //! 4. Only remarch pixels where validation fails
 //!
 //! This turns rendering from "march all pixels" into "validate most, march few".
+//!
+//! **Entity tracking**: Each cached pixel records which tree node produced its surface. When an
+//! entity moves (its subtree parameters change), only pixels attributed to that node range are
+//! invalidated, leaving static background surfaces cached.
 
 use crate::{sdf_eval, raster::Camera, Tree, Vec3, ROOT};
+
+/// Identifies a subtree within the scene tree for selective invalidation.
+///
+/// An entity is a contiguous range of nodes in pre-order traversal. When any parameter in that
+/// range changes, all pixels attributed to those nodes must be revalidated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityRange {
+    /// First node index in the entity's subtree (pre-order)
+    pub start: u32,
+    /// Number of nodes in the entity's subtree
+    pub len: u32,
+}
+
+impl EntityRange {
+    /// Check if a node index falls within this entity's range
+    pub fn contains(&self, node: u32) -> bool {
+        node >= self.start && node < self.start + self.len
+    }
+}
 
 /// Cached surface data for one pixel
 #[derive(Debug, Clone, Copy)]
@@ -26,6 +49,9 @@ pub struct CachedPixel {
     pub frame_id: u64,
     /// For sky pixels: the maximum t the ray reached before giving up
     pub max_t: f32,
+    /// Which tree node produced this surface (for entity invalidation).
+    /// u32::MAX means "no attribution" (sky or untracked).
+    pub entity_node: u32,
 }
 
 impl CachedPixel {
@@ -37,6 +63,7 @@ impl CachedPixel {
             normal: [0.0, 0.0, 0.0],
             frame_id: 0,
             max_t,
+            entity_node: u32::MAX, // No attribution for sky
         }
     }
 
@@ -151,6 +178,7 @@ impl SurfaceCache {
                             normal,
                             frame_id: self.frame_id,
                             max_t: 0.0, // Not used for surface pixels
+                            entity_node: u32::MAX, // No attribution in this legacy API
                         };
                     }
                     None => {
@@ -197,8 +225,8 @@ impl SurfaceCache {
         }
     }
 
-    /// Cache a surface hit at the given pixel index
-    pub fn cache_surface(&mut self, index: usize, world_pos: Vec3, depth: f32, normal: Vec3) {
+    /// Cache a surface hit at the given pixel index, attributed to a specific tree node
+    pub fn cache_surface(&mut self, index: usize, world_pos: Vec3, depth: f32, normal: Vec3, entity_node: u32) {
         if index < self.pixels.len() {
             self.pixels[index] = CachedPixel {
                 world_pos,
@@ -206,6 +234,7 @@ impl SurfaceCache {
                 normal,
                 frame_id: self.frame_id,
                 max_t: 0.0, // Not used for surface pixels
+                entity_node,
             };
         }
     }
@@ -219,6 +248,7 @@ impl SurfaceCache {
                 normal: [0.0, 0.0, 0.0],
                 frame_id: self.frame_id,
                 max_t,
+                entity_node: u32::MAX, // No attribution for sky
             };
         }
     }
@@ -231,6 +261,55 @@ impl SurfaceCache {
     /// Advance to next frame (call at start of each render)
     pub fn advance_frame(&mut self) {
         self.frame_id += 1;
+    }
+
+    /// Invalidate all cached pixels attributed to entities in the given ranges.
+    ///
+    /// When an entity moves (its parameters change), its influence sphere shifts and all surfaces
+    /// it contributed to must be revalidated. This marks those pixels as stale by setting their
+    /// frame_id to 0, forcing a remarch on the next render.
+    ///
+    /// Returns the number of pixels invalidated.
+    pub fn invalidate_entities(&mut self, ranges: &[EntityRange]) -> usize {
+        let mut count = 0usize;
+        for pixel in &mut self.pixels {
+            if pixel.frame_id > 0 && !pixel.is_sky() {
+                // Check if this pixel belongs to any invalidated entity
+                for range in ranges {
+                    if range.contains(pixel.entity_node) {
+                        pixel.frame_id = 0; // Invalidate
+                        count += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Invalidate all cached pixels within a world-space sphere.
+    ///
+    /// This is the influence-sphere approach: when an entity moves, everything within its old
+    /// bounding sphere might have changed occlusion relationships, so those pixels are invalidated.
+    /// More conservative than node attribution but doesn't require tracking which node produced what.
+    ///
+    /// Returns the number of pixels invalidated.
+    pub fn invalidate_sphere(&mut self, centre: Vec3, radius: f32) -> usize {
+        let radius_sq = radius * radius;
+        let mut count = 0usize;
+        for pixel in &mut self.pixels {
+            if pixel.frame_id > 0 && !pixel.is_sky() {
+                let dx = pixel.world_pos[0] - centre[0];
+                let dy = pixel.world_pos[1] - centre[1];
+                let dz = pixel.world_pos[2] - centre[2];
+                let dist_sq = dx * dx + dy * dy + dz * dz;
+                if dist_sq <= radius_sq {
+                    pixel.frame_id = 0;
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 }
 
