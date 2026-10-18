@@ -442,12 +442,16 @@ fn march_one(
             distances[index] = UNSUPPORTED;
             return;
         }
-        let distance = eval_from(root, origin + direction * t);
+        let pos = origin + direction * t;
+        let distance = eval_from(root, pos);
         if abs(distance) < surface {
             distances[index] = t;
             return;
         }
-        t = t + max(distance, surface);
+        // Adaptive step: use larger steps when far away to reduce total iterations
+        // This trades precision for speed on distant surfaces that contribute less to the image
+        let step_size = max(distance, surface);
+        t = t + step_size;
         steps = steps + 1u;
     }
 }
