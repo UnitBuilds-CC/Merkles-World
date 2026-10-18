@@ -139,14 +139,19 @@ fn main() {
     println!("// adapter    : {}", interpreter.adapter());
     println!("// budget     : gate R1 names {BUDGET_MS:.2} ms for one 1080p frame at 60 Hz on this device");
     println!("// asserted   : the descent arm keeps the picture identical (0 bit-differing depths), agrees with render::march, and lies only when the bound does");
-    println!("// printed    : paired medians and budget ratios - durations assert nothing (ADR-017)");
+    println!(
+        "// printed    : paired medians and budget ratios - durations assert nothing (ADR-017)"
+    );
     println!();
 
     // ---- Anchor grid: soundness, reference agreement, licensing neutrality ---------------------------
     let shape_licensed = interpreter.upload(&product);
     let shape_refused = interpreter.upload_bounds_refused(&product);
     let mut frame = interpreter.begin_camera_frame(ANCHOR_W, ANCHOR_H);
-    interpreter.write_camera(&mut frame, &product_camera(ANCHOR_W, ANCHOR_H, PRODUCT_STEPS));
+    interpreter.write_camera(
+        &mut frame,
+        &product_camera(ANCHOR_W, ANCHOR_H, PRODUCT_STEPS),
+    );
 
     let shipped_bind = interpreter.bind_camera(&shape_licensed, &frame);
     let culled_bind = interpreter.bind_camera_variant(&variant, &shape_licensed, &frame);
@@ -172,7 +177,10 @@ fn main() {
         "shipped found {} surfaces where culled found {} at the anchor - the arm eats geometry before the bound lies",
         shipped.hits, culled.hits
     );
-    assert!(shipped.hits > 0, "the anchor grid finds no surfaces, so there is nothing to compare");
+    assert!(
+        shipped.hits > 0,
+        "the anchor grid finds no surfaces, so there is nothing to compare"
+    );
 
     // Reference agreement: culled vs render::march
     let mut set_diffs = 0usize;
@@ -183,7 +191,13 @@ fn main() {
         for px in 0..ANCHOR_W {
             let ray = product_ray(px, py, ANCHOR_W, ANCHOR_H, PRODUCT_STEPS);
             let hit = march(
-                &product, ROOT, ray.origin, ray.dir, ray.max_t, ray.surface, ray.max_steps,
+                &product,
+                ROOT,
+                ray.origin,
+                ray.dir,
+                ray.max_t,
+                ray.surface,
+                ray.max_steps,
             );
             if hit.is_some() {
                 ref_hits += 1;
@@ -200,8 +214,14 @@ fn main() {
     println!(
         "// reference    : {ref_hits} surfaces, {set_diffs} set disagreements, worst deviation {worst:.6}",
     );
-    assert_eq!(set_diffs, 0, "{set_diffs} pixels disagree on hit-vs-miss with render::march");
-    assert!(worst < DEVIATION, "worst deviation {worst:.6} exceeds {DEVIATION}");
+    assert_eq!(
+        set_diffs, 0,
+        "{set_diffs} pixels disagree on hit-vs-miss with render::march"
+    );
+    assert!(
+        worst < DEVIATION,
+        "worst deviation {worst:.6} exceeds {DEVIATION}"
+    );
 
     // Licensing neutrality: unlicensed shape (+inf bounds) → both arms produce the honest picture
     let unlic_shipped = interpreter.bind_camera(&shape_refused, &frame);
@@ -217,7 +237,10 @@ fn main() {
         "// unlicensed   : shipped {}, culled {}, {ul_diffs} bit diffs - +inf bounds are neutral",
         ul_shipped.hits, ul_culled.hits
     );
-    assert_eq!(ul_diffs, 0, "{ul_diffs} bit diffs on an unlicensed shape - the arm is not inert");
+    assert_eq!(
+        ul_diffs, 0,
+        "{ul_diffs} bit diffs on an unlicensed shape - the arm is not inert"
+    );
     assert_eq!(
         ul_shipped.hits, shipped.hits,
         "unlicensed shipped found {} where licensed shipped found {} - skipping is not picture-neutral",
@@ -234,7 +257,11 @@ fn main() {
         "// shrunk 100   : culled {} hits (expected 0 - the arm is in control)",
         s100.hits
     );
-    assert_eq!(s100.hits, 0, "shrunk by 100 still found {} surfaces - the descent did not refuse every ray", s100.hits);
+    assert_eq!(
+        s100.hits, 0,
+        "shrunk by 100 still found {} surfaces - the descent did not refuse every ray",
+        s100.hits
+    );
 
     // ---- 1080p legs: paired, order-alternating, under catch_unwind -----------------------------------
     let (w, h) = (R1_W, R1_H);
@@ -302,7 +329,13 @@ fn main() {
                 sh_march.hits, cu_march.hits
             );
 
-            rows.push((cap, sh_march.hits, cu_march.hits, median(&sh_ms), median(&cu_ms)));
+            rows.push((
+                cap,
+                sh_march.hits,
+                cu_march.hits,
+                median(&sh_ms),
+                median(&cu_ms),
+            ));
         }
 
         // Falsifiers at cap 96
@@ -396,7 +429,9 @@ fn main() {
                 .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_else(|| "a panic with no message".to_string());
             if !(text.contains("device is lost") || text.contains("Validation")) {
-                println!("// 1080p: UNEXPECTED PANIC, not a lost device, so it is a failure: {text}");
+                println!(
+                    "// 1080p: UNEXPECTED PANIC, not a lost device, so it is a failure: {text}"
+                );
                 std::process::exit(101);
             }
             println!("// 1080p: SKIPPED, the device was lost mid-leg: {text}");
