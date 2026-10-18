@@ -1309,7 +1309,21 @@ impl Interpreter {
     /// Bind a resident shape to a camera frame. Slot 2 - the ray buffer - is absent, because the entry
     /// point this pipeline was derived from never names it.
     pub fn bind_camera(&self, shape: &Shape, frame: &CameraFrame) -> Bind {
-        self.bind_camera_on(&self.camera_pipeline, shape, frame)
+        // Unculled path: no temporal cache, only bind group 0
+        Bind {
+            bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("camera-march"),
+                layout: &self.camera_pipeline.get_bind_group_layout(0),
+                entries: &[
+                    entry(0, &shape.nodes),
+                    entry(1, &shape.pool),
+                    entry(3, &frame.header),
+                    entry(4, &frame.traced),
+                    entry(5, &frame.camera),
+                ],
+            }),
+            cache_bind: None,
+        }
     }
 
     /// Bind a frame to a caller-chosen camera pipeline. The layout comes from the pipeline itself, exactly as
