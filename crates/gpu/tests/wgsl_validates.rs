@@ -252,3 +252,42 @@ fn every_stack_push_is_bounded_before_the_store() {
         stores.len()
     );
 }
+
+#[test]
+fn the_temporal_cache_has_four_storage_buffers_in_group_one() {
+    // The culled camera entry point uses bind group 1 for temporal cache storage buffers. This keeps the
+    // downlevel 4-storage-buffer limit intact for group 0 while adding desktop-only cache support.
+    let cache_bindings = vec![
+        "@group(1) @binding(0) var<storage, read_write> cached_positions",
+        "@group(1) @binding(1) var<storage, read_write> cached_depths",
+        "@group(1) @binding(2) var<storage, read_write> cached_normals",
+        "@group(1) @binding(3) var<storage, read_write> cached_metadata",
+    ];
+    for binding in cache_bindings {
+        assert!(
+            INTERP.contains(binding),
+            "temporal cache missing {binding:?} in interp.wgsl"
+        );
+    }
+}
+
+#[test]
+fn the_culled_camera_entry_point_checks_cache_before_marching() {
+    // The culled variant must check the temporal cache before performing a full march, reusing valid surfaces.
+    assert!(
+        INTERP.contains("march_rays_from_camera_culled"),
+        "culled camera entry point is missing"
+    );
+    assert!(
+        INTERP.contains("use_cache"),
+        "culled entry point doesn't declare use_cache variable"
+    );
+    assert!(
+        INTERP.contains("cached_positions[index]"),
+        "culled entry point doesn't read cached positions"
+    );
+    assert!(
+        INTERP.contains("validation_tol"),
+        "culled entry point doesn't validate cached surface with tolerance"
+    );
+}

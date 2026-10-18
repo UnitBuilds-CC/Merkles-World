@@ -182,6 +182,8 @@ pub struct Frame {
 #[derive(Debug)]
 pub struct Bind {
     bind: wgpu::BindGroup,
+    /// Optional second bind group for temporal cache buffers (desktop only).
+    cache_bind: Option<wgpu::BindGroup>,
 }
 
 /// A frame whose rays the device generates itself, from a camera block instead of a ray list.
@@ -1003,6 +1005,7 @@ impl Interpreter {
                     entry(4, &frame.traced),
                 ],
             }),
+            cache_bind: None, // Regular frames don't use temporal cache
         }
     }
 
@@ -1228,6 +1231,76 @@ impl Interpreter {
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
+        // Check if this pipeline uses temporal cache by trying to get group 1 layout
+        // If it fails, we catch and create without cache
+        let use_cache = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pipeline.get_bind_group_layout(1)
+        })).is_ok();
+        
+        let cache_bind = if use_cache {
+            // Create temporal cache buffers sized for this frame's resolution
+            let pixels = frame.pixels;
+            let pixel_size = std::mem::size_of::<f32>();
+            
+            // cached_positions: vec3<f32> per pixel (12 bytes each, padded to 16)
+            let positions_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("temporal-cache-positions"),
+                size: (pixels * 16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            
+            // cached_depths: f32 per pixel
+            let depths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("temporal-cache-depths"),
+                size: (pixels * pixel_size) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            
+            // cached_normals: vec3<f32> per pixel (12 bytes each, padded to 16)
+            let normals_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("temporal-cache-normals"),
+                size: (pixels * 16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            
+            // cached_metadata: vec4<u32> per pixel (16 bytes each)
+            let metadata_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("temporal-cache-metadata"),
+                size: (pixels * 16) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            
+            // Initialize all buffers to zero/invalid state using safe slice methods
+            let zero_bytes_pos = vec![0u8; pixels * 16];
+            self.queue.write_buffer(&positions_buf, 0, &zero_bytes_pos);
+            
+            let zero_bytes_depth = vec![0u8; pixels * pixel_size];
+            self.queue.write_buffer(&depths_buf, 0, &zero_bytes_depth);
+            
+            let zero_bytes_norm = vec![0u8; pixels * 16];
+            self.queue.write_buffer(&normals_buf, 0, &zero_bytes_norm);
+            
+            let zero_bytes_meta = vec![0u8; pixels * 16];
+            self.queue.write_buffer(&metadata_buf, 0, &zero_bytes_meta);
+            
+            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("temporal-cache"),
+                layout: &pipeline.get_bind_group_layout(1),
+                entries: &[
+                    entry(0, &positions_buf),
+                    entry(1, &depths_buf),
+                    entry(2, &normals_buf),
+                    entry(3, &metadata_buf),
+                ],
+            }))
+        } else {
+            None
+        };
+        
         Bind {
             bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("camera-march"),
@@ -1240,6 +1313,7 @@ impl Interpreter {
                     entry(5, &frame.camera),
                 ],
             }),
+            cache_bind,
         }
     }
 
@@ -1350,6 +1424,10 @@ impl Interpreter {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind.bind, &[]);
+            // Set temporal cache bind group if present
+            if let Some(ref cache_bind) = bind.cache_bind {
+                pass.set_bind_group(1, cache_bind, &[]);
+            }
             pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
         }
         encoder.copy_buffer_to_buffer(&frame.traced, 0, &frame.staging, 0, size);
@@ -1434,6 +1512,10 @@ impl Interpreter {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind.bind, &[]);
+            // Set temporal cache bind group if present
+            if let Some(ref cache_bind) = bind.cache_bind {
+                pass.set_bind_group(1, cache_bind, &[]);
+            }
             pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
         }
         self.queue.submit([encoder.finish()]);

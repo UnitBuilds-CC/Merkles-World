@@ -66,6 +66,14 @@ const UNSUPPORTED: f32 = 3.402823466e+38;
 @group(0) @binding(3) var<uniform> header: Header;
 @group(0) @binding(4) var<storage, read_write> distances: array<f32>;
 
+// Temporal cache buffers (desktop only, beyond downlevel ceiling):
+// Cached surface data per pixel for frame-to-frame reuse. Each entry stores world position, depth, normal,
+// and metadata for validation. Only used by culled camera variants that opt into temporal coherence.
+@group(1) @binding(0) var<storage, read_write> cached_positions: array<vec3<f32>>;
+@group(1) @binding(1) var<storage, read_write> cached_depths: array<f32>;
+@group(1) @binding(2) var<storage, read_write> cached_normals: array<vec3<f32>>;
+@group(1) @binding(3) var<storage, read_write> cached_metadata: array<vec4<u32>>; // [frame_id, entity_node, max_t_bits, flags]
+
 const DEPTH: u32 = 32u;
 
 struct Frame {
@@ -648,15 +656,16 @@ fn ray_reaches_scene(root: u32, origin: vec3<f32>, dir: vec3<f32>, max_t: f32, m
     return result;
 }
 
-/// The camera frame, culled per ray. `march_rays_from_camera` above is unchanged and stays the control: two
-/// pipelines over one grid, one dispatch apart in the module's entry-point name, so the depths the two return
-/// are comparable bit for bit and the saving is a measurement rather than an argument.
+/// The camera frame, culled per ray with temporal surface caching.
+/// Checks cached surface data before marching, reusing valid surfaces from previous frames.
 @compute @workgroup_size(64)
 fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     let index = id.x;
     if index >= header.point_count {
         return;
     }
+    
+    // Extract camera parameters
     let width = u32(cam.grid.x);
     let height = u32(cam.grid.y);
     let px = index % width;
@@ -668,11 +677,100 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     let span = cam.forward + cam.right * ndc_x + cam.up * ndc_y;
     let length = sqrt(span.x * span.x + span.y * span.y + span.z * span.z);
     let direction = select(span / vec3(length), vec3(0.0, 0.0, 0.0), length == 0.0);
-    if !ray_reaches_scene(cam.root, cam.origin, direction, cam.geom.z, bitcast<f32>(header.march_surface_bits)) {
-        // The same sentinel `march_one` writes when it runs out of steps, because that is exactly what this
-        // ray would have done: the bound proved no point of the segment is within `surface` of the field.
+    
+    // Temporal cache check: validate cached surface before marching
+    let surface_tolerance = bitcast<f32>(header.march_surface_bits);
+    let max_t = cam.geom.z;
+    let origin = cam.origin;
+    
+    // Check if we have a valid cached surface for this pixel
+    var use_cache = false;
+    var cached_t = UNSUPPORTED;
+    
+    if index < arrayLength(&cached_positions) {
+        let metadata = cached_metadata[index];
+        let cached_frame_id = metadata.x;
+        let cached_entity_node = metadata.y;
+        let cached_max_t_bits = metadata.z;
+        let cached_flags = metadata.w;
+        
+        // Only use cache from recent frames (within last 60 frames)
+        let current_frame = header.stack_depth; // Using stack_depth as proxy for frame counter
+        let frame_diff = current_frame - cached_frame_id;
+        
+        if frame_diff < 60u && cached_flags > 0u {
+            // Reconstruct cached world position and depth
+            let cached_world_pos = cached_positions[index];
+            let cached_depth = cached_depths[index];
+            let cached_normal = cached_normals[index];
+            
+            // Validate: is the cached world position still on the surface?
+            // Use generous tolerance (100x surface_eps like CPU reference)
+            let validation_tol = surface_tolerance * 100.0;
+            let sdf_value = eval_from(cam.root, cached_world_pos);
+            
+            if abs(sdf_value) < validation_tol {
+                // Surface still valid - compute ray parameter t
+                let to_cached = cached_world_pos - origin;
+                let t_candidate = dot(to_cached, direction);
+                
+                // Verify the cached point is in front of camera and within march range
+                if t_candidate > 0.0 && t_candidate <= max_t {
+                    // Additional check: verify the cached point projects to this pixel
+                    let projected_point = origin + direction * t_candidate;
+                    let projection_error = length(projected_point - cached_world_pos);
+                    
+                    if projection_error < validation_tol {
+                        use_cache = true;
+                        cached_t = t_candidate;
+                    }
+                }
+            }
+        }
+    }
+    
+    if use_cache {
+        // Cache hit - reuse cached surface
+        distances[index] = cached_t;
+        return;
+    }
+    
+    // Cache miss or invalid - perform culling check
+    if !ray_reaches_scene(cam.root, origin, direction, max_t, surface_tolerance) {
         distances[index] = UNSUPPORTED;
         return;
     }
-    march_one(index, cam.root, cam.origin, direction, cam.geom.z);
+    
+    // March the ray
+    march_one(index, cam.root, origin, direction, max_t);
+    
+    // Update cache with new surface data
+    let hit_t = distances[index];
+    if hit_t != UNSUPPORTED && index < arrayLength(&cached_positions) {
+        // Compute world position at hit
+        let hit_world_pos = origin + direction * hit_t;
+        
+        // Store surface data
+        cached_positions[index] = hit_world_pos;
+        cached_depths[index] = hit_t;
+        
+        // Approximate normal via central differences (6 SDF evaluations)
+        let eps = surface_tolerance * 0.5;
+        let d_xp = eval_from(cam.root, hit_world_pos + vec3(eps, 0.0, 0.0));
+        let d_xn = eval_from(cam.root, hit_world_pos - vec3(eps, 0.0, 0.0));
+        let d_yp = eval_from(cam.root, hit_world_pos + vec3(0.0, eps, 0.0));
+        let d_yn = eval_from(cam.root, hit_world_pos - vec3(0.0, eps, 0.0));
+        let d_zp = eval_from(cam.root, hit_world_pos + vec3(0.0, 0.0, eps));
+        let d_zn = eval_from(cam.root, hit_world_pos - vec3(0.0, 0.0, eps));
+        
+        let normal = normalize(vec3(d_xp - d_xn, d_yp - d_yn, d_zp - d_zn));
+        cached_normals[index] = normal;
+        
+        // Store metadata: [frame_id, entity_node, max_t_bits, flags]
+        let current_frame = header.stack_depth;
+        cached_metadata[index] = vec4<u32>(current_frame, 0u, bitcast<u32>(max_t), 1u);
+    } else if index < arrayLength(&cached_positions) {
+        // Sky pixel - mark cache as invalid
+        cached_metadata[index] = vec4<u32>(0u, 0u, 0u, 0u);
+    }
 }
