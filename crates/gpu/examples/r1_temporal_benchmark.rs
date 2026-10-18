@@ -178,11 +178,28 @@ fn main() {
 
         if i == 0 {
             println!("  Frame 1 after init: {:?} ({} hits)", elapsed, result.hits);
+        } else {
+            println!("  Frame {}: {:?} ({} hits)", i + 1, elapsed, result.hits);
         }
     }
     cached_times.sort();
     let cached_median = cached_times[cached_times.len() / 2];
     println!("  Median: {:?}", cached_median);
+    
+    // Delta rendering diagnostic: compare first vs last frame
+    if cached_times.len() >= 2 {
+        let first = cached_times[0];
+        let last = *cached_times.last().unwrap();
+        let improvement = if first.as_secs_f64() > 0.0 {
+            (first.as_secs_f64() - last.as_secs_f64()) / first.as_secs_f64() * 100.0
+        } else {
+            0.0
+        };
+        println!("  Delta rendering effect: {:.1}% {} from frame 1 to {}", 
+                 improvement.abs(),
+                 if improvement > 0.0 { "faster" } else { "slower" },
+                 cached_times.len());
+    }
 
     // Calculate speedup
     let speedup = unculled_median.as_secs_f64() / cached_median.as_secs_f64();
