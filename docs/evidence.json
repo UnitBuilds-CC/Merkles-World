@@ -98,12 +98,12 @@
       "kind": "phrase",
       "value": "851,956",
       "what": "Rays the licensed per-ray descent proves cannot reach the boot scene, over R1's own 1920x1080 grid (2,073,600 rays) with the boot's own camera, `max_t` 40 and surface 1e-3 - 41.1% of the grid and 48.1% of the 1,770,173 rays the GTX 1070 measured as finding no surface. The root bound alone refuses 0 of the same grid, which is why this number and not the scene sphere is the price of the arm.",
-      "measured_by": "`crates/gpu/examples/r1_cull_price.rs`, a CI step, and `crates/render/tests/cull.rs` for the enclosure arithmetic underneath it",
+      "measured_by": "the `R1's ray-level cull priced before the arm` step, whose own lines reproduce 0 / 851,956 / 12,698,979 / 1,104 identically on x86-64 Windows, ARM64 macOS and x86-64 Linux, plus `crates/render/tests/cull.rs` for the enclosure arithmetic underneath it",
       "cited_in": [
         "docs/04-rendering.md",
         "docs/11-roadmap.md"
       ],
-      "first_measured_at": "local (Windows, x86-64) - CI reproduces the count on all three architectures"
+      "first_measured_at": "39129344104"
     }
   },
   "gate_p1_5_targets": [
