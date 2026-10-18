@@ -386,7 +386,11 @@ therefore keeps Phase 1's exit open on **performance**, not on **presence**: the
 disk, the march's depth buffer sampled in place by the fragment stage, 60 frames presented and the last one
 checked ray-for-ray against `render::march`), so R5's "viewable" half has a picture and R1's "visible" half has a
 frame path over which no depth byte crosses the bus; what stays open is a frame that *meets* 16.67 ms, not a frame
-that reaches a screen (OQ-51). R2 left that list when its ten-minute span ran over the device path and became a CI row,
+that reaches a screen (OQ-51). `winit` arrives with `default-features = false`, and that is a security read rather
+than a size preference: its defaults pull the Wayland CSD stack down to `ttf-parser`, which carries
+RUSTSEC-2026-0192 (unmaintained by its own author, **no safe upgrade available**) and failed `cargo-deny` the day
+this dependency landed — so the crate the advisory is filed against is absent from the lockfile instead of ignored
+in `deny.toml`, at the cost of a window on a Linux runner with a display, which no runner here has. R2 left that list when its ten-minute span ran over the device path and became a CI row,
 so the gate named here is no longer a claim about work that has not been measured; **no BVH build**, because the enclosures are derived per node from the emitted tree and
 the spatial-index question belongs to `assetc`'s union emission (task 27, ADR-024); **no frame that meets
 R1**, since the nine whole-frame rows on the MX250 - the only admissible instrument here - sit between 90.66

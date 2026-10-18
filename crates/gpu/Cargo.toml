@@ -29,7 +29,20 @@ assetc = { path = "../assetc" }
 # needs a window, and `cargo run -p engine`'s published output must stay a headless 18 lines. The owner
 # cleared this class of dependency on 2026-10-18 (MIT/Apache-2.0, no copyleft) for the Phase 1 exit's
 # "renders a procedural SDF scene" half, which no headless harness can show.
-winit = "0.30"
+#
+# `default-features = false` is not a size preference, it is a security read. winit's defaults pull the
+# Wayland client-side-decoration stack (`wayland` → `sctk` → `sctk-adwaita` → `ab_glyph` → `owned_ttf_parser`
+# → `ttf-parser`), and `ttf-parser` carries RUSTSEC-2026-0192: the author has declared it unmaintained and
+# will not fix it, and `cargo deny` reports **no safe upgrade available**. `cargo-deny` failed the workspace
+# on it the day this dependency arrived, and being a dev-dependency is not a dispensation. With the defaults
+# off, the crate the advisory is filed against is absent from the lockfile rather than ignored in
+# `deny.toml`.
+#
+# What that costs, stated rather than discovered: on a Linux runner winit then has no backend to open a window
+# with, so `demo_window` prints its own `SKIP demo_window: no window (…)` line instead of drawing. CI has no
+# display and the buildbox is headless, so no frame that runs today is lost; the Windows and macOS backends
+# are not feature-gated, which is what the laptop's 640x360 run exercises.
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 [lints]
 workspace = true
