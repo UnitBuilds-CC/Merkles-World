@@ -345,6 +345,10 @@ jobs:
       # printed beside the device's for the scene where it does fire. Integers only, same SKIP discipline.
       - name: Bound-skip arm counted on a device (informational)
         run: cargo run --release -p gpu --example arm_skips_on_device
+      # The ray-level cull priced on the CPU over R1's own grid: which layer refuses what share, what the arm pays
+      # per ray, and two bound-margin rows that must refuse MORE as the bound lies more. No device, no clock.
+      - name: R1's ray-level cull priced before the arm
+        run: cargo run --release -p gpu --example r1_cull_price
       # The shipped binary booting from the same .ron, with its own falsifying arm. `shell: bash` because
       # the Windows default shell is PowerShell, where `set -euo pipefail` is a no-op.
       - name: The demo boots from a compiled asset

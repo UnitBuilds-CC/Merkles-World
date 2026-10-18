@@ -2131,6 +2131,40 @@ Three readings, and the first one is a correction:
    is measured through the same substitution instrument as the ladder, so it is the library's and the instrument's
    row rather than the shipped process's.
 
+### The ray-level cull priced before the arm existed (`examples/r1_cull_price.rs`, a CI step)
+
+Reading 2 above names the device-side cull as the remaining lever. Before any of it went into `march_rays_from_camera`,
+the same question #64 was answered the same way - by walking the enclosures `render::cull` already derives, over
+R1's own 1920x1080 grid with the boot's own camera, on a CPU, with no adapter and no clock:
+
+| layer, per ray | refused of 2,073,600 | share of the grid | share of the 1,770,173 measured misses |
+|---|---|---|---|
+| root bound, grown by `surface` | **0** | 0.0% | 0.0% |
+| licensed descent, grown by `surface` | **851,956** | 41.1% | 48.1% |
+| the same descent with a bare radius | 853,060 | 41.1% | 48.2% |
+| the same descent, every bound shrunk by 1.0 | 1,773,188 | 85.5% | **100.2%** |
+
+1. **ADR-024's spread-scene warning, now measured on the product's own content.** The demo's scene bound is a sphere
+   at `(-0.6, 0.35, 1.1875)` with radius **10.786**, while the camera frustum spans 2.0 half-units at a near plane 4
+   units out: the bound admits every ray on the grid, so the cheapest possible arm - one `length`, one compare, on
+   four words the march already binds - refuses **0 of 2,073,600**. The layer that pays is the descent, and its
+   licence is real here: `respects[root]` is `true` for the boot's scene because OQ-54's derivation granted the
+   blend, which is the same grant the boot prints as `root licence granted`.
+2. **What the descent is worth, and what it costs.** 41.1% of the grid refused, which is 48.1% of the misses - under
+   half. So the ray-level cull is a real lever and not the whole one: it cannot take 2.97x to 1.00x on its own, and
+   the claim that it *might* take it to ~1.75x (49.424 ms x 0.589 = 29.1 ms, before the pre-pass's own 6.12 tests per
+   ray) is arithmetic on a share, marked DERIVED until a dispatched frame says otherwise. Its own bill is **12,698,979** sphere tests over 2,073,600 rays = **6.12 per ray**, deepest walk 4
+   nodes: a pre-pass is paid by the 59% of rays it does not refuse too, which is why the count is published and not
+   assumed to be free.
+3. **The last two rows are the falsifiers, and they are what makes the first two measurements trustworthy.** A bound
+   that lies must refuse *more* rays, and it must lie in the direction that loses geometry. A bare radius - the exact
+   bug `cull.rs` caught on its first run, where a ray passing within `surface` of a sphere but outside it is a hit as
+   far as the marcher is concerned - refuses **1,104 more** rays on this grid, i.e. 1,104 pixels an armed
+   implementation would silently drop. Shrinking every enclosure by a world unit refuses 1,773,188, which is
+   **100.2% of the misses the device actually measured**: more rays than there are empty pixels, so a bound lying by
+   one unit provably eats surfaces. A refusal count that moved neither way would have meant this instrument was not
+   measuring bounds at all.
+
 Durations assert nothing (ADR-017); spreads here are 0.195-4.149 ms. This laptop's D3D12 backend reproduces the
 shape on a 320x240 and a 400x300 frontier grid (the demo content at its declared capacity is 24-25% of the shipped
 interval, and the shipped interval itself is 5.03x budget at 400x300), and no laptop magnitude is quoted as budget
