@@ -26,6 +26,7 @@
 pub mod cull;
 pub mod raster;
 pub mod stream;
+pub mod temporal_cache;
 
 use contracts::sdf::{
     NodeRecord, MAX_TREE_DEPTH, NODE_CYLINDER, NODE_INTERSECT, NODE_MIRROR, NODE_PLANE,

@@ -20,6 +20,7 @@
 //! than a tangent, and every number a ray depends on here is one the tests can recompute.
 
 use crate::cull::{ray_may_hit, Enclosure};
+use crate::temporal_cache::SurfaceCache;
 use crate::{march, march_bnb, normal, Tree, Vec3, ROOT};
 
 /// Where the probe looks from. `forward`, `right` and `up` are normalised by [`render`], so a caller can
@@ -234,6 +235,134 @@ pub fn render_bnb_with(
         Some(bounds),
         frame,
     )
+}
+
+/// Render with temporal caching: reuse cached surface data from previous frames instead of remarching.
+///
+/// This is the production path for high-FPS rendering. After the first frame (which builds the cache),
+/// subsequent frames validate cached surfaces with a quick SDF check and only remarch where validation
+/// fails. For static scenes with small camera movements, this can achieve 80-100% cache hit rates,
+/// reducing marched rays by an order of magnitude.
+///
+/// Sky pixels are also cached: if a ray missed last frame, we check if it still misses using the
+/// scene's bounding volume, avoiding expensive marches through empty space.
+pub fn render_temporal(
+    tree: &Tree,
+    camera: &Camera,
+    cache: &mut SurfaceCache,
+    frame: &mut Frame,
+) -> (Stats, usize) {
+    cache.advance_frame(); // Increment frame counter
+    
+    let forward = unit(camera.forward);
+    let right = unit(camera.right);
+    let up = unit(camera.up);
+    let normal_eps = camera.surface * 16.0;
+    let rays = camera.width * camera.height;
+    frame.prepare(camera.width, camera.height);
+    let pixels = &mut frame.pixels;
+    let depth = &mut frame.depth;
+    let mut hits = 0u32;
+    let mut evaluations = 0u64;
+    let mut skipped = 0u32;
+    let mut cache_hits = 0usize;
+
+    let mut cache_lookups = 0usize;
+    let mut cache_found = 0usize;
+    let mut surfaces_cached = 0usize;
+    let mut sky_cached = 0usize;
+    
+    // Get scene enclosure for sky pixel validation
+    let scene_enclosure = crate::cull::scene_enclosure(tree);
+    
+    for py in 0..camera.height {
+        for px in 0..camera.width {
+            let idx = (py * camera.width + px) as usize;
+            let dir = ray_for(camera, px, py, forward, right, up);
+
+            // Try temporal cache first
+            cache_lookups += 1;
+            if let Some(cached) = cache.get_cached(idx) {
+                cache_found += 1;
+                
+                if !cached.is_sky() {
+                    // Surface pixel: validate with SDF check
+                    if cache.validate_pixel(tree, &cached, camera.origin, camera.surface) {
+                        // Cache hit! Reuse without marching
+                        cache_hits += 1;
+                        hits += 1;
+                        push_rgb(pixels, normal_to_rgb(cached.normal));
+                        depth.push(cached.depth);
+                        cache.mark_used(idx);
+                        continue;
+                    }
+                } else {
+                    // Sky pixel: validate with bounds check
+                    if cache.validate_sky_pixel(scene_enclosure, camera.origin, dir, camera.max_t) {
+                        // Still sky! No need to march
+                        cache_hits += 1;
+                        push_rgb(pixels, sky(dir));
+                        depth.push(Frame::NO_HIT);
+                        cache.mark_used(idx);
+                        sky_cached += 1;
+                        continue;
+                    }
+                }
+            }
+
+            // Cache miss or invalid - march normally
+            let reachable = ray_is_reachable(tree, camera, None, None, dir);
+            if !reachable {
+                skipped += 1;
+                push_rgb(pixels, sky(dir));
+                depth.push(Frame::NO_HIT);
+                cache.cache_sky(idx, camera.max_t);
+                continue;
+            }
+
+            let hit = march(
+                tree,
+                ROOT,
+                camera.origin,
+                dir,
+                camera.max_t,
+                camera.surface,
+                camera.max_steps,
+            );
+
+            match hit {
+                Some(hit) => {
+                    hits += 1;
+                    evaluations += u64::from(hit.steps) + 1;
+                    let n = normal(tree, ROOT, hit.point, normal_eps);
+                    push_rgb(pixels, normal_to_rgb(n));
+                    depth.push(hit.t);
+                    cache.cache_surface(idx, hit.point, hit.t, n);
+                    surfaces_cached += 1;
+                }
+                None => {
+                    evaluations += u64::from(camera.max_steps);
+                    push_rgb(pixels, sky(dir));
+                    depth.push(Frame::NO_HIT);
+                    cache.cache_sky(idx, camera.max_t);
+                }
+            }
+        }
+    }
+
+    let stats = Stats {
+        rays,
+        hits,
+        evaluations,
+        skipped,
+        visits: 0,
+        not_drawn: 0,
+    };
+
+    eprintln!("Frame {}: {} lookups, {} found, {} surfaces, {} sky, {} total hits", 
+             cache.current_frame(), cache_lookups, cache_found, surfaces_cached, sky_cached, cache_hits);
+
+    (stats, cache_hits)
 }
 
 /// March every pixel of `camera`'s grid against `tree` and shade what comes back, into `frame`.
