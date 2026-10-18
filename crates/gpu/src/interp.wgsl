@@ -677,7 +677,7 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     // Delta rendering: skip pixels that haven't changed
     let dirty_word_idx = index / 32u;
     let dirty_bit = 1u << (index % 32u);
-    let is_dirty = (dirty_mask[dirty_word_idx] & dirty_bit) != 0u;
+    let is_dirty = (atomicLoad(&dirty_mask[dirty_word_idx]) & dirty_bit) != 0u;
     
     if !is_dirty {
         // Pixel unchanged - reuse cached depth directly, no marching needed
@@ -727,7 +727,7 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     if use_cache {
         // Cache hit - reuse cached surface and mark pixel as clean
         distances[index] = cached_t;
-        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit; // Clear dirty bit
+        atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit); // Clear dirty bit atomically
         return;
     }
     
@@ -735,7 +735,7 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     if !ray_reaches_scene(cam.root, origin, direction, max_t, surface_tolerance) {
         distances[index] = UNSUPPORTED;
         // Mark sky pixels as clean (they'll stay sky unless camera moves)
-        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit;
+        atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit);
         return;
     }
     
@@ -762,10 +762,10 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
         cached_metadata[index] = vec4<u32>(current_frame, 0u, bitcast<u32>(max_t), 1u);
         
         // Mark pixel as clean after successful march
-        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit;
+        atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit);
     } else if index < arrayLength(&cached_positions) {
         // Sky pixel - mark cache as invalid
         cached_metadata[index] = vec4<u32>(0u, 0u, 0u, 0u);
-        dirty_mask[dirty_word_idx] = dirty_mask[dirty_word_idx] & ~dirty_bit;
+        atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit);
     }
 }
