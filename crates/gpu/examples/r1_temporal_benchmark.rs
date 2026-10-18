@@ -19,6 +19,35 @@ use gpu::device::{GpuCamera, Interpreter};
 use render::{Tree, ROOT};
 use std::time::Instant;
 
+/// Try to open an interpreter with a real GPU, preferring discrete over integrated  
+fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
+    // Manually select the MX250 since Interpreter::open() is picking the wrong adapter
+    let instance = wgpu::Instance::default();
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+    
+    // Find the first DiscreteGpu (MX250 or similar)
+    for adapter in &adapters {
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::DiscreteGpu {
+            println!("Using adapter: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            return Interpreter::open_with_adapter(adapter.clone())
+                .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
+        }
+    }
+    
+    // Fall back to IntegratedGpu if no discrete GPU found
+    for adapter in &adapters {
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.contains("Microsoft") {
+            println!("Using integrated GPU: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            return Interpreter::open_with_adapter(adapter.clone())
+                .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
+        }
+    }
+    
+    Err("No suitable GPU adapter found".to_string())
+}
+
 fn scene() -> Tree {
     let record = |kind: u16, arity: u16, subtree: u32, first: u16, len: u16, root: bool| {
         NodeRecord([
@@ -39,10 +68,21 @@ fn scene() -> Tree {
 }
 
 fn main() {
-    let interpreter = match Interpreter::open() {
+    // List available adapters for debugging
+    let instance = wgpu::Instance::default();
+    let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+    println!("Available adapters ({} total):", adapters.len());
+    for adapter in &adapters {
+        let info = adapter.get_info();
+        println!("  - {} [{:?}, {:?}]", info.name, info.device_type, info.backend);
+    }
+    println!();
+    
+    // Try to open an interpreter with a real GPU
+    let interpreter = match try_open_with_gpu_preference() {
         Ok(i) => i,
-        Err(_) => {
-            println!("SKIP r1_temporal_benchmark: no device");
+        Err(e) => {
+            println!("SKIP r1_temporal_benchmark: {}", e);
             return;
         }
     };

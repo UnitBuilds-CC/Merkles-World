@@ -325,6 +325,98 @@ impl Interpreter {
         Err(OpenError::NoAdapter)
     }
 
+    /// Open an interpreter with a specific adapter, bypassing the automatic selection.
+    /// This allows benchmarks and tests to force a particular GPU instead of relying on wgpu's ranking.
+    pub fn open_with_adapter(adapter: wgpu::Adapter) -> Result<Interpreter, OpenError> {
+        let info = adapter.get_info();
+        let adapter_name = format!("{} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+        let instance = wgpu::Instance::default(); // Dummy instance, not used after device creation
+        
+        pollster::block_on(Self::from_adapter(adapter, instance, adapter_name))
+    }
+
+    async fn from_adapter(
+        adapter: wgpu::Adapter,
+        instance: wgpu::Instance,
+        adapter_name: String,
+    ) -> Result<Interpreter, OpenError> {
+        // Temporal surface cache needs 8 storage buffers (4 core + 4 cache) across 2 bind groups.
+        // Downlevel defaults only allow 4 storage buffers total, so we request desktop-class limits.
+        // This still works on integrated GPUs and most mobile GPUs - the MX250 supports it fine.
+        let mut limits = wgpu::Limits::downlevel_defaults();
+        limits.max_storage_buffers_per_shader_stage = 8;
+        limits.max_bind_groups = 2;
+        
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("a07-agreement"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                ..Default::default()
+            })
+            .await
+            .map_err(|_| OpenError::NoDevice)?;
+
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("a07-master-interpreter"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("interp.wgsl").into()),
+        });
+        // `layout: None` lets wgpu derive the bind group layout from the shader itself, which is the
+        // point of this check: if the WGSL's bindings and the CPU side's uploads disagree, the failure
+        // surfaces as a validation error here rather than as a shader quietly reading the wrong buffer.
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("evaluate_points"),
+            layout: None,
+            module: &module,
+            entry_point: Some("evaluate_points"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let march_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("march_rays"),
+            layout: None,
+            module: &module,
+            entry_point: Some("march_rays"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        // Derived from the entry point, like the other two, so the bindings this pipeline requires are
+        // exactly the ones `march_rays_from_camera` reads: no ray buffer at all, plus the camera block.
+        // If the shader and this file disagree, validation says so at open() rather than as a wrong picture.
+        let camera_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("march_rays_from_camera"),
+            layout: None,
+            module: &module,
+            entry_point: Some("march_rays_from_camera"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        // The counted march: one pipeline over the same module, whose entry point differs only in writing
+        // its depth at a doubled stride so the arm's per-ray tally has somewhere to go. Derived layout as
+        // above, so a binding the counted entry point stops reading would show up here as a validation
+        // error rather than as a tally that silently counts nothing.
+        let counted_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("march_rays_counted"),
+            layout: None,
+            module: &module,
+            entry_point: Some("march_rays_counted"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        Ok(Interpreter {
+            device,
+            queue,
+            instance,
+            window_adapter: adapter,
+            pipeline,
+            march_pipeline,
+            camera_pipeline,
+            counted_pipeline,
+            adapter: adapter_name,
+        })
+    }
+
     async fn open_with(fallback: bool) -> Result<Interpreter, OpenError> {
         let instance = wgpu::Instance::default();
         // Chosen by device_type, not by request_adapter's power preference: with HighPerformance this still
@@ -360,11 +452,18 @@ impl Interpreter {
         let adapter = adapters.into_iter().next().ok_or(OpenError::NoAdapter)?;
         let info = adapter.get_info();
         let adapter_name = format!("{} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+        // Temporal surface cache needs 8 storage buffers (4 core + 4 cache) across 2 bind groups.
+        // Downlevel defaults only allow 4 storage buffers total, so we request desktop-class limits.
+        // This still works on integrated GPUs and most mobile GPUs - the MX250 supports it fine.
+        let mut limits = wgpu::Limits::downlevel_defaults();
+        limits.max_storage_buffers_per_shader_stage = 8;
+        limits.max_bind_groups = 2;
+        
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("a07-agreement"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: limits,
                 ..Default::default()
             })
             .await
