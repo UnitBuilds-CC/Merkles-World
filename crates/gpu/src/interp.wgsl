@@ -78,10 +78,6 @@ const UNSUPPORTED: f32 = 3.402823466e+38;
 // Using atomic operations to prevent race conditions when multiple threads clear bits in same word
 @group(1) @binding(4) var<storage, read_write> dirty_mask: array<atomic<u32>>;
 
-// Indirect dispatch support: compacted list of dirty pixel indices and count
-@group(1) @binding(5) var<storage, read_write> dirty_indices: array<u32>;
-@group(1) @binding(6) var<storage, read_write> dirty_count: atomic<u32>;
-
 const DEPTH: u32 = 32u;
 
 struct Frame {
@@ -666,90 +662,6 @@ fn ray_reaches_scene(root: u32, origin: vec3<f32>, dir: vec3<f32>, max_t: f32, m
         break;
     }
     return result;
-}
-
-/// Compaction pass: builds a list of dirty pixel indices for indirect dispatch.
-/// Each thread checks its pixel's dirty bit and appends to dirty_indices if dirty.
-/// Uses atomic increment on dirty_count to avoid races.
-@compute @workgroup_size(256)
-fn compact_dirty_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = id.x;
-    if index >= header.point_count {
-        return;
-    }
-    
-    // Check if this pixel is dirty
-    let dirty_word_idx = index / 32u;
-    let dirty_bit = 1u << (index % 32u);
-    let is_dirty = (atomicLoad(&dirty_mask[dirty_word_idx]) & dirty_bit) != 0u;
-    
-    if is_dirty {
-        // Atomically increment counter and store index
-        let write_pos = atomicAdd(&dirty_count, 1u);
-        dirty_indices[write_pos] = index;
-    }
-}
-
-/// March only the dirty pixels listed in dirty_indices.
-/// Dispatched indirectly based on dirty_count from compaction pass.
-@compute @workgroup_size(64)
-fn march_dirty_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx_in_list = id.x;
-    
-    // Read total dirty count
-    let total_dirty = atomicLoad(&dirty_count);
-    if idx_in_list >= total_dirty {
-        return;
-    }
-    
-    // Get the actual pixel index from the compacted list
-    let index = dirty_indices[idx_in_list];
-    if index >= header.point_count {
-        return;
-    }
-    
-    // Extract camera parameters
-    let width = u32(cam.grid.x);
-    let height = u32(cam.grid.y);
-    let px = f32(index % width);
-    let py = f32(index / width);
-    
-    // Ray direction from precomputed camera basis
-    let ndc_x = (2.0 * (px + 0.5) / f32(width) - 1.0) * cam.geom.y;
-    let ndc_y = 1.0 - 2.0 * (py + 0.5) / f32(height);
-    let direction = normalize(cam.forward + cam.right * (ndc_x * cam.geom.x) + cam.up * (ndc_y * cam.geom.x));
-    
-    // March the ray
-    let surface_tolerance = bitcast<f32>(header.march_surface_bits);
-    let max_t = cam.geom.z;
-    let origin = cam.origin;
-    
-    march_one(index, cam.root, origin, direction, max_t);
-    
-    // Update cache with new surface data
-    let hit_t = distances[index];
-    if hit_t != UNSUPPORTED && index < arrayLength(&cached_positions) {
-        let hit_world_pos = origin + direction * hit_t;
-        cached_positions[index] = hit_world_pos;
-        cached_depths[index] = hit_t;
-        cached_normals[index] = vec3<f32>(0.0);
-        
-        let current_frame = header.stack_depth;
-        cached_metadata[index] = vec4<u32>(current_frame, 0u, bitcast<u32>(max_t), 1u);
-        
-        // Mark pixel as clean
-        let dirty_word_idx = index / 32u;
-        let dirty_bit = 1u << (index % 32u);
-        atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit);
-    } else if index < arrayLength(&cached_positions) {
-        // Sky pixel
-        cached_metadata[index] = vec4<u32>(0u, 0u, 0u, 0u);
-        
-        // Mark as clean
-        let dirty_word_idx = index / 32u;
-        let dirty_bit = 1u << (index % 32u);
-        atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit);
-    }
 }
 
 /// The camera frame, culled per ray with temporal surface caching.
