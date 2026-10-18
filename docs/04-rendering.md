@@ -2205,7 +2205,9 @@ capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approache
 5. **Timing on a non-admissible device.** On a GeForce MX250 [Vulkan, DiscreteGpu], the culled frame at cap 96 is
    ~30% faster (798 ms vs 1140 ms median of 7 rounds). Durations assert nothing (ADR-017); only the integers above
    are evidence. R1's 16.67 ms budget remains unmet on this device (47.9x), which is expected since the MX250 is not
-   the named GTX 1070 instrument.
+   the named GTX 1070 instrument. The same measurement on buildbox's GTX 1070 is still owed — the MX250 lost the
+   device at cap 64 on 1080p, while the admissible instrument completes that cap, so the saving percentage on the
+   gate's own machine is an open number.
 
 Durations assert nothing (ADR-017); spreads here are 4.08-10.49 ms. The example prints SKIP on adapter-less machines
 (CI runners have no GPU), so the CI step is informational there and the asserted rows are the anchor-grid ones.
