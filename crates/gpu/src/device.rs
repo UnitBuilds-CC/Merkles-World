@@ -35,6 +35,11 @@ pub enum OpenError {
 pub struct Interpreter {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Kept because a surface is only usable with the instance and adapter it was created against: dropping
+    /// the instance that enumerated the adapter would leave a window with no device to configure it against.
+    /// Both are refcounted inside wgpu, so this costs two `Arc` clones at `open` and nothing per frame.
+    instance: wgpu::Instance,
+    window_adapter: wgpu::Adapter,
     pipeline: wgpu::ComputePipeline,
     march_pipeline: wgpu::ComputePipeline,
     camera_pipeline: wgpu::ComputePipeline,
@@ -195,6 +200,32 @@ pub struct CameraFrame {
     /// The step cap and surface tolerance `write_camera` last put on the device for this frame, so a march
     /// cannot report a law the frame never received.
     law: Option<(u32, f32)>,
+}
+
+/// The render pass that puts a marched frame's depths on a window, made once per (frame, surface format).
+///
+/// AS4's frame-side clause counts what a frame creates, and a frame that rebuilds a pipeline, a bind group and
+/// a uniform every 16 ms is the churn this crate has been deleting one buffer at a time. `draw` creates one
+/// command encoder — which is the shape of a wgpu frame, not an allocation of ours — and touches no buffer:
+/// the fragment stage reads the compute stage's storage buffer in place, so the depth bytes never leave the
+/// device. Kept opaque for the same reason as `CameraVariant`: `wgpu::RenderPipeline` stays out of the API.
+#[derive(Debug)]
+pub struct Present {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::RenderPipeline,
+    bind: wgpu::BindGroup,
+    extent: wgpu::Buffer,
+    depth_bytes: u64,
+}
+
+impl Present {
+    /// The device bytes the render pass reads: the 16-byte extent and the frame's own depth buffer. Printed by
+    /// any caller that wants to state what a windowed frame costs on the bus — which is nothing, since both
+    /// numbers are resident before the frame and stay there through it.
+    pub fn bound_bytes(&self) -> u64 {
+        self.extent.size() + self.depth_bytes
+    }
 }
 
 /// Where the camera is, in the form `interp.wgsl`'s `CameraUniform` wants.
@@ -387,6 +418,8 @@ impl Interpreter {
         Ok(Interpreter {
             device,
             queue,
+            instance,
+            window_adapter: adapter,
             pipeline,
             march_pipeline,
             camera_pipeline,
@@ -1354,6 +1387,131 @@ impl Interpreter {
         Ok(start.elapsed().as_secs_f64() * 1000.0)
     }
 
+    /// The surface a window draws into, taken from the instance this device was opened against. Generic over
+    /// anything that can produce raw window handles rather than over a windowing crate, so `winit` stays a
+    /// dev-dependency and the boot's headless published output cannot acquire a display requirement.
+    pub fn open_surface<'w, W>(&self, window: W) -> Result<wgpu::Surface<'w>, String>
+    where
+        W: raw_window_handle::HasWindowHandle
+            + raw_window_handle::HasDisplayHandle
+            + Send
+            + Sync
+            + 'w,
+    {
+        self.instance
+            .create_surface(window)
+            .map_err(|error| format!("create_surface: {error}"))
+    }
+
+    /// Agree a drawable size with the window, configure the surface at it, and return that configuration.
+    ///
+    /// The size is not advisory: a `CameraFrame` is allocated for a fixed pixel count, so a window that is
+    /// resized needs a new frame, and the caller that builds one is the caller that has to know what the
+    /// surface now expects. Zero is refused rather than marched: a 0-pixel frame is a dispatch that does
+    /// nothing and a clear that paints nothing, which would read as a black window rather than as an error.
+    pub fn configure_surface(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        width: u32,
+        height: u32,
+    ) -> Result<wgpu::SurfaceConfiguration, String> {
+        if width == 0 || height == 0 {
+            return Err(format!(
+                "a {width}x{height} drawable has no pixels to march"
+            ));
+        }
+        let config = surface
+            .get_default_config(&self.window_adapter, width, height)
+            .ok_or_else(|| "no surface configuration this adapter accepts".to_string())?;
+        surface.configure(&self.device, &config);
+        Ok(config)
+    }
+
+    /// Attach a window (or any surface texture) to a marched frame: one render pipeline, one bind group and
+    /// one 16-byte extent block, created here and reused by every frame after the first.
+    ///
+    /// The bind group points at the frame's own `traced` buffer, so presenting costs no copy and no read-back
+    /// — the depths an R1 harness maps to the host stay on the device and are sampled straight from storage.
+    /// The pipeline's layout is derived from `present.wgsl` itself, exactly as the camera pipelines are: if
+    /// the shader stops reading the depth buffer, this call fails validation instead of painting a window of
+    /// sky. The target format has to be the surface's, which is why it is an argument and not a constant.
+    pub fn begin_presentation(
+        &self,
+        frame: &CameraFrame,
+        target: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+        max_t: f32,
+    ) -> Present {
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("present-depth-ramp"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+            });
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("present-depth-ramp"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_full_screen"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    unclipped_depth: false,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_depth_ramp"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: target,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            });
+        // `max_t` is in the ramp because a distance without the scene's scale in it is arbitrary: 12 world
+        // units is a wall or the horizon depending on how far the camera can see.
+        let mut block = [0u8; 16];
+        for (offset, word) in [width, height, max_t.to_bits(), 0u32].iter().enumerate() {
+            block[offset * 4..offset * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        let extent = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("present-extent"),
+                contents: &block,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[entry(0, &extent), entry(1, &frame.traced)],
+        });
+        Present {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            depth_bytes: frame.traced.size(),
+            pipeline,
+            bind,
+            extent,
+        }
+    }
+
     /// Copy and map the depths of a frame that has already been marched, dispatching nothing. This is the
     /// read-back term on its own, so a caller can ask whether the bytes or the stepping is what a frame costs.
     /// The byte count is taken from the copy this call makes, not from an arithmetic figure the caller writes.
@@ -1409,6 +1567,48 @@ impl Interpreter {
         let out = buffer.slice(0..size).get_mapped_range().to_vec();
         buffer.unmap();
         Ok(out)
+    }
+}
+
+impl Present {
+    /// One frame on the window: encode the pass, submit, and let the surface present. Nothing is uploaded,
+    /// copied or mapped here — the depths the shader samples are the ones the march already put on the device.
+    ///
+    /// The submit is not waited on: a windowed frame that blocked on its own queue would be a benchmark with a
+    /// display attached, not a frame. Callers that need the march's numbers wait on `march_camera_frame`, which
+    /// does poll.
+    pub fn draw(&self, view: &wgpu::TextureView) {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("present"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("depth ramp"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.02,
+                            g: 0.03,
+                            b: 0.05,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
     }
 }
 

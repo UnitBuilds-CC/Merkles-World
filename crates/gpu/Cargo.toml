@@ -11,6 +11,10 @@ description = "docs/04's WGSL half: the A-07 master interpreter on a device, che
 contracts = { path = "../../contracts" }
 render = { path = "../render" }
 wgpu = "27"
+# Only the trait bounds a window must satisfy to have a surface attached to it, so that `gpu` can hand a
+# surface to a windowing library without depending on one. `winit` stays a dev-dependency: the boot's
+# published output is headless and must remain so.
+raw-window-handle = "0.6"
 env_logger = "0.11"
 pollster = "0.4"
 naga = { version = "27", features = ["wgsl-in"] }
@@ -21,6 +25,11 @@ memory = { path = "../memory" }
 # device draws the bytes it wrote. A dev-dependency keeps wgpu out of `assetc` and the compiler out of
 # every build that is not an example.
 assetc = { path = "../assetc" }
+# Windowing is a *presentation* dependency and an example's, not the renderer's: nothing on the boot path
+# needs a window, and `cargo run -p engine`'s published output must stay a headless 18 lines. The owner
+# cleared this class of dependency on 2026-10-18 (MIT/Apache-2.0, no copyleft) for the Phase 1 exit's
+# "renders a procedural SDF scene" half, which no headless harness can show.
+winit = "0.30"
 
 [lints]
 workspace = true

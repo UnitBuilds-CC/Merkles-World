@@ -2050,7 +2050,11 @@ Four readings, in the order the numbers support them:
    and the derived-capacity row on the same frame, same grid, same sequence, is 7.651 ms, **0.46x budget**. The
    saving is 91.67% at cap 64 and 90.71% at cap 8, so it is not a one-cap artifact.
 2. **What is not met is the product's row, not the instrument's.** The shipped binary still compiles `interp.wgsl`
-   with `const DEPTH = 32u`, and nothing on the boot path renders a frame to a window yet. The gate becomes the
+   with `const DEPTH = 32u`. The window has arrived since (2026-10-18, `cargo run --release -p gpu --example
+   demo_window`, which prints its own `// displayed` and `// windowed frame` lines), but it is an *example's*
+   window drawing through that same 32-deep module at 433.681 ms
+   a frame on the MX250, and the boot stays headless by design, so the display half of P1's exit is now a real
+   window rather than a missing one while R1's number remains the instrument's. The gate becomes the
    binary's own when the interpreter module is compiled from the loaded asset's declared depth - `assetc` already
    computes `cost.depth` and refuses an asset above its `max_depth` budget, so the number exists in the envelope the
    boot reads - and when that frame reaches a display. Both are open work, so **R1 stays unmet** and the 7.651 ms row

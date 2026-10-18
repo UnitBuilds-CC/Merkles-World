@@ -2,15 +2,65 @@
 //! involved, which is the finding: this check runs on all three CI architectures, including the Linux
 //! runner that reported no adapters at all.
 //!
-//! The teeth are the second test. A validator that always returns `Ok` would look identical to this one
-//! if nobody fed it a shader that has to fail, so a broken module goes through the same path and must be
-//! refused, with the reason in hand.
+//! The teeth are the `a_shader_that_should_not_compile_is_refused` test. A validator that always returns
+//! `Ok` would look identical to this one if nobody fed it a shader that has to fail, so a broken module goes
+//! through the same path and must be refused, with the reason in hand.
 
 use gpu::naga_validate::{declared_bindings, validate, ValidationError, INTERP};
+
+/// The presentation half, handed to naga exactly as `wgpu` would hand it. This is the only place in the
+/// repository that compiles `present.wgsl` on a machine with no adapter, which matters because the windowed
+/// example is the only thing that ever compiles it at all — and every CI runner either has no device or
+/// prints SKIP. A first draft of that shader named a constant by a name it no longer had and failed at
+/// `create_shader_module` on a laptop while trunk stayed green.
+const PRESENT: &str = include_str!("../src/present.wgsl");
 
 #[test]
 fn the_master_interpreter_validates_as_wgsl() {
     validate(INTERP).unwrap_or_else(|error| panic!("interp.wgsl was refused:\n{}", error.0));
+}
+
+#[test]
+fn the_presentation_shader_validates_as_wgsl() {
+    validate(PRESENT).unwrap_or_else(|error| panic!("present.wgsl was refused:\n{}", error.0));
+}
+
+#[test]
+fn the_presenting_pass_has_the_two_bindings_it_declares() {
+    // Two, not four: the render pass binds the extent block and the compute stage's own `traced` buffer, and
+    // it is a *separate* bind group from the march's, so it is not competing for `interp.wgsl`'s four
+    // storage slots. The order is the bind group's order — a silent insertion would have the fragment shader
+    // read the uniform as an array of f32 and paint a plausible, wrong picture.
+    assert_eq!(declared_bindings(PRESENT), vec![0, 1]);
+    assert!(
+        PRESENT.contains("@group(0) @binding(0) var<uniform> extent: Extent"),
+        "the extent is a uniform, not a fifth storage buffer"
+    );
+    assert!(
+        PRESENT.contains("@group(0) @binding(1) var<storage, read> depths: array<f32>"),
+        "the fragment stage samples the march's own depth buffer, in place"
+    );
+}
+
+#[test]
+fn the_sky_test_is_the_declared_constant_and_not_a_literal() {
+    // The no-surface threshold has one spelling in the shader. If a second `1.0e37`-looking literal appeared
+    // in the fragment body, a pixel the host counts as a hit could be painted as sky, and the windowed
+    // example's own verify step reads depths through the *host* rule — so the two would disagree in exactly
+    // the direction that shows a hole in the picture rather than an error.
+    assert!(
+        PRESENT.contains("if (t >= MISS)"),
+        "the shader must compare against the declared MISS constant"
+    );
+    let literals = PRESENT
+        .lines()
+        .filter(|line| !line.trim().starts_with("//"))
+        .filter(|line| line.contains("1.0e"))
+        .count();
+    assert_eq!(
+        literals, 1,
+        "the miss threshold appears {literals} times outside comments; only the `const MISS` line may carry it",
+    );
 }
 
 #[test]
