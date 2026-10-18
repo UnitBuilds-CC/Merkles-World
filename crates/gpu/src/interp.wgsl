@@ -75,8 +75,8 @@ const UNSUPPORTED: f32 = 3.402823466e+38;
 @group(1) @binding(3) var<storage, read_write> cached_metadata: array<vec4<u32>>; // [frame_id, entity_node, max_t_bits, flags]
 
 // Delta rendering: dirty mask tracks which pixels changed and need re-marching
-// 1 bit per pixel, packed as u32 words (32 pixels per word)
-@group(1) @binding(4) var<storage, read_write> dirty_mask: array<u32>;
+// Using atomic operations to prevent race conditions when multiple threads clear bits in same word
+@group(1) @binding(4) var<storage, read_write> dirty_mask: array<atomic<u32>>;
 
 const DEPTH: u32 = 32u;
 
