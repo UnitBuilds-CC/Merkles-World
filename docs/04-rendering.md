@@ -2011,10 +2011,14 @@ store and return the same `UNSUPPORTED` sentinel the read bound uses. `wgsl_vali
 holds the rule without a device: it counts the two stores and requires a bound within twelve lines above each, and
 planting an unguarded second-child push makes it report the read bound 40 lines up. On this content nothing about the
 picture moved — 605 surfaces on the 64x48 anchor, 33,769 of 230,400 in the windowed frame, 0 depths differing in any
-bit against the CPU reference — because a walk that succeeds never touches the new arm. What has not been re-measured
-on the named GTX 1070 is the price of the extra comparison per descent step, so the R1 rows below remain attributed to
-the pre-guard module until `r1_specialized_frame` runs there again (ADR-017: a row belongs to the instrument that
-produced it).
+bit against the CPU reference — because a walk that succeeds never touches the new arm. The price of the extra comparison was then measured on
+the named GTX 1070 with the same instrument (`r1_specialized_frame`, medians of 7 paired order-alternating rounds,
+2026-10-18): capacity 2 gives **3.955 / 6.536 / 7.589 ms** at caps 1 / 8 / 64 where the ladder table below publishes
+**3.979 / 6.611 / 7.651**, and the demo asset's depth-4 product rows give **36.272 and 49.494 ms** where they publish
+**36.184 and 49.424**. Every movement is under 1.2% and inside the cell's own spread, with identical surface counts
+(0 / 65,148 / 80,964) and identical bit-differing-depth counts (0), so the guard is free at this instrument's
+resolution and the R1 rows read the same on both modules (ADR-017: a row belongs to the instrument that produced it -
+and here the instrument produced it twice, once per module).
 
 The laptop's rows (GeForce RTX 3050, 320x240, same binary) put the same ratio in a different range: −88.13% at
 capacity 2 and +270.19% at 64, with its twin agreeing to −0.44% / −0.06%. So the *shape* — stack capacity dominates a
