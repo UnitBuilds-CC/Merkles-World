@@ -284,6 +284,23 @@ jobs:
       - name: R1 march vs read-back split (informational)
         run: cargo run --release -p gpu --example r1_march_alone
 
+      # The interpreter's per-invocation stack priced as a cost ladder: the camera pipeline is recompiled at
+      # DEPTH 2/4/8/16/32/64 by string substitution on the shipped module, so the march leg is timed once per
+      # capacity on the same frame. Asserted: every variant's 1080p depths agree with the shipped pipeline's with
+      # zero differing bits and identical hit counts, DEPTH 1 returns zero surfaces (the refusal the guard
+      # implements), and the DEPTH 32 twin recompiled in sequence is the control that caught this repo's
+      # first-in-sequence timing bias. Buildbox's GTX 1070 carries the rows; a runner prints its own SKIP line.
+      - name: R1 stack-capacity cost ladder (informational)
+        run: cargo run --release -p gpu --example r1_walk_cost_ladder
+
+      # R1's whole frame as one timed interval (dispatch + copy + map) at the shipped capacity and at the capacity
+      # render::tree_depth derives from the records. Asserted in both directions: capacity == depth reproduces the
+      # shipped frame bit for bit, capacity == depth - 1 renders empty (0 surfaces), and the two timed arms agree
+      # on every 1080p hit count - which is why R1's 5.5x over budget closes to 0.46x on this instrument while the
+      # gate itself stays unmet until the shipped binary compiles the module at its asset's declared depth.
+      - name: R1 frame at the depth its asset declares (informational)
+        run: cargo run --release -p gpu --example r1_specialized_frame
+
       # R2's edit loop: the frame re-marched at four slab occupancies, asserting placement every frame and
       # equal charged evaluations (18,284) across a 6000x change in occupancy. The medians are informational
       # and asserted nowhere - a laptop's median moved 2.5x between runs of identical code.
