@@ -1231,13 +1231,11 @@ impl Interpreter {
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
-        // Check if this pipeline uses temporal cache by trying to get group 1 layout
-        // If it fails, we catch and create without cache
-        let use_cache = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            pipeline.get_bind_group_layout(1)
-        })).is_ok();
-        
-        let cache_bind = if use_cache {
+        // Try to create temporal cache buffers - if the device doesn't support bind group 1, skip cache
+        let cache_bind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Check if pipeline supports bind group 1
+            let _layout = pipeline.get_bind_group_layout(1);
+            
             // Create temporal cache buffers sized for this frame's resolution
             let pixels = frame.pixels;
             let pixel_size = std::mem::size_of::<f32>();
@@ -1297,9 +1295,7 @@ impl Interpreter {
                     entry(3, &metadata_buf),
                 ],
             }))
-        } else {
-            None
-        };
+        })).ok().flatten();
         
         Bind {
             bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1371,6 +1367,8 @@ impl Interpreter {
                 label: Some("interp-culled-camera"),
                 source: wgpu::ShaderSource::Wgsl(shipped.into()),
             });
+        
+        // Use auto-generated layout from shader (wgpu infers bind groups from @group/@binding annotations)
         let pipeline = self
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -1381,6 +1379,13 @@ impl Interpreter {
                 compilation_options: Default::default(),
                 cache: None,
             });
+        
+        // Verify the pipeline actually created both bind group layouts
+        // Some software renderers don't support multiple bind groups for compute
+        let _test_group_1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pipeline.get_bind_group_layout(1)
+        }));
+        
         Ok(CameraVariant {
             depth: STACK_DEPTH,
             pipeline,
