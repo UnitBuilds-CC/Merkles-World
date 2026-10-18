@@ -1330,15 +1330,24 @@ impl Interpreter {
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
-        // Try to create temporal cache buffers - if the device doesn't support bind group 1, skip cache
-        let cache_bind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // Check if pipeline supports bind group 1
-            let _layout = pipeline.get_bind_group_layout(1);
+        // Create temporal cache buffers for bind group 1 if supported
+        // We'll try to create them; if get_bind_group_layout fails, skip cache
+        let cache_bind = (|| -> Option<wgpu::BindGroup> {
+            // First check if we can even get bind group layout 1
+            // If this panics or fails, the pipeline doesn't support it
+            let bg1_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pipeline.get_bind_group_layout(1)
+            }));
             
-            // Create temporal cache buffers sized for this frame's resolution
+            let bg1_layout = match bg1_result {
+                Ok(layout) => layout,
+                Err(_) => return None, // Pipeline doesn't support bind group 1
+            };
+            
             let pixels = frame.pixels;
             let pixel_size = std::mem::size_of::<f32>();
             
+            // Create temporal cache buffers sized for this frame's resolution
             // cached_positions: vec3<f32> per pixel (12 bytes each, padded to 16)
             let positions_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("temporal-cache-positions"),
@@ -1384,17 +1393,20 @@ impl Interpreter {
             let zero_bytes_meta = vec![0u8; pixels * 16];
             self.queue.write_buffer(&metadata_buf, 0, &zero_bytes_meta);
             
-            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("temporal-cache"),
-                layout: &pipeline.get_bind_group_layout(1),
-                entries: &[
-                    entry(0, &positions_buf),
-                    entry(1, &depths_buf),
-                    entry(2, &normals_buf),
-                    entry(3, &metadata_buf),
-                ],
-            }))
-        })).ok().flatten();
+            // Try to create the bind group - if this fails due to validation, return None
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("temporal-cache"),
+                    layout: &bg1_layout,
+                    entries: &[
+                        entry(0, &positions_buf),
+                        entry(1, &depths_buf),
+                        entry(2, &normals_buf),
+                        entry(3, &metadata_buf),
+                    ],
+                })
+            })).ok()
+        })();
         
         Bind {
             bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1478,12 +1490,6 @@ impl Interpreter {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        
-        // Verify the pipeline actually created both bind group layouts
-        // Some software renderers don't support multiple bind groups for compute
-        let _test_group_1 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            pipeline.get_bind_group_layout(1)
-        }));
         
         Ok(CameraVariant {
             depth: STACK_DEPTH,
