@@ -13,6 +13,7 @@ pub mod viewport;
 pub mod inspector;
 pub mod material_panel;
 pub mod export;
+pub mod gpu_renderer;
 
 use assetc::{EntityDef, Shape};
 

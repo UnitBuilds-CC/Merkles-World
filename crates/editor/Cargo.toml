@@ -23,6 +23,9 @@ egui = "0.29"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 
+# Buffer utilities for GPU rendering
+bytemuck = "1.21"
+
 # Logging
 env_logger = "0.11"
 

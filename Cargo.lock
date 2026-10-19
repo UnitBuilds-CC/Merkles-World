@@ -1048,6 +1048,7 @@ name = "editor"
 version = "0.1.0"
 dependencies = [
  "assetc",
+ "bytemuck",
  "contracts",
  "coords",
  "eframe",
