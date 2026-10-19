@@ -154,11 +154,24 @@ pixels instead:
   mistake got avoided instead of re-litigated.
 - **The interactive window** (`--example entity_editor`, run in release) adds orbit, zoom, the inspector,
   the material panel, and a facing compass projected through the same camera basis as the raster.
+- **The window's dependency surface is trimmed, and that is load-bearing.** `crates/editor` asks for
+  `eframe` with `default-features = false` and re-enables only `default_fonts`, `glow` and `x11`.
+  eframe's defaults also turn on `accesskit` and `web_screen_reader`, which on Linux pull
+  `accesskit_unix → zbus → zbus_names`/`zvariant`/`zvariant_derive` (three RUSTSEC *unmaintained*
+  advisories) and `zbus_xml → quick-xml` below 0.41 (two more, with real DoS ranges). Screen-reader
+  support is not something this tool claims, so those five advisories went away by not taking the
+  feature rather than by waiving them. What could not be trimmed is recorded in `deny.toml`:
+  `ttf-parser` (RUSTSEC-2026-0192, *unmaintained* rather than vulnerable, reached through
+  `epaint → ab_glyph → owned_ttf_parser`, which is a non-optional dependency — the only alternative is
+  shipping a font file, which §6 bans), and the two licences `epaint_default_fonts` is declared under,
+  `OFL-1.1` and `LicenseRef-UFL-1.0`, which cover font data inside a dependency rather than anything
+  added to this repository.
 
-The preview is a debug-build CPU march, so it is an authoring instrument and not a frame budget: the
-six-angle dump measured 11.0–17.1 s per 480×360 frame on the machine it was built on, and the editor's
-own 256×192 preview 2.5–4.6 s. Release-build timings have not been measured, so run the editor with
-`--release`. Neither number is an R1 measurement — §3's hot-path bans do not apply to a tool, but nothing
+The preview is a CPU march rather than a device march, so it is an authoring instrument and not a frame
+budget. In a debug build the six-angle dump measured 11.0–17.1 s per 480×360 frame and the editor's own
+256×192 preview 2.5–4.6 s; the same six-angle dump in a **release** build measures 1.20–1.43 s per
+480×360 frame (2026-10-20, this machine, the 32-node `pig.ron`), which is why both examples are run with
+`--release`. No number here is an R1 measurement — §3's hot-path bans do not apply to a tool, but nothing
 it prints is evidence about a game frame.
 
 ## Runtime lifecycle

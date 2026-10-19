@@ -1635,8 +1635,10 @@ impl Bind {
 
         let view = slice.get_mapped_range();
         let words: Vec<u32> = view
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| u32::from_le_bytes(*chunk))
             .collect();
         drop(view);
         staging.unmap();

@@ -24,6 +24,15 @@ all-features = true
 # Drop this line if paste leaves the graph; its absence is the signal, not a cleanup task.
 ignore = [
     "RUSTSEC-2024-0436",
+    # ttf-parser is reported **unmaintained**, not vulnerable: RUSTSEC-2026-0192 has no CVE and no bad
+    # version range, and the id is again taken from cargo-deny's own CI output. It cannot be trimmed
+    # away either — `ab_glyph` depends on `owned_ttf_parser` non-optionally, `epaint` depends on
+    # `ab_glyph` for every glyph it draws, so the only way out of it is to turn off egui's
+    # `default_fonts` and hand the editor a font file, which AGENTS.md §6 forbids outright (a .ttf is
+    # an art asset). The reach is also tool-only: `editor` is the sole workspace member that pulls it,
+    # and §3 keeps the editor off the frame path, so nothing the runtime hashes or ships touches it.
+    # Dropping this line returns trunk to that policy question, which is why it is recorded here.
+    "RUSTSEC-2026-0192",
 ]
 
 [bans]
@@ -73,6 +82,17 @@ allow = [
     # it cannot be feature-trimmed away, as the spike branch proved. Reverting this line
     # returns trunk to a policy question, which is the point of recording it here.
     "CC0-1.0",
+    # epaint_default_fonts — the two UI fonts egui embeds — is licensed
+    # "(MIT OR Apache-2.0) AND OFL-1.1 AND LicenseRef-UFL-1.0", so both font licences have to be
+    # named before the editor can draw a single label. OFL-1.1 is OSI-approved and FSF-free: it
+    # obliges nothing of a distributor that ships the font unmodified inside a binary, and only
+    # requires that a *modified* font stay OFL. UFL-1.0 (Ubuntu Font Licence) is the same BSD-like
+    # permission with the same reservation. Neither is copyleft for our use, and neither can be
+    # feature-trimmed: turning off egui's `default_fonts` means supplying our own font file, which
+    # AGENTS.md §6 bans outright — a .ttf is an art asset. Note these licenses cover data files
+    # inside a dependency crate, not anything added to this repository.
+    "OFL-1.1",
+    "LicenseRef-UFL-1.0",
 ]
 
 [licenses.private]
