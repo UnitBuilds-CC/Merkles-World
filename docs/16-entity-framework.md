@@ -284,12 +284,18 @@ crates/entity/
 
 ## Open questions
 
-| ID | Question | Why it matters | Next action |
-|----|----------|----------------|-------------|
-| **OQ-63** | Should entity transforms use quaternions or Euler angles? Quaternions avoid gimbal lock but cost more memory (4 f32 vs 3 f32) and require normalization | Determines serialization size and rotation API ergonomics | Decide based on whether entities ever rotate freely (mobs turning) vs fixed orientations (placed blocks) |
-| **OQ-64** | How many entities per region is reasonable? 100? 1000? 10,000? | Determines BVH depth, update cost, network bandwidth | Spike: spawn N entities in one region, measure frame time and memory |
-| **OQ-65** | Should entity AI run on CPU or WASM? CPU is faster but less sandboxed; WASM is safe but adds overhead | Security vs performance tradeoff for modded entities | Decide with doc 08's trust model; default to CPU for built-in entities, WASM for mods |
-| **OQ-66** | How does entity state merge when two players edit the same entity in one epoch? | Multiplayer consistency (OQ-35) | Define merge rules: LWW for position, CRDT set for inventory, last-writer for flags |
+The four questions this doc raised live in the register where every `OQ` lives,
+[doc 13 § Modding & content](13-risks-open-questions.md), and not here — a question defined in two
+documents is a question that answers differently in each. In short, so the reader knows what is
+waiting:
+
+- **OQ-63** — entity rotation representation. Note that `[f32; 4]` is already what
+  `assetc::EntityDef` carries, so this is now a ratification, not a choice.
+- **OQ-64** — how many entities per region, which nothing in `crates/entity` currently bounds.
+- **OQ-65** — CPU or WASM for entity AI, which is OQ-20's question for mods arriving for mobs, and
+  is blocked on the mod side by OQ-41's export-lint decision.
+- **OQ-66** — how two peers' edits to one entity merge, which is where OQ-61's refused divergence
+  lands once the record is an entity rather than a voxel.
 
 ## Verification gates
 
