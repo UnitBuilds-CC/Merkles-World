@@ -184,6 +184,11 @@ pub struct Bind {
     bind: wgpu::BindGroup,
     /// Optional second bind group for temporal cache buffers (desktop only).
     cache_bind: Option<wgpu::BindGroup>,
+    /// Dirty mask buffer for delta rendering - allows CPU-side invalidation of cached pixels.
+    dirty_mask_buf: Option<wgpu::Buffer>,
+    /// Width and height for calculating pixel indices from rectangles.
+    width: u32,
+    height: u32,
 }
 
 /// A frame whose rays the device generates itself, from a camera block instead of a ray list.
@@ -195,6 +200,8 @@ pub struct Bind {
 #[derive(Debug)]
 pub struct CameraFrame {
     pub pixels: usize,
+    pub width: u32,
+    pub height: u32,
     header: wgpu::Buffer,
     camera: wgpu::Buffer,
     traced: wgpu::Buffer,
@@ -1105,6 +1112,9 @@ impl Interpreter {
                 ],
             }),
             cache_bind: None, // Regular frames don't use temporal cache
+            dirty_mask_buf: None,
+            width: 0,
+            height: 0,
         }
     }
 
@@ -1223,6 +1233,8 @@ impl Interpreter {
         let depth_bytes = (pixels * 4) as u64;
         CameraFrame {
             pixels,
+            width,
+            height,
             header: self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("camera-header"),
                 size: 16,
@@ -1323,6 +1335,9 @@ impl Interpreter {
                 ],
             }),
             cache_bind: None,
+            dirty_mask_buf: None,
+            width: frame.width,
+            height: frame.height,
         }
     }
 
@@ -1433,9 +1448,87 @@ impl Interpreter {
                 ],
             }),
             cache_bind: Some(cache_bind),
+            dirty_mask_buf: Some(dirty_mask_buf),
+            width: frame.width,
+            height: frame.height,
         }
     }
+}
 
+impl Bind {
+    /// Invalidate a rectangular region of the dirty mask, forcing those pixels to be re-marched.
+    /// 
+    /// This simulates entity movement by marking pixels within a bounding box as dirty.
+    /// The region is specified in pixel coordinates (x, y, width, height).
+    /// 
+    /// # Arguments
+    /// * `queue` - The wgpu queue to submit the write to
+    /// * `x`, `y` - Top-left corner of the region in pixels
+    /// * `w`, `h` - Width and height of the region in pixels
+    pub fn invalidate_region(&self, queue: &wgpu::Queue, x: u32, y: u32, w: u32, h: u32) {
+        let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
+            return; // No dirty mask buffer, nothing to invalidate
+        };
+        
+        let width = self.width;
+        
+        // Calculate pixel range
+        let x_start = x.min(width);
+        let y_start = y.min(self.height);
+        let x_end = (x + w).min(width);
+        let y_end = (y + h).min(self.height);
+        
+        // Convert pixel rectangle to dirty mask words
+        // Each u32 word contains 32 pixels (1 bit per pixel)
+        let mut dirty_words = Vec::new();
+        
+        for py in y_start..y_end {
+            for px in x_start..x_end {
+                let pixel_idx = py * width + px;
+                let word_idx = (pixel_idx / 32) as usize;
+                let bit_idx = pixel_idx % 32;
+                
+                // Ensure we have enough space
+                while dirty_words.len() <= word_idx {
+                    dirty_words.push(0u32);
+                }
+                
+                // Set the bit
+                dirty_words[word_idx] |= 1u32 << bit_idx;
+            }
+        }
+        
+        // Write only the modified words to GPU
+        if !dirty_words.is_empty() {
+            // Find min/max word indices to minimize transfer
+            let min_word = dirty_words.iter().position(|&w| w != 0).unwrap_or(0);
+            let max_word = dirty_words.len() - 1 - dirty_words.iter().rev().position(|&w| w != 0).unwrap_or(0);
+            
+            let byte_offset = (min_word * 4) as u64;
+            
+            // Convert to bytes for writing
+            let bytes: Vec<u8> = dirty_words[min_word..=max_word]
+                .iter()
+                .flat_map(|w| w.to_le_bytes().to_vec())
+                .collect();
+            
+            queue.write_buffer(dirty_mask_buf, byte_offset, &bytes);
+        }
+    }
+    
+    /// Invalidate all pixels (force full re-march on next frame)
+    pub fn invalidate_all(&self, queue: &wgpu::Queue) {
+        let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
+            return;
+        };
+        
+        let total_words = ((self.width * self.height + 31) / 32) as usize;
+        let all_dirty: Vec<u8> = vec![0xFF; total_words * 4];
+        queue.write_buffer(dirty_mask_buf, 0, &all_dirty);
+    }
+}
+
+impl Interpreter {
     /// Compile the shipped interpreter with its `DEPTH` capacity replaced, for the cost ladder. Refuses rather
     /// than silently handing back the shipped module: the pattern has to be present exactly once, because a
     /// ladder whose rows are all the same pipeline would print a stack price of zero and look like a finding.
