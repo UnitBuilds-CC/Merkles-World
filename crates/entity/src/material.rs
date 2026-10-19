@@ -31,9 +31,9 @@ pub struct Material {
     pub noise_frequency: f32,
 }
 
-impl Material {
-    /// Default gray material
-    pub fn default() -> Self {
+/// The registry's neutral entry: mid gray, matte, no noise.
+impl Default for Material {
+    fn default() -> Self {
         Self {
             base_color: [0.5, 0.5, 0.5],
             roughness: 0.8,
@@ -43,7 +43,9 @@ impl Material {
             noise_frequency: 1.0,
         }
     }
+}
 
+impl Material {
     /// Pink pig skin material
     pub fn pig_skin() -> Self {
         Self {

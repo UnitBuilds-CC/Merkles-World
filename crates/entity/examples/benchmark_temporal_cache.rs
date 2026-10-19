@@ -28,8 +28,8 @@ struct BenchmarkResult {
     time_ms: f64,
 }
 
-impl std::fmt::Display for BenchmarkResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for BenchmarkResult {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "{:<20} | Frames: {:3} | Dirty/frame: {:5.1} | Cache hit: {:5.1}% | Time: {:6.2}ms",
@@ -107,7 +107,7 @@ fn run_benchmark(
         name,
         total_frames: frames,
         avg_dirty_per_frame: avg_moved,
-        cache_hit_rate: cache_hit_rate.max(0.0).min(1.0),
+        cache_hit_rate: cache_hit_rate.clamp(0.0, 1.0),
         time_ms: elapsed,
     }
 }

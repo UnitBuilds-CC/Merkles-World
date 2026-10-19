@@ -37,7 +37,7 @@ fn main() {
     };
 
     // Spawn 3 entities at different positions
-    let id1 = entity_mgr.spawn(
+    let _id1 = entity_mgr.spawn(
         shape.clone(),
         Transform::at([0.0, 0.0, 0.0]),
         EntityState::alive(0),
@@ -51,7 +51,7 @@ fn main() {
         entity_range,
     );
 
-    let id3 = entity_mgr.spawn(
+    let _id3 = entity_mgr.spawn(
         shape.clone(),
         Transform::at([10.0, 0.0, 0.0]),
         EntityState::alive(2),
