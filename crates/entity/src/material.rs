@@ -144,3 +144,66 @@ impl Default for MaterialRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_register_and_retrieve_materials() {
+        let mut registry = MaterialRegistry::new();
+        
+        let slot0 = registry.register(Material::pig_skin()).expect("should register");
+        assert_eq!(slot0, 0);
+        
+        let slot1 = registry.register(Material::wood()).expect("should register");
+        assert_eq!(slot1, 1);
+        
+        assert!(registry.get(0).is_some());
+        assert!(registry.get(1).is_some());
+        assert!(registry.get(2).is_none());
+        
+        assert_eq!(registry.len(), 2);
+    }
+
+    #[test]
+    fn test_with_defaults() {
+        let registry = MaterialRegistry::with_defaults();
+        
+        assert_eq!(registry.len(), 3);
+        assert!(registry.is_occupied(0));
+        assert!(registry.is_occupied(1));
+        assert!(registry.is_occupied(2));
+        assert!(!registry.is_occupied(3));
+    }
+
+    #[test]
+    fn test_registry_full() {
+        let mut registry = MaterialRegistry::new();
+        
+        // Fill all 256 slots
+        for i in 0..256 {
+            let result = registry.register(Material::default());
+            assert!(result.is_some(), "Slot {} should be available", i);
+        }
+        
+        // 257th registration should fail
+        let overflow = registry.register(Material::default());
+        assert!(overflow.is_none(), "Registry should be full at 256 slots");
+    }
+
+    #[test]
+    fn test_material_properties() {
+        let pig = Material::pig_skin();
+        assert_eq!(pig.base_color, [1.0, 0.7, 0.75]);
+        assert_eq!(pig.noise, NoiseKind::Voronoi);
+        
+        let wood = Material::wood();
+        assert_eq!(wood.base_color, [0.6, 0.4, 0.2]);
+        assert_eq!(wood.noise, NoiseKind::Value);
+        
+        let stone = Material::stone();
+        assert_eq!(stone.base_color, [0.5, 0.5, 0.55]);
+        assert_eq!(stone.noise, NoiseKind::Perlin);
+    }
+}
