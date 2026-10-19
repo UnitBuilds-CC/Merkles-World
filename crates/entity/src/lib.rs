@@ -6,10 +6,12 @@
 
 pub mod component;
 pub mod manager;
+pub mod material;
 pub mod query;
 
 pub use component::{EntityId, EntityState, Transform, AABB};
 pub use manager::EntityManager;
+pub use material::{Material, MaterialRegistry, NoiseKind};
 pub use query::SpatialQuery;
 
 /// Re-export render types we depend on
