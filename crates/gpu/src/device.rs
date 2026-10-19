@@ -547,6 +547,11 @@ impl Interpreter {
         &self.queue
     }
 
+    /// Return a reference to the wgpu device for polling and synchronization.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
     /// Evaluate `tree` at `points` on the device and compare with the reference.
     pub fn compare_with_reference(
         &self,

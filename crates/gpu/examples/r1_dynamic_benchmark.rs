@@ -92,9 +92,12 @@ fn main() {
     let tree = scene();
     let shape = interpreter.upload(&tree);
 
-    let width = 1920u32;
-    let height = 1080u32;
+    // Use lower resolution to avoid GPU timeout on integrated/mobile GPUs
+    let width = 640u32;
+    let height = 360u32;
     let total_pixels = (width * height) as f64;
+    println!("Resolution: {}x{}\n", width, height);
+    
     let camera = GpuCamera {
         origin: [0.0f32, 0.6, -4.0],
         forward: {
@@ -156,25 +159,45 @@ fn main() {
         
         // Calculate rectangle dimensions to achieve target dirty pixels
         // Use a square region centered on the screen
-        let side = (dirty_pixels as f64).sqrt().ceil() as u32;
+        let side = if dirty_pixels > 0 {
+            (dirty_pixels as f64).sqrt().ceil() as u32
+        } else {
+            0
+        };
         let x = (width - side) / 2;
         let y = (height - side) / 2;
         
         // Invalidate the region
-        if dirty_pixels > 0 {
+        if dirty_pixels > 0 && side > 0 {
+            println!("  Invalidating {}x{} region at ({}, {}) = {} pixels", 
+                     side, side, x, y, dirty_pixels);
             bind.invalidate_region(interpreter.queue(), x, y, side, side);
         }
+        
+        // Poll device to ensure invalidation completes
+        interpreter.device().poll(wgpu::PollType::wait_indefinitely());
         
         // Measure frame time
         let mut times = Vec::new();
         for _ in 0..3 {
             let start = Instant::now();
-            let _result = interpreter
-                .march_camera_variant(&cull_variant, &bind, &frame)
-                .expect("march failed");
-            let elapsed = start.elapsed();
-            times.push(elapsed);
+            match interpreter.march_camera_variant(&cull_variant, &bind, &frame) {
+                Ok(_result) => {
+                    let elapsed = start.elapsed();
+                    times.push(elapsed);
+                }
+                Err(e) => {
+                    eprintln!("  {} ERROR: {}", label, e);
+                    break;
+                }
+            }
         }
+        
+        if times.is_empty() {
+            println!("  {:30} SKIPPED (GPU error)", label);
+            continue;
+        }
+        
         times.sort();
         let median = times[times.len() / 2];
         
