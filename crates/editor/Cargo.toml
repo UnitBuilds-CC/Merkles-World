@@ -1,0 +1,30 @@
+[package]
+name = "editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "In-engine entity editor with Dear ImGui UI for visual SDF authoring"
+
+[dependencies]
+entity = { path = "../entity" }
+assetc = { path = "../assetc" }
+gpu = { path = "../gpu" }
+render = { path = "../render" }
+contracts = { path = "../../contracts" }
+coords = { path = "../coords" }
+
+# eframe handles winit + egui + wgpu integration
+eframe = "0.29"
+egui = "0.29"
+
+# Serialization for RON export
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+
+# Logging
+env_logger = "0.11"
+
+[lints]
+workspace = true
