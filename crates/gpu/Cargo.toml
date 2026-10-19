@@ -21,10 +21,8 @@ naga = { version = "27", features = ["wgsl-in"] }
 
 [dev-dependencies]
 memory = { path = "../memory" }
-# The demo scene arrives as content in this example (docs/09 stage one): `assetc` compiles the .ron, the
-# device draws the bytes it wrote. A dev-dependency keeps wgpu out of `assetc` and the compiler out of
-# every build that is not an example.
 assetc = { path = "../assetc" }
+entity = { path = "../entity" }
 # Windowing is a *presentation* dependency and an example's, not the renderer's: nothing on the boot path
 # needs a window, and `cargo run -p engine`'s published output must stay a headless 18 lines. The owner
 # cleared this class of dependency on 2026-10-18 (MIT/Apache-2.0, no copyleft) for the Phase 1 exit's
