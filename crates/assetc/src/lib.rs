@@ -77,6 +77,50 @@ pub enum Shape {
     },
 }
 
+/// Full entity wrapper for Phase 2 entity authoring.
+///
+/// Wraps a Shape with transform and state metadata so RON files can declare complete entities
+/// rather than just raw SDF trees. This is doc 16's entity framework integration point.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct EntityDef {
+    /// The SDF shape tree
+    pub shape: Shape,
+    /// Initial position (default: origin)
+    #[serde(default = "default_position")]
+    pub position: [f32; 3],
+    /// Initial rotation as quaternion [x, y, z, w] (default: identity)
+    #[serde(default = "default_rotation")]
+    pub rotation: [f32; 4],
+    /// Uniform scale (default: 1.0)
+    #[serde(default = "default_scale")]
+    pub scale: f32,
+    /// Material slot index into the material registry (default: 0 = pig_skin)
+    #[serde(default)]
+    pub material_id: u8,
+    /// Entity flags: bit 0 = alive, bit 1 = active (default: 0x03 = alive+active)
+    #[serde(default = "default_flags")]
+    pub flags: u8,
+    /// Stack quantity for ledger persistence (default: 0)
+    #[serde(default)]
+    pub quantity: u8,
+}
+
+fn default_position() -> [f32; 3] {
+    [0.0, 0.0, 0.0]
+}
+
+fn default_rotation() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0] // identity quaternion
+}
+
+fn default_scale() -> f32 {
+    1.0
+}
+
+fn default_flags() -> u8 {
+    0x03 // ALIVE | ACTIVE
+}
+
 impl Shape {
     /// Nodes in the subtree, so the CLI can refuse a shape whose parameter pool would not fit the
     /// 16-bit index the record format allows - a limit that has to be checked before encoding, not
@@ -358,4 +402,49 @@ fn emit(
     }
     nodes[head].0[1] = span as u32;
     Ok(())
+}
+
+/// Compiled entity with asset and transform metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledEntity {
+    pub asset: Asset,
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: f32,
+    pub material_id: u8,
+    pub flags: u8,
+    pub quantity: u8,
+}
+
+/// Compile an EntityDef into a ready-to-use entity with lowered SDF tree and metadata.
+pub fn compile_entity(def: &EntityDef) -> Result<CompiledEntity, Refusal> {
+    let asset = lower(&def.shape)?;
+    
+    // Validate quaternion is normalized
+    let rot = def.rotation;
+    let len_sq = rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3];
+    if (len_sq - 1.0).abs() > 1e-4 {
+        return Err(Refusal::at(
+            &["rotation"],
+            LowerError::NonFiniteParameter,
+        ));
+    }
+    
+    // Validate scale is positive and finite
+    if !def.scale.is_finite() || def.scale <= 0.0 {
+        return Err(Refusal::at(
+            &["scale"],
+            LowerError::NonFiniteParameter,
+        ));
+    }
+    
+    Ok(CompiledEntity {
+        asset,
+        position: def.position,
+        rotation: def.rotation,
+        scale: def.scale,
+        material_id: def.material_id,
+        flags: def.flags,
+        quantity: def.quantity,
+    })
 }
