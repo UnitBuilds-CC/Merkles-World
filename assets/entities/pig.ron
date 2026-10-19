@@ -1,0 +1,51 @@
+// Pig entity definition (Phase 2 vertical slice)
+// Shape: SmoothUnion of body, head, snout, and four legs
+// Material: Pink skin with Voronoi noise (slot 0 in registry)
+// Uses only primitives available in assetc grammar
+
+SmoothUnion(
+    k: 0.15,
+    a: Sphere(
+        r: 0.35,
+        centre: (0.0, 0.0, 0.0),
+    ),
+    b: SmoothUnion(
+        k: 0.1,
+        a: Sphere(
+            r: 0.2,
+            centre: (0.0, 0.3, -0.35),
+        ),
+        b: SmoothUnion(
+            k: 0.08,
+            a: Sphere(
+                r: 0.1,
+                centre: (0.0, 0.25, -0.55),
+            ),
+            b: SmoothUnion(
+                k: 0.06,
+                a: Sphere(
+                    r: 0.08,
+                    centre: (-0.2, -0.35, -0.1),
+                ),
+                b: SmoothUnion(
+                    k: 0.06,
+                    a: Sphere(
+                        r: 0.08,
+                        centre: (0.2, -0.35, -0.1),
+                    ),
+                    b: SmoothUnion(
+                        k: 0.06,
+                        a: Sphere(
+                            r: 0.08,
+                            centre: (-0.2, -0.35, 0.1),
+                        ),
+                        b: Sphere(
+                            r: 0.08,
+                            centre: (0.2, -0.35, 0.1),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
