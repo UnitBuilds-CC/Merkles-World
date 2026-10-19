@@ -115,6 +115,42 @@ Entity(
 - Bounds contain the origin (entity is centered at its local origin before transform)
 - WASM module path resolves to a compiled `.wasm` file
 
+> **The example above is the proposal, not the parser.** What `assetc` and the editor read today is
+> `EntityDef { shape, position, rotation, scale, material_id, flags, quantity }` — binary combiners,
+> because ADR-011's wire form rejects n-ary ones — and the material is a `u8` slot in doc 04's registry
+> rather than an inline noise description. `assets/entities/pig.ron` is the working instance. Reconciling
+> this section with the shipped schema is an open editorial task, not a licence to write files in the
+> proposed shape.
+
+## Visual authoring
+
+An entity is a program, and the whole point of §6 is that there is no mesh to look at before it runs.
+That makes "does this look like a pig" unanswerable from a RON file, so `crates/editor` answers it from
+pixels instead:
+
+- **The viewport marches the real tree.** `gpu_renderer::CpuRenderer` lowers the authored `Shape` with
+  `assetc::lower` — the same call the shipped compiler makes — and sphere-traces `render::march` over the
+  result, so a preview cannot disagree with the asset the tool would emit. A refusal paints the frame in
+  `Frame::NOT_DRAWN_RGB` and prints the reason; it never substitutes a guess.
+- **The stage is marched, not painted.** `Stage::under` puts the grid floor at the lowest surface the
+  entity actually reaches, found by tracing one ray straight up per column of a grid over the enclosure.
+  Deriving it from the authored parameters instead was tried and is wrong twice over: the enclosure is a
+  *sphere*, so its bottom floats the animal above its own feet, and chaining each `SmoothUnion`'s `k`
+  into the minimum overshoots at every level the leg passes through.
+- **The instrument is `cargo run -p editor --example render_png`.** It writes six camera angles to the
+  temp dir (§6: never into the repo) and prints the hit-pixel count and wall time per frame, so a
+  geometry change is judged by looking at it rather than by reading the code that made it. Every
+  rejected revision of `pig.ron` is recorded in that file's header, which is how the second attempt at a
+  mistake got avoided instead of re-litigated.
+- **The interactive window** (`--example entity_editor`, run in release) adds orbit, zoom, the inspector,
+  the material panel, and a facing compass projected through the same camera basis as the raster.
+
+The preview is a debug-build CPU march, so it is an authoring instrument and not a frame budget: the
+six-angle dump measured 11.0–17.1 s per 480×360 frame on the machine it was built on, and the editor's
+own 256×192 preview 2.5–4.6 s. Release-build timings have not been measured, so run the editor with
+`--release`. Neither number is an R1 measurement — §3's hot-path bans do not apply to a tool, but nothing
+it prints is evidence about a game frame.
+
 ## Runtime lifecycle
 
 ### Spawning

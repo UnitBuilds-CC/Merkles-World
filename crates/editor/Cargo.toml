@@ -23,11 +23,13 @@ egui = "0.29"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 
-# Buffer utilities for GPU rendering
-bytemuck = "1.21"
-
 # Logging
 env_logger = "0.11"
+
+[dev-dependencies]
+# Only the examples need a PNG encoder — the dump is what lets a rendered frame be looked at
+# instead of inferred from a log. `image` is already in the lock via eframe.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

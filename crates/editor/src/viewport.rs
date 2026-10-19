@@ -15,10 +15,15 @@ pub struct ViewportCamera {
 }
 
 impl ViewportCamera {
+    /// The opening framing. The raster's `half_height: 0.5` makes the vertical world span at distance
+    /// `d` exactly `d`, and an authored creature is around one unit tall, so 5.0 — the value this
+    /// carried while nothing was ever marched — showed a pig the size of a thumbnail. Scroll still
+    /// covers 0.5 to 50, and `yaw` starts at π because an entity faces its own negative Z: at yaw 0 the
+    /// editor opens on the animal's tail.
     pub fn new() -> Self {
         Self {
-            distance: 5.0,
-            yaw: 0.0,
+            distance: 2.0,
+            yaw: core::f32::consts::PI,
             pitch: 0.3,
             target: [0.0, 0.0, 0.0],
         }
@@ -57,6 +62,38 @@ impl ViewportCamera {
             [0.0, 0.0, -1.0]
         }
     }
+
+    /// The camera's screen basis: `(forward, right, up)`, the same construction the raster uses in
+    /// `gpu_renderer::create_orbit_camera`. Anything drawn as an overlay has to project through this or
+    /// it disagrees with the image underneath it.
+    pub fn basis(&self) -> ([f32; 3], [f32; 3], [f32; 3]) {
+        fn norm(v: [f32; 3]) -> [f32; 3] {
+            let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            if len > 1e-4 {
+                [v[0] / len, v[1] / len, v[2] / len]
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        }
+        fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        }
+        let forward = self.forward();
+        let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+        let up = norm(cross(right, forward));
+        (forward, right, up)
+    }
+
+    /// Where a world-space direction points on screen, in egui coordinates (y grows downward).
+    pub fn project_dir(&self, v: [f32; 3]) -> Vec2 {
+        let (_, right, up) = self.basis();
+        let dot = |a: [f32; 3]| a[0] * v[0] + a[1] * v[1] + a[2] * v[2];
+        Vec2::new(dot(right), -dot(up))
+    }
 }
 
 impl Default for ViewportCamera {
@@ -65,7 +102,11 @@ impl Default for ViewportCamera {
     }
 }
 
-/// Render the 3D viewport panel
+/// Render the 3D viewport panel.
+///
+/// This draws the frame and the interaction only. The stage grid and the orientation gizmo are not
+/// drawn here: the grid is marched into the preview image so the entity can occlude it, and the gizmo
+/// projects through [`ViewportCamera::project_dir`] so it cannot disagree with that image.
 pub fn viewport_panel(ui: &mut egui::Ui, camera: &mut ViewportCamera) -> Response {
     let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::drag());
 
@@ -77,30 +118,7 @@ pub fn viewport_panel(ui: &mut egui::Ui, camera: &mut ViewportCamera) -> Respons
 
     // Draw background
     let rect = response.rect;
-    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(40, 40, 45));
-
-    // Draw grid (simplified - would be replaced by actual GPU rendering)
-    let center = rect.center();
-    let grid_size = rect.width().min(rect.height()) * 0.4;
-
-    // Draw axes
-    painter.line_segment(
-        [center, egui::pos2(center.x + grid_size, center.y)],
-        (1.0, egui::Color32::RED),
-    );
-    painter.line_segment(
-        [center, egui::pos2(center.x, center.y - grid_size)],
-        (1.0, egui::Color32::GREEN),
-    );
-
-    // Draw info text
-    painter.text(
-        rect.left_top() + egui::vec2(10.0, 10.0),
-        egui::Align2::LEFT_TOP,
-        format!("Distance: {:.1}", camera.distance),
-        egui::FontId::monospace(12.0),
-        egui::Color32::WHITE,
-    );
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 35));
 
     response
 }

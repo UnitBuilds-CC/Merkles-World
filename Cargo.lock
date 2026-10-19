@@ -1048,7 +1048,6 @@ name = "editor"
 version = "0.1.0"
 dependencies = [
  "assetc",
- "bytemuck",
  "contracts",
  "coords",
  "eframe",
@@ -1056,6 +1055,7 @@ dependencies = [
  "entity",
  "env_logger",
  "gpu",
+ "image",
  "render",
  "ron 0.8.1",
  "serde",

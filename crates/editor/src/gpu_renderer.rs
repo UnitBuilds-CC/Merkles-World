@@ -1,12 +1,17 @@
-//! CPU renderer for viewport preview - renders SDF shapes to display in editor.
+//! CPU renderer for the editor viewport preview.
 //!
-//! This module uses the CPU raster to provide immediate visual feedback when editing
-//! entity parameters, without requiring full GPU pipeline integration.
+//! The editor is a tool (§3's hot-path bans do not apply to it), so the CPU raster is an acceptable
+//! instrument for judging a shape until the GPU pass can run inside eframe — `gpu::Interpreter` owns
+//! its own device today, and eframe already owns one.
 
-use assetc::{EntityDef, Shape};
-use render::{raster::{Camera, Frame}, Tree, Vec3, ROOT, march, normal};
+use assetc::EntityDef;
+use render::{
+    march, normal,
+    raster::{Camera, Frame},
+    Tree, ROOT,
+};
 
-/// CPU renderer that converts entity shapes to pixel previews
+/// CPU renderer that converts entity shapes to pixel previews.
 pub struct CpuRenderer {
     width: u32,
     height: u32,
@@ -17,185 +22,181 @@ impl CpuRenderer {
         Self { width, height }
     }
 
-    /// Render the current entity shape to pixels
-    pub fn render(&self, entity_def: &EntityDef, camera_yaw: f32, camera_pitch: f32, camera_distance: f32) -> Frame {
-        // Convert entity to tree
-        let tree = entity_to_tree(entity_def);
-        
-        // Create camera at orbit position
-        let camera = create_orbit_camera(camera_yaw, camera_pitch, camera_distance, self.width, self.height);
-        
-        // Render the frame
-        render_frame(&tree, &camera)
+    /// Render the current entity shape to pixels from an orbit camera, with no ground.
+    pub fn render(
+        &self,
+        entity_def: &EntityDef,
+        camera_yaw: f32,
+        camera_pitch: f32,
+        camera_distance: f32,
+    ) -> Frame {
+        self.render_on_stage(entity_def, camera_yaw, camera_pitch, camera_distance, None)
     }
 
-    /// Resize the renderer
+    /// As [`Self::render`], composited over a ground plane at `stage.y`.
+    ///
+    /// The stage is marched, not drawn on top: a grid painted over the image cannot be occluded by the
+    /// entity, so it would read as a decal rather than as a floor the pig stands on.
+    pub fn render_on_stage(
+        &self,
+        entity_def: &EntityDef,
+        camera_yaw: f32,
+        camera_pitch: f32,
+        camera_distance: f32,
+        stage: Option<Stage>,
+    ) -> Frame {
+        let camera = create_orbit_camera(
+            camera_yaw,
+            camera_pitch,
+            camera_distance,
+            self.width,
+            self.height,
+        );
+
+        // A refused lowering draws nothing rather than a guess: an invented sphere in the viewport
+        // would be judged as if it were the authored shape.
+        let tree = match assetc::lower(&entity_def.shape) {
+            Ok(asset) => asset.tree,
+            Err(refusal) => {
+                eprintln!(
+                    "✗ preview refused by assetc: {refusal} at {}",
+                    refusal.location()
+                );
+                return refused_frame(self.width, self.height);
+            }
+        };
+
+        let start = std::time::Instant::now();
+        let frame = render_frame(&tree, &camera, stage);
+        let elapsed = start.elapsed();
+
+        if elapsed.as_millis() > 100 {
+            eprintln!(
+                "⚠ CPU render took {}ms for {}x{} ({} nodes)",
+                elapsed.as_millis(),
+                self.width,
+                self.height,
+                tree.nodes.len()
+            );
+        }
+
+        frame
+    }
+
+    /// Resize the renderer.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
     }
 }
 
-/// Convert an EntityDef to a renderable Tree (recursive, handles full shape hierarchy)
-fn entity_to_tree(entity_def: &EntityDef) -> Tree {
-    use contracts::sdf::{pack_kind_and_arity, pack_first_and_flags, pack_params_len, FLAG_IS_ROOT};
-    
-    // First pass: collect all nodes and params in pre-order traversal
-    let mut nodes = Vec::new();
-    let mut params = Vec::new();
-    
-    // Start recursive conversion with root flag
-    convert_shape_recursive(&entity_def.shape, &mut nodes, &mut params, true);
-    
-    Tree { nodes, params }
+/// A ground plane to stand the entity on, so scale and contact are legible.
+#[derive(Debug, Clone, Copy)]
+pub struct Stage {
+    /// Height of the plane.
+    pub y: f32,
+    /// Grid spacing in world units.
+    pub spacing: f32,
+    /// Beyond this radius from the world origin the plane fades to sky, so it reads as a platform
+    /// rather than an infinite floor.
+    pub radius: f32,
 }
 
-/// Recursively convert a Shape into NodeRecords and parameters
-fn convert_shape_recursive(
-    shape: &assetc::Shape,
-    nodes: &mut Vec<contracts::sdf::NodeRecord>,
-    params: &mut Vec<f32>,
-    is_root: bool,
-) {
-    use contracts::sdf::{pack_kind_and_arity, pack_first_and_flags, pack_params_len, FLAG_IS_ROOT};
-    
-    let flags = if is_root { FLAG_IS_ROOT } else { 0 };
-    
-    match shape {
-        assetc::Shape::Sphere { r, centre } => {
-            let params_first = params.len() as u16;
-            params.extend_from_slice(&[*r, centre[0], centre[1], centre[2]]);
-            
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_SPHERE, 0),
-                1, // subtree_len for leaf
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(4),
-            ]));
-        }
-        assetc::Shape::RoundedBox { half, r } => {
-            let params_first = params.len() as u16;
-            params.extend_from_slice(&[half[0], half[1], half[2], *r]);
-            
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_ROUNDED_BOX, 0),
-                1,
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(4),
-            ]));
-        }
-        assetc::Shape::SmoothUnion { a, b, k } => {
-            let params_first = params.len() as u16;
-            params.push(*k);
-            
-            // Placeholder node - we'll update subtree_len after processing children
-            let node_index = nodes.len();
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_SMOOTH_UNION, 2),
-                0, // Will be updated after children are processed
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(1),
-            ]));
-            
-            // Process children
-            convert_shape_recursive(a, nodes, params, false);
-            convert_shape_recursive(b, nodes, params, false);
-            
-            // Update subtree_len (this node + all descendants)
-            let total_nodes = nodes.len() - node_index;
-            nodes[node_index].0[1] = total_nodes as u32;
-        }
-        assetc::Shape::Union { a, b } => {
-            let params_first = params.len() as u16;
-            
-            let node_index = nodes.len();
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_UNION, 2),
-                0,
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(0),
-            ]));
-            
-            convert_shape_recursive(a, nodes, params, false);
-            convert_shape_recursive(b, nodes, params, false);
-            
-            let total_nodes = nodes.len() - node_index;
-            nodes[node_index].0[1] = total_nodes as u32;
-        }
-        assetc::Shape::Subtract { kept, cutter } => {
-            let params_first = params.len() as u16;
-            
-            let node_index = nodes.len();
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_SUBTRACT, 2),
-                0,
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(0),
-            ]));
-            
-            convert_shape_recursive(kept, nodes, params, false);
-            convert_shape_recursive(cutter, nodes, params, false);
-            
-            let total_nodes = nodes.len() - node_index;
-            nodes[node_index].0[1] = total_nodes as u32;
-        }
-        assetc::Shape::Intersect { a, b } => {
-            let params_first = params.len() as u16;
-            
-            let node_index = nodes.len();
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_INTERSECT, 2),
-                0,
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(0),
-            ]));
-            
-            convert_shape_recursive(a, nodes, params, false);
-            convert_shape_recursive(b, nodes, params, false);
-            
-            let total_nodes = nodes.len() - node_index;
-            nodes[node_index].0[1] = total_nodes as u32;
-        }
-        _ => {
-            // Fallback: unsupported shape type, use a sphere
-            let params_first = params.len() as u16;
-            params.extend_from_slice(&[1.0, 0.0, 0.0, 0.0]);
-            
-            nodes.push(contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_SPHERE, 0),
-                1,
-                pack_first_and_flags(params_first, flags),
-                pack_params_len(4),
-            ]));
+impl Stage {
+    /// A floor at the lowest surface the entity actually reaches, so its feet meet the grid.
+    ///
+    /// Two shortcuts were tried and are wrong. The enclosure (`render::cull::scene_enclosure`) bounds a
+    /// subtree by a *sphere*, and for the pig that sphere's bottom is ~0.2 below the hooves, which reads
+    /// as the animal floating over its own shadow. Computing the bottom from the authored parameters
+    /// instead can't answer for `Mirror`/`Repeat` (the leaf values don't speak for the transformed
+    /// child), and chaining each `SmoothUnion`'s `k` into the minimum overshoots by every level the foot
+    /// passes through on the way to the root — where the other operand is far enough away that `smin`
+    /// contributes nothing at all.
+    ///
+    /// So: measure. A column traced upward from under the enclosure finds the underside of whatever solid
+    /// the tree actually defines, transformed nodes and all. The tree has already been lowered once for
+    /// the frame; this runs only when the shape changes.
+    pub fn under(entity_def: &EntityDef) -> Stage {
+        let y = assetc::lower(&entity_def.shape)
+            .ok()
+            .and_then(|asset| match render::cull::scene_enclosure(&asset.tree) {
+                render::cull::Enclosure::Bounded { centre, radius } => {
+                    lowest_surface(&asset.tree, centre, radius)
+                }
+                render::cull::Enclosure::Unbounded => None,
+            })
+            .unwrap_or(-0.5);
+
+        Stage {
+            y,
+            spacing: 0.25,
+            radius: 1.6,
         }
     }
 }
 
-/// Create an orbit camera looking at origin
-fn create_orbit_camera(yaw: f32, pitch: f32, distance: f32, width: u32, height: u32) -> Camera {
-    // Calculate camera position from spherical coordinates
-    let x = distance * pitch.cos() * yaw.sin();
-    let y = distance * pitch.sin();
-    let z = distance * pitch.cos() * yaw.cos();
+/// The lowest `y` reachable by casting one ray straight up per column of a grid over the enclosure's
+/// footprint, and taking the nearest underside. `None` if no column hits, which is the shape's own
+/// business — the caller falls back to the enclosure.
+fn lowest_surface(tree: &Tree, centre: [f32; 3], radius: f32) -> Option<f32> {
+    const COLUMNS: u32 = 24;
+    // Start clear of the enclosure, so the trace begins outside a solid that is entirely within it.
+    let floor = centre[1] - radius - 1.0;
+    let span = 2.0 * radius;
 
-    let position = [x, y, z];
-    
-    // Calculate forward direction (towards origin)
-    let mut forward = normalize([
-        -position[0],
-        -position[1],
-        -position[2],
-    ]);
-    
-    // World up vector
-    let world_up = [0.0, 1.0, 0.0];
-    
-    // Calculate right and up vectors
-    let right = normalize(cross(forward, world_up));
-    let up = cross(right, forward);
-    
-    // Normalize up
-    let up = normalize(up);
+    let mut best = None::<f32>;
+    for i in 0..COLUMNS {
+        let fx = i as f32 / (COLUMNS - 1) as f32;
+        let x = centre[0] - radius + fx * span;
+        for j in 0..COLUMNS {
+            let fz = j as f32 / (COLUMNS - 1) as f32;
+            let z = centre[2] - radius + fz * span;
+            // Only columns inside the footprint; the corners of the square can't hold surface anyway.
+            let dx = x - centre[0];
+            let dz = z - centre[2];
+            if dx * dx + dz * dz > radius * radius {
+                continue;
+            }
+
+            if let Some(hit) = march(
+                tree,
+                ROOT,
+                [x, floor, z],
+                [0.0, 1.0, 0.0],
+                2.0 + span,
+                1e-3,
+                96,
+            ) {
+                if best.is_none_or(|low| hit.point[1] < low) {
+                    best = Some(hit.point[1]);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// A frame that says out loud that nothing was marched.
+fn refused_frame(width: u32, height: u32) -> Frame {
+    let mut frame = Frame::new(width, height);
+    for _ in 0..width * height {
+        frame.pixels.extend_from_slice(&Frame::NOT_DRAWN_RGB);
+        frame.depth.push(Frame::NOT_DRAWN_DEPTH);
+    }
+    frame
+}
+
+/// Create an orbit camera looking at the origin.
+fn create_orbit_camera(yaw: f32, pitch: f32, distance: f32, width: u32, height: u32) -> Camera {
+    let position = [
+        distance * pitch.cos() * yaw.sin(),
+        distance * pitch.sin(),
+        distance * pitch.cos() * yaw.cos(),
+    ];
+
+    let forward = normalize([-position[0], -position[1], -position[2]]);
+    let right = normalize(cross(forward, [0.0, 1.0, 0.0]));
+    let up = normalize(cross(right, forward));
 
     Camera {
         origin: position,
@@ -211,46 +212,115 @@ fn create_orbit_camera(yaw: f32, pitch: f32, distance: f32, width: u32, height: 
     }
 }
 
-/// Render a tree with given camera
-fn render_frame(tree: &Tree, camera: &Camera) -> Frame {
+/// The key light, carried with the camera and offset up and to one side. A fixed world light left the
+/// face — which points away from it — at ambient, so the front view read as a black silhouette.
+fn key_light(camera: &Camera) -> [f32; 3] {
+    normalize([
+        -camera.forward[0] + camera.up[0] * 0.75 - camera.right[0] * 0.45,
+        -camera.forward[1] + camera.up[1] * 0.75 - camera.right[1] * 0.45,
+        -camera.forward[2] + camera.up[2] * 0.75 - camera.right[2] * 0.45,
+    ])
+}
+
+/// Render a tree with the given camera, optionally over a [`Stage`].
+fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>) -> Frame {
     let mut frame = Frame::new(camera.width, camera.height);
-    
-    // March all rays
+    let light = key_light(camera);
+    let aspect = camera.width as f32 / camera.height as f32;
+
     for y in 0..camera.height {
         for x in 0..camera.width {
-            // Calculate ray direction
-            let aspect = camera.width as f32 / camera.height as f32;
             let px = (x as f32 / camera.width as f32 - 0.5) * aspect * camera.half_height * 2.0;
             let py = (0.5 - y as f32 / camera.height as f32) * camera.half_height * 2.0;
-            
+
             let dir = normalize([
                 camera.forward[0] + camera.right[0] * px + camera.up[0] * py,
                 camera.forward[1] + camera.right[1] * px + camera.up[1] * py,
                 camera.forward[2] + camera.right[2] * px + camera.up[2] * py,
             ]);
-            
-            // March the ray
-            if let Some(hit) = march(tree, ROOT, camera.origin, dir, camera.max_t, camera.surface, camera.max_steps) {
-                // Hit something - calculate normal and color
-                let n = normal(tree, ROOT, hit.point, camera.surface);
-                
-                // Convert normal to RGB color
-                frame.pixels.extend_from_slice(&[
-                    ((n[0] * 0.5 + 0.5) * 255.0) as u8,
-                    ((n[1] * 0.5 + 0.5) * 255.0) as u8,
-                    ((n[2] * 0.5 + 0.5) * 255.0) as u8,
-                ]);
-                
-                frame.depth.push(hit.t);
-            } else {
-                // No hit - sky color (dark gray)
-                frame.pixels.extend_from_slice(&[30, 30, 35]);
-                frame.depth.push(Frame::NO_HIT);
-            }
+
+            let hit = march(
+                tree,
+                ROOT,
+                camera.origin,
+                dir,
+                camera.max_t,
+                camera.surface,
+                camera.max_steps,
+            );
+            let ground = stage.and_then(|stage| stage_hit(camera, &dir, stage));
+
+            // Whichever of the two is nearer owns the pixel.
+            let (t, shade) = match (hit.as_ref(), ground.as_ref()) {
+                (Some(hit), Some(ground)) => {
+                    if hit.t <= ground.t {
+                        let n = normal(tree, ROOT, hit.point, camera.surface);
+                        (hit.t, shade_at(n, light))
+                    } else {
+                        (ground.t, ground.shade)
+                    }
+                }
+                (Some(hit), None) => {
+                    let n = normal(tree, ROOT, hit.point, camera.surface);
+                    (hit.t, shade_at(n, light))
+                }
+                (None, Some(ground)) => (ground.t, ground.shade),
+                (None, None) => {
+                    frame.pixels.extend_from_slice(&[30, 30, 35]);
+                    frame.depth.push(Frame::NO_HIT);
+                    continue;
+                }
+            };
+
+            frame.pixels.extend_from_slice(&[shade, shade, shade]);
+            frame.depth.push(t);
         }
     }
-    
+
     frame
+}
+
+/// A ground pixel: how far along the ray, and how bright.
+struct Ground {
+    t: f32,
+    shade: u8,
+}
+
+/// Intersect a ray with the stage plane and shade its grid.
+fn stage_hit(camera: &Camera, dir: &[f32; 3], stage: Stage) -> Option<Ground> {
+    if dir[1] >= -1e-5 {
+        return None; // parallel, or looking up from the plane
+    }
+    let t = (stage.y - camera.origin[1]) / dir[1];
+    if t <= 0.0 || t > camera.max_t {
+        return None;
+    }
+    let gx = camera.origin[0] + dir[0] * t;
+    let gz = camera.origin[2] + dir[2] * t;
+    let reach = (gx * gx + gz * gz).sqrt();
+    if reach > stage.radius {
+        return None;
+    }
+
+    let line = |v: f32| {
+        let f = (v / stage.spacing).abs() % 1.0;
+        f.min(1.0 - f) * stage.spacing < 0.012
+    };
+    // Fade to sky at the rim so the platform has an edge without an outline.
+    let fade = (1.0 - reach / stage.radius).clamp(0.0, 1.0);
+    let base = if line(gx) || line(gz) { 96.0 } else { 52.0 };
+    Some(Ground {
+        t,
+        shade: (base * (0.25 + 0.75 * fade)) as u8,
+    })
+}
+
+fn shade_at(n: [f32; 3], light: [f32; 3]) -> u8 {
+    let diffuse = n[0] * light[0] + n[1] * light[1] + n[2] * light[2];
+    // Ambient floor plus a weak counter term keeps the unlit side readable as a form instead
+    // of as a hole.
+    let shade = (0.20 + 0.80 * diffuse.max(0.0) + 0.22 * (-diffuse).max(0.0)).min(1.0) * 235.0;
+    shade as u8
 }
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
@@ -269,4 +339,3 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         a[0] * b[1] - a[1] * b[0],
     ]
 }
-

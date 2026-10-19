@@ -36,13 +36,22 @@ fn transform_widgets(ui: &mut egui::Ui, state: &mut EditorState) {
 
     ui.label("Position");
     let mut pos = state.entity_def.position;
-    if ui.add(egui::Slider::new(&mut pos[0], -10.0..=10.0).text("X")).changed() {
+    if ui
+        .add(egui::Slider::new(&mut pos[0], -10.0..=10.0).text("X"))
+        .changed()
+    {
         changed = true;
     }
-    if ui.add(egui::Slider::new(&mut pos[1], -10.0..=10.0).text("Y")).changed() {
+    if ui
+        .add(egui::Slider::new(&mut pos[1], -10.0..=10.0).text("Y"))
+        .changed()
+    {
         changed = true;
     }
-    if ui.add(egui::Slider::new(&mut pos[2], -10.0..=10.0).text("Z")).changed() {
+    if ui
+        .add(egui::Slider::new(&mut pos[2], -10.0..=10.0).text("Z"))
+        .changed()
+    {
         changed = true;
     }
     if changed {
@@ -82,19 +91,28 @@ fn shape_widgets(ui: &mut egui::Ui, state: &mut EditorState) {
 
             ui.label("Centre");
             let mut c = centre;
-            if ui.add(egui::Slider::new(&mut c[0], -5.0..=5.0).text("X")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut c[0], -5.0..=5.0).text("X"))
+                .changed()
+            {
                 if let Shape::Sphere { centre, .. } = &mut state.entity_def.shape {
                     *centre = c;
                 }
                 changed = true;
             }
-            if ui.add(egui::Slider::new(&mut c[1], -5.0..=5.0).text("Y")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut c[1], -5.0..=5.0).text("Y"))
+                .changed()
+            {
                 if let Shape::Sphere { centre, .. } = &mut state.entity_def.shape {
                     *centre = c;
                 }
                 changed = true;
             }
-            if ui.add(egui::Slider::new(&mut c[2], -5.0..=5.0).text("Z")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut c[2], -5.0..=5.0).text("Z"))
+                .changed()
+            {
                 if let Shape::Sphere { centre, .. } = &mut state.entity_def.shape {
                     *centre = c;
                 }
@@ -106,19 +124,28 @@ fn shape_widgets(ui: &mut egui::Ui, state: &mut EditorState) {
 
             ui.label("Half Extents");
             let mut h = half;
-            if ui.add(egui::Slider::new(&mut h[0], 0.01..=5.0).text("X")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut h[0], 0.01..=5.0).text("X"))
+                .changed()
+            {
                 if let Shape::RoundedBox { half, .. } = &mut state.entity_def.shape {
                     *half = h;
                 }
                 changed = true;
             }
-            if ui.add(egui::Slider::new(&mut h[1], 0.01..=5.0).text("Y")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut h[1], 0.01..=5.0).text("Y"))
+                .changed()
+            {
                 if let Shape::RoundedBox { half, .. } = &mut state.entity_def.shape {
                     *half = h;
                 }
                 changed = true;
             }
-            if ui.add(egui::Slider::new(&mut h[2], 0.01..=5.0).text("Z")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut h[2], 0.01..=5.0).text("Z"))
+                .changed()
+            {
                 if let Shape::RoundedBox { half, .. } = &mut state.entity_def.shape {
                     *half = h;
                 }

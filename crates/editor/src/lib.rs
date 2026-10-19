@@ -9,11 +9,11 @@
 //!
 //! Usage: `cargo run -p editor --example entity_editor`
 
-pub mod viewport;
-pub mod inspector;
-pub mod material_panel;
 pub mod export;
 pub mod gpu_renderer;
+pub mod inspector;
+pub mod material_panel;
+pub mod viewport;
 
 use assetc::{EntityDef, Shape};
 
@@ -50,11 +50,11 @@ impl EditorState {
 
     /// Load entity from RON file
     pub fn load_ron(&mut self, path: &str) -> Result<(), String> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path, e))?;
 
-        let def: EntityDef = ron::from_str(&text)
-            .map_err(|e| format!("Failed to parse {}: {}", path, e))?;
+        let def: EntityDef =
+            ron::from_str(&text).map_err(|e| format!("Failed to parse {}: {}", path, e))?;
 
         self.entity_def = def;
         self.file_path = Some(path.to_string());
@@ -64,14 +64,11 @@ impl EditorState {
 
     /// Export current entity to RON file
     pub fn export_ron(&self, path: &str) -> Result<(), String> {
-        let ron_text = ron::ser::to_string_pretty(
-            &self.entity_def,
-            ron::ser::PrettyConfig::default(),
-        )
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
+        let ron_text =
+            ron::ser::to_string_pretty(&self.entity_def, ron::ser::PrettyConfig::default())
+                .map_err(|e| format!("Failed to serialize: {}", e))?;
 
-        std::fs::write(path, ron_text)
-            .map_err(|e| format!("Failed to write {}: {}", path, e))?;
+        std::fs::write(path, ron_text).map_err(|e| format!("Failed to write {}: {}", path, e))?;
 
         Ok(())
     }

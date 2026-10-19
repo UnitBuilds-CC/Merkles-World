@@ -1,49 +1,148 @@
 // Pig entity definition (Phase 2 vertical slice)
-// Full EntityDef wrapper with transform and state metadata
+// Full EntityDef wrapper with transform and state metadata.
+//
+// Proportions are driven by what the viewport shows, not by the numbers: see
+// `cargo run -p editor --example render_png`, which dumps the marched silhouette from six angles.
+// The grammar has no translate node (OQ-55), so every placed part is a sphere and the only primitive
+// that may sit at the origin is `RoundedBox`.
+//
+// What the renders rejected, in order:
+// - `RoundedBox(half: (0.22, 0.18, 0.34), r: 0.15)` — a rounded box spans `2 * (half + r)`, so this was
+//   a 0.74 x 0.66 x 0.98 slab, not the 0.44 x 0.36 body the fields read as.
+// - `RoundedBox(half: (0.13, 0.15, 0.32), r: 0.13)` — collapsing the rounding in X still leaves the side
+//   profile a rounded rectangle: flat back, flat belly. A loaf, not an animal.
+// - Two torso spheres smoothed at `k` equal to their separation merged into one egg, and a single-sphere
+//   head the same height as that egg read as a snowman.
+// - Hard `Union` between overlapping spheres: a cluster of balloons with a V-notch at every join, because
+//   a plain union takes the minimum and keeps the crease.
+// - One sphere per leg read as a ball under the belly, and a head joined at the body's own height read
+//   as a hump on the back rather than a head.
+//
+// So: every join is a smooth union with `k` well under the overlap, each leg is a two-sphere capsule,
+// and the head sits above the spine line with a neck that is thinner than both.
+//
+// Hypothesis for docs/04, not a measurement: every blended join is a place the marcher cannot skip,
+// since ADR-024's k-aware skip refuses exactly the large-`k` case, so an authored creature is an R1
+// expense per part. Nothing here controls for that yet — the debug CPU raster's timings swing by more
+// than the effect under machine load, so the claim stays a hypothesis until someone times a hard-union
+// twin of this tree.
 
 EntityDef(
     shape: SmoothUnion(
-        k: 0.15,
-        a: Sphere(
-            r: 0.35,
-            centre: (0.0, 0.0, 0.0),
-        ),
-        b: SmoothUnion(
-            k: 0.1,
-            a: Sphere(
-                r: 0.2,
-                centre: (0.0, 0.3, -0.35),
-            ),
-            b: SmoothUnion(
-                k: 0.08,
-                a: Sphere(
-                    r: 0.1,
-                    centre: (0.0, 0.25, -0.55),
+        // Tail, blended into the rump so it reads as a curl rather than a floating ball.
+        k: 0.04,
+        a: SmoothUnion(
+            // Legs, blended into the body at the hip.
+            k: 0.06,
+            a: SmoothUnion(
+                k: 0.06,
+                a: SmoothUnion(
+                    // Body: rump and chest either side of a mid sphere lifted to arch the back.
+                    k: 0.12,
+                    a: Sphere(
+                        r: 0.27,
+                        centre: (0.0, -0.02, 0.20),
+                    ),
+                    b: SmoothUnion(
+                        k: 0.12,
+                        a: Sphere(
+                            r: 0.26,
+                            centre: (0.0, 0.02, 0.0),
+                        ),
+                        b: Sphere(
+                            r: 0.24,
+                            centre: (0.0, 0.0, -0.20),
+                        ),
+                    ),
                 ),
                 b: SmoothUnion(
+                    // Neck into head into snout: the neck is thinner and higher than the chest, which is
+                    // what makes the head read as a head from the side.
                     k: 0.06,
                     a: Sphere(
-                        r: 0.08,
-                        centre: (-0.2, -0.35, -0.1),
+                        r: 0.15,
+                        centre: (0.0, 0.10, -0.38),
                     ),
                     b: SmoothUnion(
                         k: 0.06,
                         a: Sphere(
-                            r: 0.08,
-                            centre: (0.2, -0.35, -0.1),
+                            r: 0.23,
+                            centre: (0.0, 0.10, -0.60),
                         ),
-                        b: SmoothUnion(
-                            k: 0.06,
-                            a: Sphere(
-                                r: 0.08,
-                                centre: (-0.2, -0.35, 0.1),
+                        b: Subtract(
+                            // Snout: two spheres smoothed sideways, because a single sphere reads as a
+                            // muzzle and a pig's is a disc wider than it is tall. Nostrils cut into its
+                            // front face.
+                            kept: SmoothUnion(
+                                k: 0.05,
+                                a: Sphere(
+                                    r: 0.095,
+                                    centre: (0.07, -0.02, -0.84),
+                                ),
+                                b: Sphere(
+                                    r: 0.095,
+                                    centre: (-0.07, -0.02, -0.84),
+                                ),
                             ),
-                            b: Sphere(
-                                r: 0.08,
-                                centre: (0.2, -0.35, 0.1),
+                            cutter: Union(
+                                a: Sphere(
+                                    r: 0.024,
+                                    centre: (0.055, -0.02, -0.925),
+                                ),
+                                b: Sphere(
+                                    r: 0.024,
+                                    centre: (-0.055, -0.02, -0.925),
+                                ),
                             ),
                         ),
                     ),
+                ),
+            ),
+            b: Mirror(
+                // Two authored legs — each a thigh and a hoof smoothed into a column — mirrored about X
+                // into four.
+                axis: 0,
+                child: Union(
+                    a: SmoothUnion(
+                        k: 0.08,
+                        a: Sphere(
+                            r: 0.115,
+                            centre: (0.16, -0.30, -0.30),
+                        ),
+                        b: Sphere(
+                            r: 0.10,
+                            centre: (0.16, -0.40, -0.30),
+                        ),
+                    ),
+                    b: SmoothUnion(
+                        k: 0.08,
+                        a: Sphere(
+                            r: 0.115,
+                            centre: (0.16, -0.30, 0.30),
+                        ),
+                        b: Sphere(
+                            r: 0.10,
+                            centre: (0.16, -0.40, 0.30),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        b: Union(
+            // Tail and ears: neither pair touches, so a hard union between them costs nothing, and the
+            // root's `k` is what blends each of them into the body and head.
+            a: Sphere(
+                r: 0.05,
+                centre: (0.0, 0.12, 0.46),
+            ),
+            b: Union(
+                a: Sphere(
+                    r: 0.08,
+                    centre: (0.14, 0.28, -0.55),
+                ),
+                b: Sphere(
+                    r: 0.08,
+                    centre: (-0.14, 0.28, -0.55),
                 ),
             ),
         ),
