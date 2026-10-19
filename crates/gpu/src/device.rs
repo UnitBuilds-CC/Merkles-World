@@ -1755,6 +1755,98 @@ impl Bind {
         
         queue.write_buffer(dirty_mask_buf, 0, &bytes);
     }
+    
+    /// Invalidate an entity's screen-space bounding box.
+    /// 
+    /// Projects a world-space axis-aligned bounding box (AABB) to screen space using the camera
+    /// parameters, then invalidates the resulting pixel region. This is more convenient than
+    /// manually computing screen coordinates when tracking moving entities.
+    /// 
+    /// # Arguments
+    /// * `queue` - The wgpu queue to submit the write to
+    /// * `camera` - Camera parameters for projection
+    /// * `world_min` - Minimum corner of entity's world-space AABB [x, y, z]
+    /// * `world_max` - Maximum corner of entity's world-space AABB [x, y, z]
+    /// 
+    /// # Returns
+    /// Some((x, y, w, h)) if the entity is visible, None if culled
+    pub fn invalidate_entity(
+        &self,
+        queue: &wgpu::Queue,
+        camera: &GpuCamera,
+        world_min: [f32; 3],
+        world_max: [f32; 3],
+    ) -> Option<(u32, u32, u32, u32)> {
+        // Project world-space AABB corners to clip space
+        let project_point = |p: [f32; 3]| -> Option<[f32; 2]> {
+            // Transform to camera space
+            let rel = [
+                p[0] - camera.origin[0],
+                p[1] - camera.origin[1],
+                p[2] - camera.origin[2],
+            ];
+            
+            // Check if point is behind camera
+            let forward_dot = rel[0] * camera.forward[0] + rel[1] * camera.forward[1] + rel[2] * camera.forward[2];
+            if forward_dot <= 0.0 {
+                return None; // Behind camera
+            }
+            
+            // Project to screen space
+            let right_dot = rel[0] * camera.right[0] + rel[1] * camera.right[1] + rel[2] * camera.right[2];
+            let up_dot = rel[0] * camera.up[0] + rel[1] * camera.up[1] + rel[2] * camera.up[2];
+            
+            let ndc_x = right_dot / (forward_dot * camera.half_height);
+            let ndc_y = up_dot / (forward_dot * camera.half_height);
+            
+            // Convert to pixel coordinates
+            let px = ((ndc_x + 1.0) * 0.5) * camera.width as f32;
+            let py = ((1.0 - ndc_y) * 0.5) * camera.height as f32;
+            
+            Some([px, py])
+        };
+        
+        // Project all 8 corners of the AABB and find screen-space bounds
+        let mut min_px = f32::MAX;
+        let mut max_px = f32::MIN;
+        let mut min_py = f32::MAX;
+        let mut max_py = f32::MIN;
+        let mut any_visible = false;
+        
+        for x in &[world_min[0], world_max[0]] {
+            for y in &[world_min[1], world_max[1]] {
+                for z in &[world_min[2], world_max[2]] {
+                    if let Some([px, py]) = project_point([*x, *y, *z]) {
+                        min_px = min_px.min(px);
+                        max_px = max_px.max(px);
+                        min_py = min_py.min(py);
+                        max_py = max_py.max(py);
+                        any_visible = true;
+                    }
+                }
+            }
+        }
+        
+        if !any_visible {
+            return None; // Entity completely behind camera
+        }
+        
+        // Clamp to viewport and convert to integer pixel coordinates
+        let x_start = min_px.max(0.0).min(camera.width as f32) as u32;
+        let y_start = min_py.max(0.0).min(camera.height as f32) as u32;
+        let x_end = max_px.max(0.0).min(camera.width as f32) as u32;
+        let y_end = max_py.max(0.0).min(camera.height as f32) as u32;
+        
+        if x_start >= x_end || y_start >= y_end {
+            return None; // Degenerate rectangle
+        }
+        
+        let w = x_end - x_start;
+        let h = y_end - y_start;
+        
+        self.invalidate_region(queue, x_start, y_start, w, h);
+        Some((x_start, y_start, w, h))
+    }
 }
 
 impl Interpreter {

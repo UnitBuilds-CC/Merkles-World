@@ -717,16 +717,24 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     
     if index < arrayLength(&cached_positions) {
         let metadata = cached_metadata[index];
+        let cached_frame = metadata.x;
         let cached_flags = metadata.w;
         
         if cached_flags > 0u {
             let cached_depth = cached_depths[index];
             
-            // Trust cache without SDF validation if depth is reasonable
-            // This assumes static scenes - dynamic content would need validation
-            if cached_depth > 0.0 && cached_depth <= max_t {
+            // Age out stale cache entries (older than 64 frames)
+            let current_frame = header.stack_depth;
+            let age = current_frame - cached_frame;
+            let is_stale = age > 64u;
+            
+            // Trust cache without SDF validation if depth is reasonable and not stale
+            if !is_stale && cached_depth > 0.0 && cached_depth <= max_t {
                 use_cache = true;
                 cached_t = cached_depth;
+            } else if is_stale {
+                // Invalidate stale cache entry
+                cached_metadata[index] = vec4<u32>(0u, 0u, 0u, 0u);
             }
         }
     }
