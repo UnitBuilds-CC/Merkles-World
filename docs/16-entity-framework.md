@@ -181,6 +181,25 @@ pixels instead:
   no pixel. A key that missed a pixel-changing field would keep showing the old frame while the
   inspector believed it had moved the animal, so `lib::tests` edits each field and requires the key to
   change, and edits the two invisible ones and requires it not to.
+- **The rotation has a widget, and it is the panel's, not the format's.** The Transform section shows an
+  axis and a turn in degrees — the thing an author picks up — plus five whole-quarter presets, and writes
+  the `[x, y, z, w]` quaternion `EntityDef.rotation` already carries. **OQ-63 is not settled by this**: the
+  question of which representation the *file* uses stays open, and the panel only composes the field that
+  exists. What makes the widget more than four sliders is that it normalises, because the quaternion comes
+  out of it unit by construction and `gpu_renderer::compile_entity` refuses a non-unit one into
+  `NOT_DRAWN` — a widget that wrote a raw four-tuple could hand the viewport a shape it will not march, and
+  an authored non-unit quaternion is therefore named in red under the readout rather than silently fixed or
+  silently dropped. The four numbers the file will carry are printed under the sliders so the author can see
+  which convention the value is in. Two tests hold it up: the paint probe requires the readout for a
+  quarter-turn state and the refusal text for `[0.0, 2.0, 0.0, 1.0]`, and requires neither to edit anything;
+  the arithmetic test asserts the exact quaternion a 90° turn writes (derived in-test, not hard-coded), that
+  `[0, 3, 0]` and `[0, 1, 0]` write the *same* one, that a zero-length axis reports that it wrote nothing and
+  leaves the authored value alone, that `axis_angle` reads back what was written for three unequal turns, and
+  that turning the other way is the same as turning about the opposite axis.
+  The same unit moved the section from `ui.collapsing` to a `CollapsingHeader` open by default: egui does not
+  run a closed section's closure, so the position, rotation and scale widgets — and the quaternion readout
+  with them — did not exist until the heading had been clicked. That is how the paint probe found it, by
+  failing to find the readout it was written to assert.
 - **Any node in the tree can be edited, not only the root.** `shape_path` addresses a part by a route of
   steps from the root — `[Second, Second, Sole, Second]` is `root.b.cutter.child.b` — and the panel lists
   every node depth-first, one row each carrying its route, its kind and its own parameters, with the

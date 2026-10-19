@@ -13,10 +13,14 @@ pub fn inspector_panel(ui: &mut egui::Ui, state: &mut EditorState) {
         ui.heading("Entity Properties");
         ui.separator();
 
-        // Transform section
-        ui.collapsing("Transform", |ui| {
-            transform_widgets(ui, state);
-        });
+        // The transform, open by default. `ui.collapsing` runs its closure only while the section is
+        // open, so a closed Transform meant the position, rotation and scale widgets — the ones an
+        // author reaches for first, and the only place the quaternion is shown — did not exist at all
+        // until the heading was clicked. Caught by a test that painted the panel and could not find
+        // the readout it writes.
+        egui::CollapsingHeader::new("Transform")
+            .default_open(true)
+            .show(ui, |ui| transform_widgets(ui, state));
 
         // The tree, so a part can be picked rather than the root being edited blind. Open by default:
         // which part the sliders below belong to is not something to hide behind a click.
@@ -68,6 +72,10 @@ fn transform_widgets(ui: &mut egui::Ui, state: &mut EditorState) {
         state.entity_def.position = pos;
     }
 
+    if rotation_widgets(ui, state) {
+        changed = true;
+    }
+
     ui.label("Scale");
     let mut scale = state.entity_def.scale;
     if ui.add(egui::Slider::new(&mut scale, 0.1..=5.0)).changed() {
@@ -78,6 +86,116 @@ fn transform_widgets(ui: &mut egui::Ui, state: &mut EditorState) {
     if changed {
         state.mark_dirty();
     }
+}
+
+/// The rotation as an axis and a turn in degrees, which is what an author picks up, written into the
+/// `[x, y, z, w]` the file carries. `EntityDef.rotation`'s representation is OQ-63's to settle and this does not
+/// settle it — the panel only composes the field that already exists. The quaternion comes out unit by
+/// construction, which is what `gpu_renderer::compile_entity` requires of it: a non-unit one is refused into
+/// `NOT_DRAWN`, so a widget that wrote a raw four-tuple could hand the viewport a shape it will not march.
+///
+/// Returns whether the entity changed.
+fn rotation_widgets(ui: &mut egui::Ui, state: &mut EditorState) -> bool {
+    let authored = state.entity_def.rotation;
+    let (mut axis, mut degrees) = axis_angle(authored);
+    let mut requested = false;
+
+    ui.label("Rotation");
+    if ui
+        .add(egui::Slider::new(&mut degrees, -180.0..=180.0).text("turn"))
+        .changed()
+    {
+        requested = true;
+    }
+    for (label, component) in ["X", "Y", "Z"].into_iter().zip(axis.iter_mut()) {
+        if ui
+            .add(egui::Slider::new(component, -1.0..=1.0).text(label))
+            .changed()
+        {
+            requested = true;
+        }
+    }
+    ui.horizontal(|ui| {
+        for (name, preset) in [
+            ("none", ([0.0, 1.0, 0.0], 0.0)),
+            ("¼ Y", ([0.0, 1.0, 0.0], 90.0)),
+            ("½ Y", ([0.0, 1.0, 0.0], 180.0)),
+            ("¼ X", ([1.0, 0.0, 0.0], 90.0)),
+            ("¼ Z", ([0.0, 0.0, 1.0], 90.0)),
+        ] {
+            if ui.button(name).clicked() {
+                axis = preset.0;
+                degrees = preset.1;
+                requested = true;
+            }
+        }
+    });
+
+    let wrote = requested && apply_rotation(state, axis, degrees);
+    if !wrote && requested {
+        ui.label(
+            egui::RichText::new("A zero-length axis carries no turn — pick one.")
+                .color(egui::Color32::YELLOW),
+        );
+    }
+    let current = state.entity_def.rotation;
+    ui.label(
+        egui::RichText::new(format!(
+            "[{:.4}, {:.4}, {:.4}, {:.4}] as the file stores it",
+            current[0], current[1], current[2], current[3]
+        ))
+        .monospace()
+        .weak(),
+    );
+    if !is_unit(current) {
+        ui.label(
+            egui::RichText::new(
+                "this quaternion is not unit, so the viewport refuses to march the entity until it is",
+            )
+            .color(egui::Color32::RED),
+        );
+    }
+    wrote
+}
+
+/// Write `axis` turned by `degrees` into the entity's rotation. `false` means nothing was written, which is
+/// the case a caller has to be able to tell — a panel that marked the file dirty while leaving the transform
+/// alone would offer a save of the shape the author never made.
+fn apply_rotation(state: &mut EditorState, axis: [f32; 3], degrees: f32) -> bool {
+    let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+    if length < 1.0e-6 {
+        return false;
+    }
+    // Half the angle, because the vector part of a quaternion is the axis scaled by sin(θ/2). `sin` and `cos`
+    // are legitimate here and nowhere the ledger reads: a rotation is a presentation float, never hashed
+    // (docs/02's float discipline), and this is a tool (AGENTS.md §3).
+    let half = degrees.to_radians() * 0.5;
+    let scale = half.sin() / length;
+    state.entity_def.rotation = [
+        axis[0] * scale,
+        axis[1] * scale,
+        axis[2] * scale,
+        half.cos(),
+    ];
+    true
+}
+
+/// The rotation as its own axis and angle in degrees. A turn of zero has no axis to report, so it is shown as
+/// the panel's default rather than as three zeros the author would then have to fill in.
+fn axis_angle(quat: [f32; 4]) -> ([f32; 3], f32) {
+    let sin_half = (quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2]).sqrt();
+    let angle = 2.0 * sin_half.atan2(quat[3]);
+    let axis = if sin_half > 1.0e-6 {
+        [quat[0] / sin_half, quat[1] / sin_half, quat[2] / sin_half]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    (axis, angle.to_degrees())
+}
+
+fn is_unit(quat: [f32; 4]) -> bool {
+    let squared = quat[0] * quat[0] + quat[1] * quat[1] + quat[2] * quat[2] + quat[3] * quat[3];
+    (squared - 1.0).abs() < 1.0e-3
 }
 
 /// The tree as a list, each row labelled with the route the authored file gives it.
@@ -247,12 +365,17 @@ mod tests {
     /// resolve perfectly and still never be listed, and a widget can mark the entity dirty just by
     /// being looked at. egui lays out and paints without a device, so the pass itself is what is
     /// under test here.
+    ///
+    /// The rect is taller than any window this editor opens on, because egui culls the rows below the
+    /// fold of a scroll area — a test that asked for all 32 of the pig's nodes had to give the probe
+    /// room to paint them. What is at the fold in the real window is the author's to scroll to; what
+    /// this probe can say is whether the panel produces the row at all.
     fn painted(state: &mut EditorState) -> Vec<String> {
         let ctx = egui::Context::default();
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1280.0, 900.0),
+                egui::vec2(1280.0, 2048.0),
             )),
             ..Default::default()
         };
@@ -326,6 +449,122 @@ mod tests {
             !state.dirty,
             "painting the panel marked the entity modified"
         );
+    }
+
+    /// The readout is the quaternion the file will carry, not the numbers in the sliders: the two differ
+    /// whenever the authored rotation is not a whole turn about a primary axis, and an author who cannot
+    /// see which one the viewport will get has no reason to trust the widgets above it.
+    #[test]
+    fn the_panel_shows_the_quaternion_the_file_will_carry() {
+        let mut state = pig_state();
+        let half_turn_sin = (core::f32::consts::FRAC_PI_4).sin();
+        let authored = [0.0, half_turn_sin, 0.0, half_turn_sin];
+        state.entity_def.rotation = authored;
+
+        let expected = format!(
+            "[{:.4}, {:.4}, {:.4}, {:.4}] as the file stores it",
+            authored[0], authored[1], authored[2], authored[3]
+        );
+        let labels = painted(&mut state);
+        assert!(
+            labels.iter().any(|l| l.contains(&expected)),
+            "the panel never printed the quaternion it holds; it painted {labels:?}"
+        );
+        // Reading the panel must not quieten a warning by fixing the value it is warning about.
+        assert_eq!(state.entity_def.rotation, authored);
+        assert!(!state.dirty);
+
+        // The refusal `gpu_renderer::compile_entity` makes is said here, before the author saves.
+        let mut warped = pig_state();
+        warped.entity_def.rotation = [0.0, 2.0, 0.0, 1.0];
+        let labels = painted(&mut warped);
+        assert!(
+            labels.iter().any(|l| l.contains("not unit")),
+            "a quaternion the viewport refuses to march was painted without a warning"
+        );
+        assert_eq!(warped.entity_def.rotation, [0.0, 2.0, 0.0, 1.0]);
+
+        // Identity, which every shipped entity starts on, carries no warning.
+        let labels = painted(&mut pig_state());
+        assert!(
+            !labels.iter().any(|l| l.contains("not unit")),
+            "the panel called the authored identity quaternion non-unit"
+        );
+    }
+
+    /// The widget's whole job in one place: write a *unit* quaternion (the viewport refuses anything else),
+    /// leave the entity alone when the axis points nowhere, and agree with itself on the round trip.
+    #[test]
+    fn writing_a_turn_produces_the_quaternion_the_viewport_accepts() {
+        let mut state = pig_state();
+        let before = state.preview_signature();
+
+        assert!(apply_rotation(&mut state, [0.0, 1.0, 0.0], 90.0));
+        let half = core::f32::consts::FRAC_PI_4;
+        assert_eq!(
+            state.entity_def.rotation,
+            [0.0, half.sin(), 0.0, half.cos()]
+        );
+        assert!(
+            is_unit(state.entity_def.rotation),
+            "the widget wrote a quaternion the viewport would refuse: {:?}",
+            state.entity_def.rotation
+        );
+        assert_ne!(
+            state.preview_signature(),
+            before,
+            "a turn the viewport renders left the preview key alone, so the editor would keep showing the old frame"
+        );
+
+        // An unnormalised axis is the same direction, so it must come out the same quaternion.
+        let mut long = pig_state();
+        assert!(apply_rotation(&mut long, [0.0, 3.0, 0.0], 90.0));
+        assert_eq!(long.entity_def.rotation, state.entity_def.rotation);
+
+        // An axis with no length has no direction to turn about, and writing zero for w would be a
+        // half-turn the author never asked for.
+        let mut stateless = pig_state();
+        stateless.entity_def.rotation = [0.0, 0.0, 0.0, 1.0];
+        assert!(
+            !apply_rotation(&mut stateless, [0.0, 0.0, 0.0], 90.0),
+            "a directionless axis reported that it wrote something"
+        );
+        assert_eq!(stateless.entity_def.rotation, [0.0, 0.0, 0.0, 1.0]);
+
+        // Round trip: read back what the panel would show for what it just wrote.
+        for (axis, degrees) in [
+            ([0.0, 1.0, 0.0], 90.0),
+            ([1.0, 2.0, -1.0], 37.0),
+            ([0.0, 0.0, 1.0], 180.0),
+        ] {
+            let mut state = pig_state();
+            assert!(apply_rotation(&mut state, axis, degrees));
+            let (read_axis, read_degrees) = axis_angle(state.entity_def.rotation);
+            let length = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+            for (component, expected) in read_axis.iter().zip(axis) {
+                assert!(
+                    (component - expected / length).abs() < 1.0e-6,
+                    "{}° about {:?} came back about {:?}",
+                    degrees,
+                    axis,
+                    read_axis
+                );
+            }
+            assert!(
+                (read_degrees - degrees).abs() < 1.0e-3,
+                "{}° about {:?} came back as {read_degrees}°",
+                degrees,
+                axis
+            );
+        }
+
+        // Turning the other way is the same as turning about the opposite axis — the identity the two
+        // sliders lean on when they show a negative angle.
+        let mut clockwise = pig_state();
+        assert!(apply_rotation(&mut clockwise, [1.0, 0.0, 0.0], -60.0));
+        let mut flipped = pig_state();
+        assert!(apply_rotation(&mut flipped, [-1.0, 0.0, 0.0], 60.0));
+        assert_eq!(clockwise.entity_def.rotation, flipped.entity_def.rotation);
     }
 
     /// Each variant's own parameters, named the way `edit_params` writes them.

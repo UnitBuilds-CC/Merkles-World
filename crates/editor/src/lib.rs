@@ -4,8 +4,12 @@
 //! - A viewport that marches the entity with `crates/render`'s CPU reference — the same evaluator the
 //!   WGSL interpreter has to agree with. Not the GPU: eframe owns the window's device, `gpu::Interpreter`
 //!   owns its own, and no temporal cache is wired into this path yet.
-//! - Editing the authored transform: `position` and `scale` by slider. `rotation` is honoured by the
-//!   viewport and by the file, but the panel has no widget for it yet — see docs/16 § Visual authoring.
+//! - Editing the authored transform: `position`, `scale` and `rotation` by slider, all three under a
+//!   heading that is open by default. `rotation` is shown as an axis and a turn in degrees and written as
+//!   the unit quaternion the viewport requires; the four numbers the file will carry are printed under the
+//!   sliders, and a quaternion that is not unit is named there rather than quietly refused by the renderer.
+//!   Which representation the *file* uses is still OQ-63's — the panel composes the field that exists, it
+//!   does not settle it. See docs/16 § Visual authoring.
 //! - Editing the parameters of any node in the tree: the panel lists the parts by their authored route
 //!   (`root.b.kept`) with the node's kind beside it, and the sliders below the list write to the selected
 //!   one. The field names in a route are the ones `assetc`'s refusals use, so an error text and a row
