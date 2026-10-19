@@ -122,7 +122,7 @@ fn main() {
     println!("  Initial build: {:.2} ms\n", elapsed.as_secs_f64() * 1000.0);
 
     // Test different entity counts
-    let entity_counts = vec![1, 5, 10, 20, 50, 100];
+    let entity_counts = vec![1, 5, 10, 20, 50, 100, 200, 500];
     
     println!("Comparing single vs batch invalidation:");
     println!("----------------------------------------");
