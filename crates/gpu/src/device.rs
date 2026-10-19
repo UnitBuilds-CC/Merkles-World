@@ -1489,8 +1489,10 @@ impl Bind {
     /// This simulates entity movement by marking pixels within a bounding box as dirty.
     /// The region is specified in pixel coordinates (x, y, width, height).
     /// 
-    /// Optimized for word-aligned operations: processes 32 pixels at once when possible,
-    /// falling back to bit manipulation only for partial words at rectangle edges.
+    /// Optimized for minimal allocations and direct GPU writes:
+    /// - Only allocates bytes for the affected word range, not the entire mask
+    /// - Uses u32 bulk operations where possible (32 pixels at once)
+    /// - Minimizes GPU transfer by computing exact byte range needed
     /// 
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
@@ -1516,18 +1518,37 @@ impl Bind {
             return; // Empty region
         }
         
-        // Calculate total words needed
-        let total_words = ((width * self.height + 31) / 32) as usize;
-        let mut dirty_words = vec![0u32; total_words];
+        // Find the global min/max word indices across all rows to minimize GPU transfer
+        let mut global_min_word = u32::MAX;
+        let mut global_max_word = 0u32;
         
+        // First pass: calculate the exact word range we need to update
         for py in y_start..y_end {
-            // Process this row efficiently
             let row_start = py * width + x_start;
             let row_end = py * width + x_end;
             
-            // Find first and last word indices for this row
-            let first_word_idx = (row_start / 32) as usize;
-            let last_word_idx = (row_end / 32) as usize;
+            let first_word = row_start / 32;
+            let last_word = row_end / 32;
+            
+            if first_word < global_min_word {
+                global_min_word = first_word;
+            }
+            if last_word > global_max_word {
+                global_max_word = last_word;
+            }
+        }
+        
+        // Allocate only the range we need
+        let word_count = (global_max_word - global_min_word + 1) as usize;
+        let mut dirty_words = vec![0u32; word_count];
+        
+        // Second pass: set the dirty bits
+        for py in y_start..y_end {
+            let row_start = py * width + x_start;
+            let row_end = py * width + x_end;
+            
+            let first_word_idx = (row_start / 32 - global_min_word) as usize;
+            let last_word_idx = (row_end / 32 - global_min_word) as usize;
             
             // Handle partial first word
             if row_start % 32 != 0 {
@@ -1554,22 +1575,17 @@ impl Bind {
             }
         }
         
-        // Write only the modified words to GPU
-        // Find min/max word indices to minimize transfer
-        let min_word = dirty_words.iter().position(|&w| w != 0).unwrap_or(0);
-        let max_word = total_words - 1 - dirty_words.iter().rev().position(|&w| w != 0).unwrap_or(0);
+        // Write directly to GPU - convert to bytes inline
+        let byte_offset = (global_min_word * 4) as u64;
+        let byte_size = word_count * 4;
+        let mut bytes = Vec::with_capacity(byte_size);
         
-        if min_word <= max_word {
-            let byte_offset = (min_word * 4) as u64;
-            
-            // Convert to bytes for writing
-            let bytes: Vec<u8> = dirty_words[min_word..=max_word]
-                .iter()
-                .flat_map(|w| w.to_le_bytes().to_vec())
-                .collect();
-            
-            queue.write_buffer(dirty_mask_buf, byte_offset, &bytes);
+        // Use extend_from_slice for better performance than flat_map
+        for &word in &dirty_words {
+            bytes.extend_from_slice(&word.to_le_bytes());
         }
+        
+        queue.write_buffer(dirty_mask_buf, byte_offset, &bytes);
     }
     
     /// Invalidate all pixels (force full re-march on next frame)
@@ -1621,6 +1637,122 @@ impl Bind {
         staging.unmap();
         
         Some((stats[0], stats[1]))
+    }
+    
+    /// Invalidate multiple rectangular regions in a single GPU write.
+    /// 
+    /// More efficient than calling invalidate_region() multiple times when you have
+    /// several entities to invalidate, as it batches all writes into one transfer.
+    /// 
+    /// # Arguments
+    /// * `queue` - The wgpu queue to submit the write to
+    /// * `regions` - Slice of (x, y, width, height) tuples for each region
+    pub fn invalidate_regions(&self, queue: &wgpu::Queue, regions: &[(u32, u32, u32, u32)]) {
+        let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
+            return;
+        };
+        
+        if regions.is_empty() {
+            return;
+        }
+        
+        let width = self.width;
+        if width == 0 || self.height == 0 {
+            return;
+        }
+        
+        // First pass: find global min/max word range across all regions
+        let mut global_min_word = u32::MAX;
+        let mut global_max_word = 0u32;
+        
+        for &(x, y, w, h) in regions {
+            let x_start = x.min(width);
+            let y_start = y.min(self.height);
+            let x_end = (x + w).min(width);
+            let y_end = (y + h).min(self.height);
+            
+            if x_start >= x_end || y_start >= y_end {
+                continue;
+            }
+            
+            for py in y_start..y_end {
+                let row_start = py * width + x_start;
+                let row_end = py * width + x_end;
+                
+                let first_word = row_start / 32;
+                let last_word = row_end / 32;
+                
+                if first_word < global_min_word {
+                    global_min_word = first_word;
+                }
+                if last_word > global_max_word {
+                    global_max_word = last_word;
+                }
+            }
+        }
+        
+        if global_min_word > global_max_word {
+            return; // All regions were empty
+        }
+        
+        // Allocate only the range we need
+        let word_count = (global_max_word - global_min_word + 1) as usize;
+        let mut dirty_words = vec![0u32; word_count];
+        
+        // Second pass: set dirty bits for all regions
+        for &(x, y, w, h) in regions {
+            let x_start = x.min(width);
+            let y_start = y.min(self.height);
+            let x_end = (x + w).min(width);
+            let y_end = (y + h).min(self.height);
+            
+            if x_start >= x_end || y_start >= y_end {
+                continue;
+            }
+            
+            for py in y_start..y_end {
+                let row_start = py * width + x_start;
+                let row_end = py * width + x_end;
+                
+                let first_word_idx = (row_start / 32 - global_min_word) as usize;
+                let last_word_idx = (row_end / 32 - global_min_word) as usize;
+                
+                // Handle partial first word
+                if row_start % 32 != 0 {
+                    let bit_start = row_start % 32;
+                    let bits_in_first_word = 32 - bit_start;
+                    let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
+                    let mask = ((1u32 << (end_bit - bit_start)) - 1) << bit_start;
+                    dirty_words[first_word_idx] |= mask;
+                }
+                
+                // Fill complete middle words
+                let middle_start = if row_start % 32 != 0 { first_word_idx + 1 } else { first_word_idx };
+                let middle_end = if row_end % 32 != 0 { last_word_idx } else { last_word_idx + 1 };
+                
+                for word_idx in middle_start..middle_end {
+                    dirty_words[word_idx] = 0xFFFFFFFF;
+                }
+                
+                // Handle partial last word
+                if row_end % 32 != 0 && last_word_idx > first_word_idx {
+                    let bit_end = row_end % 32;
+                    let mask = (1u32 << bit_end) - 1;
+                    dirty_words[last_word_idx] |= mask;
+                }
+            }
+        }
+        
+        // Single GPU write for all regions
+        let byte_offset = (global_min_word * 4) as u64;
+        let byte_size = word_count * 4;
+        let mut bytes = Vec::with_capacity(byte_size);
+        
+        for &word in &dirty_words {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        
+        queue.write_buffer(dirty_mask_buf, byte_offset, &bytes);
     }
 }
 
