@@ -177,14 +177,22 @@ fn main() {
         // Poll device to ensure invalidation completes
         interpreter.device().poll(wgpu::PollType::wait_indefinitely());
         
-        // Measure frame time
+        // Measure frame time and collect cache stats
         let mut times = Vec::new();
-        for _ in 0..3 {
+        let mut cache_hits_total = 0u32;
+        for i in 0..3 {
             let start = Instant::now();
             match interpreter.march_camera_variant(&cull_variant, &bind, &frame) {
                 Ok(_result) => {
                     let elapsed = start.elapsed();
                     times.push(elapsed);
+                    
+                    // Read cache stats on last iteration
+                    if i == 2 {
+                        if let Some((cache_hits, _dirty_checked)) = bind.read_cache_stats(interpreter.device(), interpreter.queue()) {
+                            cache_hits_total = cache_hits;
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("  {} ERROR: {}", label, e);
@@ -203,27 +211,32 @@ fn main() {
         
         let fps = 1000.0 / median.as_secs_f64();
         let ms = median.as_secs_f64() * 1000.0;
+        let hit_rate = if total_pixels > 0.0 {
+            (cache_hits_total as f64 / total_pixels) * 100.0
+        } else {
+            0.0
+        };
         
-        println!("  {:30} {:7.2} ms ({:6.1} fps) - {} dirty pixels", 
-                 label, ms, fps, dirty_pixels);
+        println!("  {:30} {:7.2} ms ({:6.1} fps) - {} dirty pixels - {:.1}% cache hits", 
+                 label, ms, fps, dirty_pixels, hit_rate);
         
-        results.push((*dirty_fraction, median));
+        results.push((*dirty_fraction, median, cache_hits_total));
     }
     
     // Show speedup relative to 50% dirty
-    if let Some((_, baseline)) = results.last() {
+    if let Some((_, baseline, _)) = results.last() {
         println!("\nSpeedup relative to 50% dirty:");
         println!("------------------------------");
-        for (fraction, time) in &results {
+        for (fraction, time, cache_hits) in &results {
             let speedup = baseline.as_secs_f64() / time.as_secs_f64();
-            println!("  {:5.0}% dirty: {:.2}x faster", fraction * 100.0, speedup);
+            println!("  {:5.0}% dirty: {:.2}x faster ({} cache hits)", fraction * 100.0, speedup, cache_hits);
         }
     }
     
     // Show absolute time savings
     if results.len() >= 2 {
-        let (_, static_time) = &results[0];
-        let (_, heavy_time) = results.last().unwrap();
+        let (_, static_time, _) = &results[0];
+        let (_, heavy_time, _) = results.last().unwrap();
         let savings_ms = (heavy_time.as_secs_f64() - static_time.as_secs_f64()) * 1000.0;
         println!("\nTime saved (static vs 50% dirty): {:.2} ms per frame", savings_ms.max(0.0));
     }

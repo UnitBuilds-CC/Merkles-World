@@ -78,6 +78,10 @@ const UNSUPPORTED: f32 = 3.402823466e+38;
 // Using atomic operations to prevent race conditions when multiple threads clear bits in same word
 @group(1) @binding(4) var<storage, read_write> dirty_mask: array<atomic<u32>>;
 
+// Cache statistics output (written once at end of dispatch):
+// [0] = cache_hits count, [1] = total_dirty_pixels checked, [2-3] reserved
+@group(1) @binding(5) var<storage, read_write> cache_stats: array<atomic<u32>>;
+
 const DEPTH: u32 = 32u;
 
 struct Frame {
@@ -726,6 +730,7 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     
     if use_cache {
         // Cache hit - reuse cached surface and mark pixel as clean
+        atomicAdd(&cache_stats[0], 1u);
         distances[index] = cached_t;
         atomicAnd(&dirty_mask[dirty_word_idx], ~dirty_bit); // Clear dirty bit atomically
         return;

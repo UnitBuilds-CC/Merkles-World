@@ -186,6 +186,8 @@ pub struct Bind {
     cache_bind: Option<wgpu::BindGroup>,
     /// Dirty mask buffer for delta rendering - allows CPU-side invalidation of cached pixels.
     dirty_mask_buf: Option<wgpu::Buffer>,
+    /// Cache statistics buffer [cache_hits, total_dirty_checked, reserved, reserved].
+    cache_stats_buf: Option<wgpu::Buffer>,
     /// Width and height for calculating pixel indices from rectangles.
     width: u32,
     height: u32,
@@ -1123,6 +1125,7 @@ impl Interpreter {
             }),
             cache_bind: None, // Regular frames don't use temporal cache
             dirty_mask_buf: None,
+            cache_stats_buf: None,
             width: 0,
             height: 0,
         }
@@ -1346,6 +1349,7 @@ impl Interpreter {
             }),
             cache_bind: None,
             dirty_mask_buf: None,
+            cache_stats_buf: None,
             width: frame.width,
             height: frame.height,
         }
@@ -1414,6 +1418,14 @@ impl Interpreter {
             mapped_at_creation: false,
         });
         
+        // cache_stats: [cache_hits, total_dirty_checked, reserved, reserved]
+        let cache_stats_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("temporal-cache-stats"),
+            size: 16, // 4 x u32
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        
         // Initialize all buffers to zero/invalid state
         let zero_bytes_pos = vec![0u8; pixels * 16];
         self.queue.write_buffer(&positions_buf, 0, &zero_bytes_pos);
@@ -1431,6 +1443,10 @@ impl Interpreter {
         let all_dirty: Vec<u8> = vec![0xFF; dirty_words * 4];
         self.queue.write_buffer(&dirty_mask_buf, 0, &all_dirty);
         
+        // Initialize cache stats to zero
+        let zero_stats: Vec<u8> = vec![0u8; 16];
+        self.queue.write_buffer(&cache_stats_buf, 0, &zero_stats);
+        
         // Create bind group 1 using the pipeline's auto-derived layout
         // This should work now that we've increased device limits to support 8 storage buffers
         let cache_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1442,6 +1458,7 @@ impl Interpreter {
                 entry(2, &normals_buf),
                 entry(3, &metadata_buf),
                 entry(4, &dirty_mask_buf),
+                entry(5, &cache_stats_buf),
             ],
         });
         
@@ -1459,6 +1476,7 @@ impl Interpreter {
             }),
             cache_bind: Some(cache_bind),
             dirty_mask_buf: Some(dirty_mask_buf),
+            cache_stats_buf: Some(cache_stats_buf),
             width: frame.width,
             height: frame.height,
         }
@@ -1471,6 +1489,9 @@ impl Bind {
     /// This simulates entity movement by marking pixels within a bounding box as dirty.
     /// The region is specified in pixel coordinates (x, y, width, height).
     /// 
+    /// Optimized for word-aligned operations: processes 32 pixels at once when possible,
+    /// falling back to bit manipulation only for partial words at rectangle edges.
+    /// 
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
     /// * `x`, `y` - Top-left corner of the region in pixels
@@ -1481,39 +1502,64 @@ impl Bind {
         };
         
         let width = self.width;
+        if width == 0 || self.height == 0 {
+            return;
+        }
         
-        // Calculate pixel range
+        // Calculate pixel range with clamping
         let x_start = x.min(width);
         let y_start = y.min(self.height);
         let x_end = (x + w).min(width);
         let y_end = (y + h).min(self.height);
         
-        // Convert pixel rectangle to dirty mask words
-        // Each u32 word contains 32 pixels (1 bit per pixel)
-        let mut dirty_words = Vec::new();
+        if x_start >= x_end || y_start >= y_end {
+            return; // Empty region
+        }
+        
+        // Calculate total words needed
+        let total_words = ((width * self.height + 31) / 32) as usize;
+        let mut dirty_words = vec![0u32; total_words];
         
         for py in y_start..y_end {
-            for px in x_start..x_end {
-                let pixel_idx = py * width + px;
-                let word_idx = (pixel_idx / 32) as usize;
-                let bit_idx = pixel_idx % 32;
-                
-                // Ensure we have enough space
-                while dirty_words.len() <= word_idx {
-                    dirty_words.push(0u32);
-                }
-                
-                // Set the bit
-                dirty_words[word_idx] |= 1u32 << bit_idx;
+            // Process this row efficiently
+            let row_start = py * width + x_start;
+            let row_end = py * width + x_end;
+            
+            // Find first and last word indices for this row
+            let first_word_idx = (row_start / 32) as usize;
+            let last_word_idx = (row_end / 32) as usize;
+            
+            // Handle partial first word
+            if row_start % 32 != 0 {
+                let bit_start = row_start % 32;
+                let bits_in_first_word = 32 - bit_start;
+                let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
+                let mask = ((1u32 << (end_bit - bit_start)) - 1) << bit_start;
+                dirty_words[first_word_idx] |= mask;
+            }
+            
+            // Fill complete middle words (32 pixels at once)
+            let middle_start = if row_start % 32 != 0 { first_word_idx + 1 } else { first_word_idx };
+            let middle_end = if row_end % 32 != 0 { last_word_idx } else { last_word_idx + 1 };
+            
+            for word_idx in middle_start..middle_end {
+                dirty_words[word_idx] = 0xFFFFFFFF; // All 32 pixels dirty
+            }
+            
+            // Handle partial last word
+            if row_end % 32 != 0 && last_word_idx > first_word_idx {
+                let bit_end = row_end % 32;
+                let mask = (1u32 << bit_end) - 1;
+                dirty_words[last_word_idx] |= mask;
             }
         }
         
         // Write only the modified words to GPU
-        if !dirty_words.is_empty() {
-            // Find min/max word indices to minimize transfer
-            let min_word = dirty_words.iter().position(|&w| w != 0).unwrap_or(0);
-            let max_word = dirty_words.len() - 1 - dirty_words.iter().rev().position(|&w| w != 0).unwrap_or(0);
-            
+        // Find min/max word indices to minimize transfer
+        let min_word = dirty_words.iter().position(|&w| w != 0).unwrap_or(0);
+        let max_word = total_words - 1 - dirty_words.iter().rev().position(|&w| w != 0).unwrap_or(0);
+        
+        if min_word <= max_word {
             let byte_offset = (min_word * 4) as u64;
             
             // Convert to bytes for writing
@@ -1535,6 +1581,46 @@ impl Bind {
         let total_words = ((self.width * self.height + 31) / 32) as usize;
         let all_dirty: Vec<u8> = vec![0xFF; total_words * 4];
         queue.write_buffer(dirty_mask_buf, 0, &all_dirty);
+    }
+    
+    /// Read cache statistics after a frame render.
+    /// Returns (cache_hits, total_dirty_pixels_checked) or None if no temporal cache is active.
+    pub fn read_cache_stats(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<(u32, u32)> {
+        let Some(ref cache_stats_buf) = self.cache_stats_buf else {
+            return None;
+        };
+        
+        // Create a staging buffer to copy into
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cache-stats-staging"),
+            size: 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        
+        // Copy from GPU to staging
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("cache-stats-copy"),
+        });
+        encoder.copy_buffer_to_buffer(cache_stats_buf, 0, &staging, 0, 16);
+        queue.submit(Some(encoder.finish()));
+        
+        // Read back
+        let slice = staging.slice(0..16);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely());
+        
+        let view = slice.get_mapped_range();
+        let stats: [u32; 4] = [
+            u32::from_le_bytes(view[0..4].try_into().unwrap()),
+            u32::from_le_bytes(view[4..8].try_into().unwrap()),
+            u32::from_le_bytes(view[8..12].try_into().unwrap()),
+            u32::from_le_bytes(view[12..16].try_into().unwrap()),
+        ];
+        drop(view);
+        staging.unmap();
+        
+        Some((stats[0], stats[1]))
     }
 }
 
