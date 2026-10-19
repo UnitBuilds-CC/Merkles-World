@@ -36,47 +36,137 @@ impl CpuRenderer {
     }
 }
 
-/// Convert an EntityDef to a renderable Tree
+/// Convert an EntityDef to a renderable Tree (recursive, handles full shape hierarchy)
 fn entity_to_tree(entity_def: &EntityDef) -> Tree {
     use contracts::sdf::{pack_kind_and_arity, pack_first_and_flags, pack_params_len, FLAG_IS_ROOT};
     
-    match &entity_def.shape {
-        Shape::Sphere { r, centre } => {
-            let record = contracts::sdf::NodeRecord([
-                pack_kind_and_arity(contracts::sdf::NODE_SPHERE, 0), // word 0: kind + arity
-                1,                                                     // word 1: subtree_len = 1 (single node)
-                pack_first_and_flags(0, FLAG_IS_ROOT),                 // word 2: params_first=0, flags=ROOT
-                pack_params_len(4),                                    // word 3: params_len=4
-            ]);
-            Tree {
-                nodes: vec![record],
-                params: vec![*r, centre[0], centre[1], centre[2]],
-            }
+    // First pass: collect all nodes and params in pre-order traversal
+    let mut nodes = Vec::new();
+    let mut params = Vec::new();
+    
+    // Start recursive conversion with root flag
+    convert_shape_recursive(&entity_def.shape, &mut nodes, &mut params, true);
+    
+    Tree { nodes, params }
+}
+
+/// Recursively convert a Shape into NodeRecords and parameters
+fn convert_shape_recursive(
+    shape: &assetc::Shape,
+    nodes: &mut Vec<contracts::sdf::NodeRecord>,
+    params: &mut Vec<f32>,
+    is_root: bool,
+) {
+    use contracts::sdf::{pack_kind_and_arity, pack_first_and_flags, pack_params_len, FLAG_IS_ROOT};
+    
+    let flags = if is_root { FLAG_IS_ROOT } else { 0 };
+    
+    match shape {
+        assetc::Shape::Sphere { r, centre } => {
+            let params_first = params.len() as u16;
+            params.extend_from_slice(&[*r, centre[0], centre[1], centre[2]]);
+            
+            nodes.push(contracts::sdf::NodeRecord([
+                pack_kind_and_arity(contracts::sdf::NODE_SPHERE, 0),
+                1, // subtree_len for leaf
+                pack_first_and_flags(params_first, flags),
+                pack_params_len(4),
+            ]));
         }
-        Shape::RoundedBox { half, r } => {
-            let record = contracts::sdf::NodeRecord([
+        assetc::Shape::RoundedBox { half, r } => {
+            let params_first = params.len() as u16;
+            params.extend_from_slice(&[half[0], half[1], half[2], *r]);
+            
+            nodes.push(contracts::sdf::NodeRecord([
                 pack_kind_and_arity(contracts::sdf::NODE_ROUNDED_BOX, 0),
                 1,
-                pack_first_and_flags(0, FLAG_IS_ROOT),
-                pack_params_len(4), // half.x, half.y, half.z, corner_radius
-            ]);
-            Tree {
-                nodes: vec![record],
-                params: vec![half[0], half[1], half[2], *r],
-            }
+                pack_first_and_flags(params_first, flags),
+                pack_params_len(4),
+            ]));
+        }
+        assetc::Shape::SmoothUnion { a, b, k } => {
+            let params_first = params.len() as u16;
+            params.push(*k);
+            
+            // Placeholder node - we'll update subtree_len after processing children
+            let node_index = nodes.len();
+            nodes.push(contracts::sdf::NodeRecord([
+                pack_kind_and_arity(contracts::sdf::NODE_SMOOTH_UNION, 2),
+                0, // Will be updated after children are processed
+                pack_first_and_flags(params_first, flags),
+                pack_params_len(1),
+            ]));
+            
+            // Process children
+            convert_shape_recursive(a, nodes, params, false);
+            convert_shape_recursive(b, nodes, params, false);
+            
+            // Update subtree_len (this node + all descendants)
+            let total_nodes = nodes.len() - node_index;
+            nodes[node_index].0[1] = total_nodes as u32;
+        }
+        assetc::Shape::Union { a, b } => {
+            let params_first = params.len() as u16;
+            
+            let node_index = nodes.len();
+            nodes.push(contracts::sdf::NodeRecord([
+                pack_kind_and_arity(contracts::sdf::NODE_UNION, 2),
+                0,
+                pack_first_and_flags(params_first, flags),
+                pack_params_len(0),
+            ]));
+            
+            convert_shape_recursive(a, nodes, params, false);
+            convert_shape_recursive(b, nodes, params, false);
+            
+            let total_nodes = nodes.len() - node_index;
+            nodes[node_index].0[1] = total_nodes as u32;
+        }
+        assetc::Shape::Subtract { kept, cutter } => {
+            let params_first = params.len() as u16;
+            
+            let node_index = nodes.len();
+            nodes.push(contracts::sdf::NodeRecord([
+                pack_kind_and_arity(contracts::sdf::NODE_SUBTRACT, 2),
+                0,
+                pack_first_and_flags(params_first, flags),
+                pack_params_len(0),
+            ]));
+            
+            convert_shape_recursive(kept, nodes, params, false);
+            convert_shape_recursive(cutter, nodes, params, false);
+            
+            let total_nodes = nodes.len() - node_index;
+            nodes[node_index].0[1] = total_nodes as u32;
+        }
+        assetc::Shape::Intersect { a, b } => {
+            let params_first = params.len() as u16;
+            
+            let node_index = nodes.len();
+            nodes.push(contracts::sdf::NodeRecord([
+                pack_kind_and_arity(contracts::sdf::NODE_INTERSECT, 2),
+                0,
+                pack_first_and_flags(params_first, flags),
+                pack_params_len(0),
+            ]));
+            
+            convert_shape_recursive(a, nodes, params, false);
+            convert_shape_recursive(b, nodes, params, false);
+            
+            let total_nodes = nodes.len() - node_index;
+            nodes[node_index].0[1] = total_nodes as u32;
         }
         _ => {
-            // Fallback to simple sphere
-            let record = contracts::sdf::NodeRecord([
+            // Fallback: unsupported shape type, use a sphere
+            let params_first = params.len() as u16;
+            params.extend_from_slice(&[1.0, 0.0, 0.0, 0.0]);
+            
+            nodes.push(contracts::sdf::NodeRecord([
                 pack_kind_and_arity(contracts::sdf::NODE_SPHERE, 0),
                 1,
-                pack_first_and_flags(0, FLAG_IS_ROOT),
+                pack_first_and_flags(params_first, flags),
                 pack_params_len(4),
-            ]);
-            Tree {
-                nodes: vec![record],
-                params: vec![1.0, 0.0, 0.0, 0.0],
-            }
+            ]));
         }
     }
 }
