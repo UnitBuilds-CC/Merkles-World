@@ -1535,7 +1535,12 @@ impl Bind {
                 let bit_start = row_start % 32;
                 let bits_in_first_word = 32 - bit_start;
                 let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
-                let mask = ((1u32 << (end_bit - bit_start)) - 1) << bit_start;
+                let shift = end_bit - bit_start;
+                let mask = if shift == 32 {
+                    0xFFFFFFFFu32 << bit_start
+                } else {
+                    ((1u32 << shift) - 1) << bit_start
+                };
                 dirty_words[first_word_idx] |= mask;
             }
             
@@ -1555,10 +1560,11 @@ impl Bind {
             }
         }
         
-        // Write the entire dirty mask to GPU
-        let bytes: Vec<u8> = dirty_words.iter()
-            .flat_map(|&word| word.to_le_bytes())
-            .collect();
+        // Write the entire dirty mask to GPU using extend_from_slice (more efficient than flat_map)
+        let mut bytes = Vec::with_capacity(dirty_words.len() * 4);
+        for &word in &dirty_words {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
         
         queue.write_buffer(dirty_mask_buf, 0, &bytes);
     }
@@ -1715,7 +1721,12 @@ impl Bind {
                     let bit_start = row_start % 32;
                     let bits_in_first_word = 32 - bit_start;
                     let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
-                    let mask = ((1u32 << (end_bit - bit_start)) - 1) << bit_start;
+                    let shift = end_bit - bit_start;
+                    let mask = if shift == 32 {
+                        0xFFFFFFFFu32 << bit_start
+                    } else {
+                        ((1u32 << shift) - 1) << bit_start
+                    };
                     dirty_words[first_word_idx] |= mask;
                 }
                 
@@ -1736,10 +1747,11 @@ impl Bind {
             }
         }
         
-        // Write the entire dirty mask to GPU
-        let bytes: Vec<u8> = dirty_words.iter()
-            .flat_map(|&word| word.to_le_bytes())
-            .collect();
+        // Write the entire dirty mask to GPU using extend_from_slice (more efficient than flat_map)
+        let mut bytes = Vec::with_capacity(dirty_words.len() * 4);
+        for &word in &dirty_words {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
         
         queue.write_buffer(dirty_mask_buf, 0, &bytes);
     }

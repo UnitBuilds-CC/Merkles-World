@@ -691,6 +691,9 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     
+    // Track total dirty pixels checked for cache hit rate calculation
+    atomicAdd(&cache_stats[1], 1u);
+    
     // Extract camera parameters (optimized: use precomputed values from cam uniform)
     let width = u32(cam.grid.x);
     let height = u32(cam.grid.y);
