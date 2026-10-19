@@ -6,7 +6,9 @@
 //! `Ok` would look identical to this one if nobody fed it a shader that has to fail, so a broken module goes
 //! through the same path and must be refused, with the reason in hand.
 
-use gpu::naga_validate::{declared_bindings, validate, ValidationError, INTERP};
+use gpu::naga_validate::{
+    declared_bindings, temporal_cache_owner, validate, ValidationError, INTERP,
+};
 
 /// The presentation half, handed to naga exactly as `wgpu` would hand it. This is the only place in the
 /// repository that compiles `present.wgsl` on a machine with no adapter, which matters because the windowed
@@ -294,4 +296,73 @@ fn the_culled_camera_entry_point_checks_cache_before_marching() {
         INTERP.contains("is_dirty"),
         "culled entry point doesn't declare is_dirty variable for delta rendering"
     );
+}
+
+#[test]
+fn the_cache_group_belongs_to_the_culled_camera_march_and_to_no_other() {
+    // `layout: None` means wgpu derives a pipeline's bind group layouts from the resources the entry point it
+    // was compiled *for* references, so a march that never names the cache has one group - and binding a second
+    // group to it is a device-side validation error. `device.rs` bound the cache for every camera variant
+    // anyway from the cache port (a19c81c) until the DEPTH ladder died with `Invalid group index 1` on the
+    // ARM64 macOS leg, the only CI runner that gets an adapter for these instruments. Both halves of that are
+    // asserted here, where they need no GPU: the owner is the culled march, so the unculled one gets no bind.
+    let owner = temporal_cache_owner(INTERP).unwrap_or_else(|reason| {
+        panic!("interp.wgsl's cache group could not be attributed: {reason}")
+    });
+    assert_eq!(
+        owner,
+        Some("march_rays_from_camera_culled"),
+        "the @group(1) cache belongs to {owner:?}, not the culled camera march, so the camera binding code's \
+         per-entry decision is stale and a variant is being handed a group its pipeline never derived"
+    );
+    assert_ne!(
+        owner,
+        Some("march_rays_from_camera"),
+        "the unculled camera march now owns the cache group, so the DEPTH ladder's rows and the shipped \
+         `bind_camera` path disagree about what a camera pipeline has to bind"
+    );
+}
+
+#[test]
+fn a_cache_reached_through_a_helper_is_refused_rather_than_guessed() {
+    // The attribution reads entry points only, which is sound exactly while every cache reference sits inside
+    // one. Move the references into a helper and the answer depends on who calls it, so guessing would put the
+    // wrong group count back onto a pipeline - the failure this pair of tests exists to make loud. Refusal is
+    // the honest output here, and the fixture is the only way to reach it without editing the shader.
+    let source = "\
+@group(1) @binding(0) var<storage, read_write> cached_depths: array<f32>;
+
+fn write_cache(index: u32) {
+    cached_depths[index] = 1.0;
+}
+
+@compute @workgroup_size(64)
+fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
+    write_cache(id.x);
+}
+";
+    let error = temporal_cache_owner(source)
+        .expect_err("a cache reference outside an entry point must not be attributed to one");
+    assert!(
+        error.contains("write_cache"),
+        "the refusal names neither the function that holds the reference nor the entry point it was found \
+         under: {error}"
+    );
+}
+
+#[test]
+fn a_module_that_declares_no_cache_has_no_owner_to_bind() {
+    // `Ok(None)` is the answer for a shader with no `@group(1)` at all, which is what `interp.wgsl` was before
+    // the temporal cache. Without this row the empty case and the attributed case would both arrive as "no
+    // error", and the binding code could not tell a camera pipeline with one group from a shader that lost its
+    // cache declarations.
+    let source = "\
+@group(0) @binding(0) var<storage, read> nodes: array<f32>;
+
+@compute @workgroup_size(64)
+fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
+    _ = nodes[id.x];
+}
+";
+    assert_eq!(temporal_cache_owner(source), Ok(None));
 }

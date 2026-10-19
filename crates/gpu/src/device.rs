@@ -61,6 +61,11 @@ pub struct Interpreter {
 pub struct CameraVariant {
     pub depth: u32,
     pipeline: wgpu::ComputePipeline,
+    /// Whether this pipeline's own entry point reaches the `@group(1)` temporal cache, read off
+    /// `interp.wgsl` when the pipeline was compiled. wgpu derives a `layout: None` pipeline's layouts from the
+    /// resources the entry point references, so this is a property of the shader and not a choice: binding a
+    /// cache group on a pipeline that never derived one is a validation error on the device.
+    temporal_cache: bool,
 }
 
 /// One timed bench pass. Two modes, because queueing work and waiting for it are different costs.
@@ -1364,15 +1369,42 @@ impl Interpreter {
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
-        self.bind_camera_on(&variant.pipeline, shape, frame)
+        self.bind_camera_on(&variant.pipeline, variant.temporal_cache, shape, frame)
     }
 
     fn bind_camera_on(
         &self,
         pipeline: &wgpu::ComputePipeline,
+        temporal_cache: bool,
         shape: &Shape,
         frame: &CameraFrame,
     ) -> Bind {
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("camera-march"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                entry(0, &shape.nodes),
+                entry(1, &shape.pool),
+                entry(3, &frame.header),
+                entry(4, &frame.traced),
+                entry(5, &frame.camera),
+            ],
+        });
+        if !temporal_cache {
+            // The march this pipeline was compiled for never names a `@group(1)` buffer, so the layout wgpu
+            // derived for it stops at group 0 - which is also what `bind_camera` hands back for the shipped
+            // camera pipeline. Asking for the group anyway was a validation error on every GPU, and only the
+            // runners that actually get an adapter can reach it.
+            return Bind {
+                bind,
+                cache_bind: None,
+                dirty_mask_buf: None,
+                cache_stats_buf: None,
+                width: frame.width,
+                height: frame.height,
+            };
+        }
+
         // Create temporal cache buffers for bind group 1
         let pixels = frame.pixels;
         let pixel_size = core::mem::size_of::<f32>();
@@ -1467,17 +1499,7 @@ impl Interpreter {
         });
 
         Bind {
-            bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("camera-march"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    entry(0, &shape.nodes),
-                    entry(1, &shape.pool),
-                    entry(3, &frame.header),
-                    entry(4, &frame.traced),
-                    entry(5, &frame.camera),
-                ],
-            }),
+            bind,
             cache_bind: Some(cache_bind),
             dirty_mask_buf: Some(dirty_mask_buf),
             cache_stats_buf: Some(cache_stats_buf),
@@ -1889,11 +1911,21 @@ impl Bind {
 }
 
 impl Interpreter {
+    /// Whether the camera pipeline compiled from `source` for entry point `entry` has a `@group(1)` to bind.
+    ///
+    /// Asked rather than assumed, because `layout: None` means the layout is whatever the entry point's own
+    /// resources are: the unculled march has one group and the culled one two, and binding a cache group the
+    /// pipeline never derived is a device-side validation error that no adapter-less CI runner can see.
+    fn camera_has_cache_group(source: &str, entry: &str) -> Result<bool, String> {
+        Ok(crate::naga_validate::temporal_cache_owner(source)? == Some(entry))
+    }
+
     /// Compile the shipped interpreter with its `DEPTH` capacity replaced, for the cost ladder. Refuses rather
     /// than silently handing back the shipped module: the pattern has to be present exactly once, because a
     /// ladder whose rows are all the same pipeline would print a stack price of zero and look like a finding.
     pub fn camera_variant(&self, depth: u32) -> Result<CameraVariant, String> {
         const DEPTH_LINE: &str = "const DEPTH: u32 = 32u;";
+        const ENTRY: &str = "march_rays_from_camera";
         let shipped = crate::naga_validate::INTERP;
         if shipped.matches(DEPTH_LINE).count() != 1 {
             return Err(format!(
@@ -1902,6 +1934,7 @@ impl Interpreter {
             ));
         }
         let source = shipped.replace(DEPTH_LINE, &format!("const DEPTH: u32 = {depth}u;"));
+        let temporal_cache = Self::camera_has_cache_group(&source, ENTRY)?;
         let module = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1914,11 +1947,15 @@ impl Interpreter {
                 label: None,
                 layout: None,
                 module: &module,
-                entry_point: Some("march_rays_from_camera"),
+                entry_point: Some(ENTRY),
                 compilation_options: Default::default(),
                 cache: None,
             });
-        Ok(CameraVariant { depth, pipeline })
+        Ok(CameraVariant {
+            depth,
+            pipeline,
+            temporal_cache,
+        })
     }
 
     /// Compile the shipped interpreter with its entry point moved to the ray-culled camera march, for task #69's
@@ -1930,13 +1967,14 @@ impl Interpreter {
     /// or deleted would otherwise measure an unculled frame and report it as the armed one, the same failure the
     /// `DEPTH_LINE` check above exists to make impossible.
     pub fn camera_cull_variant(&self) -> Result<CameraVariant, String> {
-        const ENTRY: &str = "fn march_rays_from_camera_culled(";
+        const ENTRY: &str = "march_rays_from_camera_culled";
         let shipped = crate::naga_validate::INTERP;
-        if shipped.matches(ENTRY).count() != 1 {
+        if shipped.matches(&format!("fn {ENTRY}(")).count() != 1 {
             return Err(format!(
                 "interp.wgsl's culled camera entry point `{ENTRY}` is not found exactly once, so the arm has no pipeline to name - a row measured here would be the unculled frame wearing the cull's label"
             ));
         }
+        let temporal_cache = Self::camera_has_cache_group(shipped, ENTRY)?;
         let module = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1951,7 +1989,7 @@ impl Interpreter {
                 label: None,
                 layout: None,
                 module: &module,
-                entry_point: Some("march_rays_from_camera_culled"),
+                entry_point: Some(ENTRY),
                 compilation_options: Default::default(),
                 cache: None,
             });
@@ -1959,6 +1997,7 @@ impl Interpreter {
         Ok(CameraVariant {
             depth: STACK_DEPTH,
             pipeline,
+            temporal_cache,
         })
     }
 

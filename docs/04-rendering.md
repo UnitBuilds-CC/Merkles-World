@@ -636,7 +636,7 @@ now bounds an out-of-range child as unbounded-and-unlicenced, and
 pins it on all three CI architectures (the example only reproduces it on a device runner, which is why the test
 exists). The test found its own boundary: walking that fixture with `sdf_eval_bnb` still panics, in
 `lower_bound`, and that is left as the correct behaviour — the contract that refuses malformed assets is
-`validate`, not the hot branch of a walk that is already invalid. Suite size is **232 tests in 33 suites**.
+`validate`, not the hot branch of a walk that is already invalid. Suite size is **235 tests in 33 suites**.
 
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
@@ -2243,3 +2243,63 @@ capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approache
 
 Durations assert nothing (ADR-017); spreads here are 4.08-10.49 ms. The example prints SKIP on adapter-less machines
 (CI runners have no GPU), so the CI step is informational there and the asserted rows are the anchor-grid ones.
+
+## A camera pipeline only has the bind groups its entry point derives (2026-10-20, `examples/r1_walk_cost_ladder`, `r1_specialized_frame`, `demo_window`)
+
+`wgpu` derives a `layout: None` pipeline's bind group layouts from the resources **the entry point it was compiled
+for** references. That makes a group's existence a property of the shader rather than of the module, and the camera
+path had been assuming the module: since the temporal-cache port (`a19c81c`, 2026-10-18 23:29) `bind_camera_on` built
+six cache buffers and asked `pipeline.get_bind_group_layout(1)` for **every** camera pipeline, while
+`march_rays_from_camera` — the entry point the shipped camera path and every `camera_variant(depth)` row compile —
+names no `@group(1)` binding at all. Only `march_rays_from_camera_culled` does (its references are lines 684-786, and
+nothing else in the file touches the group).
+
+The consequence was a device-side validation error, `Invalid group index 1`, in every consumer that binds a DEPTH
+variant:
+
+| instrument | what it had been doing since the cache port |
+|---|---|
+| `r1_walk_cost_ladder` | panicked after its anchor block, so CI's `R1 stack-capacity cost ladder` step died on the only runner that gets an adapter |
+| `r1_specialized_frame` | never reached its rows — the step sits *after* the ladder, so GitHub skipped it once the ladder failed |
+| `demo_window` | Phase 1's windowed exit clause could not open: it compiles the frame at the asset's declared depth |
+
+The published numbers in the two sections above this one are unaffected: the ladder's rows and the specialized
+frame's interval were both measured on buildbox's GTX 1070 at 00:58 and 01:14 on 2026-10-18, roughly 23 hours before
+the commit that broke them. Nothing re-measured on a device between those two timestamps and this fix could have
+produced them.
+
+**The fix** asks the shader instead of assuming it. `naga_validate::temporal_cache_owner` reads `interp.wgsl` and
+returns the single `@compute` entry point whose body references a `@group(1)` global, `None` if nothing does, and an
+`Err` if the references sit in a non-entry function or split across two entries — because attributing a layout to an
+entry point then needs the call graph, and a guess would put the same wrong group count back onto a pipeline.
+`camera_variant` and `camera_cull_variant` record that answer per pipeline and `bind_camera_on` builds the cache
+group only where it is owned, which is what `bind_camera` already did for the shipped camera path. Three rows in
+`crates/gpu/tests/wgsl_validates.rs` hold it: the shipped module's owner is the culled march and not the unculled
+one, a cache reference inside a helper is refused rather than guessed, and a module with no `@group(1)` reports no
+owner. Both halves were falsified by sabotage — disabling the `@compute` detection makes the attribution test fail
+with "`march_rays_from_camera_culled` reads the @group(1) cache but is not a @compute entry point", and disabling the
+non-entry refusal makes the helper fixture resolve to an owner named `write_cache`.
+
+**Verified on a device** (GeForce MX250 [Vulkan, DiscreteGpu], this machine, release build). The panic is
+backend-independent, which is the point: it reproduced here on Vulkan with the same `Invalid group index 1` the
+macOS runner reported on Metal, and after the fix all three instruments run to their own assertions —
+
+- `LADDER_GRID=640x360 r1_walk_cost_ladder`: `DEPTH = 1 : 0 surfaces, 132 of 3072 depth bit patterns differ` (the
+  falsifier), then 14 capacity rows with **0 bit diffs vs shipped** on every one.
+- `R1_GRID=640x360 r1_specialized_frame`: capacity 4 on the boot's own asset reproduces the shipped frame with 0 bit
+  diffs at caps 8 and 96 (23,016 and 33,769 hits).
+- `DEMO_FRAMES=3 DEMO_W=320 DEMO_H=240 demo_window`: 3 frames drawn, marched at DEPTH 4, **0 depths differing in any
+  bit** against the shipped module over the same 76,800 rays, 14,994 surfaces.
+
+Durations from these three runs are quoted nowhere: the MX250 is not R1's named instrument (ADR-017), and rows above
+640x360 here ran 1080p-scale times on a laptop GPU. What this unit establishes is that the instruments work again, so
+the next buildbox session can re-run them on the gate's own hardware.
+
+**One defect found and left standing.** While checking the cache half of the same path on a device,
+`examples/r1_invalidation_correctness_test` panicked in `Bind::invalidate_region` (`device.rs:1585`): a region whose
+row segment fits inside one 32-pixel word and is aligned at neither end produces `middle_start = first_word_idx + 1`
+above `middle_end = last_word_idx`, and the slice range is inverted. The same function also starts its mask at
+`0xFFFFFFFF` for every word before setting the region's bits, so an invalidation marks the whole frame dirty rather
+than the region — which is the opposite of what the delta path is for. That example is not a CI step, so neither
+symptom gates trunk today; both need fixing before the temporal cache can be integrated (task #77), and the OQ-63
+cache claims in this repository stay unmeasured on a device until they do.

@@ -53,3 +53,84 @@ pub fn declared_bindings(source: &str) -> Vec<u32> {
     }
     out
 }
+
+/// The names of the storage globals declared under `@group(1)` — the temporal cache's buffers.
+fn cache_globals(source: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    for line in source.lines() {
+        if line.trim().strip_prefix("@group(1) @binding(").is_none() {
+            continue;
+        }
+        let Some(var) = line.find("var<") else {
+            continue;
+        };
+        let after_qualifier = &line[var + 4..];
+        let Some(gt) = after_qualifier.find('>') else {
+            continue;
+        };
+        let name = after_qualifier[gt + 1..]
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim();
+        if !name.is_empty() {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Which `@compute` entry point owns the `@group(1)` cache group, or `None` when nothing reaches it.
+///
+/// This exists because `wgpu` derives a `layout: None` pipeline's bind group layouts from the resources the
+/// entry point it was compiled *for* references. A camera march that never names the cache therefore has a
+/// one-group layout, and asking its pipeline for group 1 is a device-side validation error — `device.rs`'s
+/// camera binding used to ask unconditionally, which every GPU would have caught and no CI runner without a
+/// GPU could: the instruments that bind these pipelines print `SKIP … NoAdapter` on the Linux and Windows
+/// legs, so only the ARM64 macOS adapter and real hardware ever reached the call.
+///
+/// A module whose cache is reached through a shared helper, or by two entry points, is refused rather than
+/// guessed at: attributing a layout to an entry point then needs the call graph, and the honest price of that
+/// refactor is to say so here instead of binding a group the pipeline never derived.
+pub fn temporal_cache_owner(source: &str) -> Result<Option<&str>, String> {
+    let globals = cache_globals(source);
+    let mut owner: Option<&str> = None;
+    let mut body: Option<&str> = None;
+    let mut body_is_entry = false;
+    let mut next_is_entry = false;
+    for line in source.lines() {
+        if line.starts_with("@compute") {
+            next_is_entry = true;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("fn ") {
+            body = rest.split('(').next();
+            body_is_entry = next_is_entry;
+            next_is_entry = false;
+            continue;
+        }
+        if line == "}" {
+            body = None;
+            body_is_entry = false;
+            continue;
+        }
+        let Some(reader) = body else { continue };
+        if !globals.iter().any(|global| line.contains(*global)) {
+            continue;
+        }
+        if !body_is_entry {
+            return Err(format!(
+                "`{reader}` reads the @group(1) cache but is not a @compute entry point, so no bind group \
+                 layout can be attributed to an entry point from this module without following calls"
+            ));
+        }
+        if let Some(other) = owner.filter(|other| *other != reader) {
+            return Err(format!(
+                "both `{other}` and `{reader}` read the @group(1) cache, so which pipeline owns that group is \
+                 not something this module states once"
+            ));
+        }
+        owner = Some(reader);
+    }
+    Ok(owner)
+}
