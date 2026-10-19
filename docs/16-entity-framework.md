@@ -181,6 +181,20 @@ pixels instead:
   no pixel. A key that missed a pixel-changing field would keep showing the old frame while the
   inspector believed it had moved the animal, so `lib::tests` edits each field and requires the key to
   change, and edits the two invisible ones and requires it not to.
+- **Any node in the tree can be edited, not only the root.** `shape_path` addresses a part by a route of
+  steps from the root — `[Second, Second, Sole, Second]` is `root.b.cutter.child.b` — and the panel lists
+  every node depth-first, one row each carrying its route, its kind and its own parameters, with the
+  sliders below writing to whichever row is selected. Before it the inspector matched on the root variant
+  alone, which for `pig.ron` (rooted at a `SmoothUnion`) meant the panel could set the whole animal's
+  blend factor and could not reach the snout. The write-back replaces the selected node wholesale rather
+  than field by field, so a combinator keeps its children. The field names in a route are the ones
+  `assetc`'s refusals print — that crate's `edge`/`label` alternate kind and field, so an error reads
+  `Subtract.cutter.Mirror` — and `shape_path::tests` *checks* the agreement by refusing a deep node and
+  comparing the two routes, rather than trusting a doc comment. A selection the tree no longer contains
+  (after a load, or after the root is rebuilt) names itself gone and hands back nothing to edit; sliders
+  that quietly retargeted the root would author a change the file does not describe. `lib::tests` holds
+  both halves of that: a dead selection resolves to `None`, and editing a selected part moves
+  `preview_signature`, the key the repaint waits on, which a root-only key would have left alone.
 - **The window's dependency surface is trimmed, and that is load-bearing.** `crates/editor` asks for
   `eframe` with `default-features = false` and re-enables only `default_fonts`, `glow` and `x11`.
   eframe's defaults also turn on `accesskit` and `web_screen_reader`, which on Linux pull
@@ -196,10 +210,12 @@ pixels instead:
 
 The preview is a CPU march rather than a device march, so it is an authoring instrument and not a frame
 budget. In a debug build the six-angle dump measured 11.0–17.1 s per 480×360 frame and the editor's own
-256×192 preview 2.5–4.6 s; the same six-angle dump in a **release** build measures 1.20–1.43 s per
-480×360 frame (2026-10-20, this machine, the 32-node `pig.ron`), which is why both examples are run with
-`--release`. No number here is an R1 measurement — §3's hot-path bans do not apply to a tool, but nothing
-it prints is evidence about a game frame.
+256×192 preview 2.5–4.6 s; the same six-angle dump in a **release** build measured 0.85–1.16 s per
+480×360 frame on the run that closed the part-selection unit (2026-10-20, this machine, the 32-node
+`pig.ron`), where the run earlier the same day measured 1.20–1.43 s — the same binary, so the spread is
+the machine's, not the renderer's, and no number in this paragraph should be read tighter than "about a
+second". Both are why the examples are run with `--release`. No number here is an R1 measurement —
+§3's hot-path bans do not apply to a tool, but nothing it prints is evidence about a game frame.
 
 ## Runtime lifecycle
 

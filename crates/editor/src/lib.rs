@@ -4,9 +4,12 @@
 //! - A viewport that marches the entity with `crates/render`'s CPU reference — the same evaluator the
 //!   WGSL interpreter has to agree with. Not the GPU: eframe owns the window's device, `gpu::Interpreter`
 //!   owns its own, and no temporal cache is wired into this path yet.
-//! - Editing the authored transform (`position`, `scale`) and the root node's own parameters. A node
-//!   deeper in the tree is shown in the image but is not yet selectable — docs/16 § What the editor does
-//!   not do yet.
+//! - Editing the authored transform: `position` and `scale` by slider. `rotation` is honoured by the
+//!   viewport and by the file, but the panel has no widget for it yet — see docs/16 § Visual authoring.
+//! - Editing the parameters of any node in the tree: the panel lists the parts by their authored route
+//!   (`root.b.kept`) with the node's kind beside it, and the sliders below the list write to the selected
+//!   one. The field names in a route are the ones `assetc`'s refusals use, so an error text and a row
+//!   point at the same part.
 //! - Material slot assignment and a swatch read out of the same registry the viewport shades with
 //! - RON load and save, with dirty tracking
 //!
@@ -17,12 +20,14 @@ pub mod export;
 pub mod gpu_renderer;
 pub mod inspector;
 pub mod material_panel;
+pub mod shape_path;
 pub mod viewport;
 
 use core::hash::{Hash, Hasher};
 
 use assetc::{EntityDef, Shape};
 use entity::MaterialRegistry;
+use shape_path::Step;
 
 /// Editor state: tracks the currently loaded entity and dirty flag
 pub struct EditorState {
@@ -31,6 +36,11 @@ pub struct EditorState {
     /// The materials a `material_id` may point at. One registry, read by both the panel's swatches
     /// and the viewport's shading, so the two cannot disagree about what slot 0 looks like.
     pub materials: MaterialRegistry,
+    /// Which node the shape sliders write to. Empty is the root, and a path that no longer resolves —
+    /// after a load, or after a rebuild of the tree — is reported as gone rather than silently
+    /// retargeted at the root, because editing the parent instead of the part is exactly the change
+    /// the file would not describe.
+    pub selected: Vec<Step>,
     /// Whether parameters have been modified since last save
     pub dirty: bool,
     /// Path to loaded file (if any)
@@ -54,9 +64,26 @@ impl EditorState {
                 quantity: 0,
             },
             materials: MaterialRegistry::with_defaults(),
+            selected: Vec::new(),
             dirty: false,
             file_path: None,
         }
+    }
+
+    /// The node the shape sliders write to, or `None` when the selection no longer names one.
+    pub fn selected_shape(&self) -> Option<&Shape> {
+        shape_path::resolve(&self.entity_def.shape, &self.selected)
+    }
+
+    /// The mutable twin of [`EditorState::selected_shape`].
+    pub fn selected_shape_mut(&mut self) -> Option<&mut Shape> {
+        shape_path::resolve_mut(&mut self.entity_def.shape, &self.selected)
+    }
+
+    /// Select a node by path. Selecting a path that does not resolve is allowed, and reports itself as
+    /// gone in the panel rather than being refused at the call site the list came from.
+    pub fn select(&mut self, path: Vec<Step>) {
+        self.selected = path;
     }
 
     /// Load entity from RON file
@@ -68,6 +95,9 @@ impl EditorState {
             ron::from_str(&text).map_err(|e| format!("Failed to parse {}: {}", path, e))?;
 
         self.entity_def = def;
+        // The tree the selection indexed into is gone; a path kept across a load would name some
+        // unrelated node of the new animal and edit that.
+        self.selected = Vec::new();
         self.file_path = Some(path.to_string());
         self.dirty = false;
         Ok(())
@@ -164,5 +194,70 @@ mod tests {
         assert_eq!(state.preview_signature(), base, "flags are metadata");
         state.entity_def.quantity = 3;
         assert_eq!(state.preview_signature(), base, "quantity is metadata");
+    }
+
+    #[test]
+    fn a_selection_the_tree_no_longer_has_reports_itself_gone() {
+        let mut state = EditorState::new();
+        state.entity_def.shape = Shape::Union {
+            a: Box::new(Shape::Sphere {
+                r: 1.0,
+                centre: [0.0, 0.0, 0.0],
+            }),
+            b: Box::new(Shape::Sphere {
+                r: 0.4,
+                centre: [0.8, 0.0, 0.0],
+            }),
+        };
+        state.select(vec![Step::Second]);
+        assert!(
+            state.selected_shape().is_some(),
+            "the part was there to select"
+        );
+
+        // Replace the tree the path indexed into with a leaf — what a load or a rebuild of the root
+        // does. The old path now names nothing, and must not be quietly retargeted at the root.
+        state.entity_def.shape = Shape::Sphere {
+            r: 1.0,
+            centre: [0.0, 0.0, 0.0],
+        };
+        assert!(
+            state.selected_shape().is_none(),
+            "a dead selection resolves through the root instead of reporting itself gone"
+        );
+        assert!(
+            state.selected_shape_mut().is_none(),
+            "a dead selection still handed the sliders something to write to"
+        );
+    }
+
+    #[test]
+    fn editing_a_part_through_the_selection_reaches_the_frame() {
+        let mut state = EditorState::new();
+        state.entity_def.shape = Shape::Union {
+            a: Box::new(Shape::Sphere {
+                r: 1.0,
+                centre: [0.0, 0.0, 0.0],
+            }),
+            b: Box::new(Shape::Sphere {
+                r: 0.4,
+                centre: [0.8, 0.0, 0.0],
+            }),
+        };
+        let base = state.preview_signature();
+
+        state.select(vec![Step::Second]);
+        match state.selected_shape_mut() {
+            Some(Shape::Sphere { r, .. }) => *r = 0.75,
+            other => panic!("selecting Union.b did not hand back a sphere: {other:?}"),
+        }
+
+        // The whole point of part selection: the viewport keys on the tree, so a part edit has to
+        // re-march. A key that only read the root's own variant would keep showing the old snout.
+        assert_ne!(
+            state.preview_signature(),
+            base,
+            "an edit to a selected part left the preview key alone"
+        );
     }
 }
