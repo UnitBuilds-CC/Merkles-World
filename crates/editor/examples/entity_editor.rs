@@ -15,8 +15,6 @@
 //! per 256x192 frame here. The viewport renders only when the camera or the shape actually changed, and
 //! at a quarter of the pixels while a drag is in progress.
 
-use core::hash::{Hash, Hasher};
-
 use editor::{
     export::export_menu,
     gpu_renderer::{CpuRenderer, Stage},
@@ -36,7 +34,7 @@ struct PreviewKey {
     yaw: u32,
     pitch: u32,
     distance: u32,
-    shape: u64,
+    subject: u64,
     stage: bool,
     width: u32,
     height: u32,
@@ -89,22 +87,12 @@ impl EditorApp {
             yaw: self.camera.yaw.to_bits(),
             pitch: self.camera.pitch.to_bits(),
             distance: self.camera.distance.to_bits(),
-            shape: shape_signature(&self.state),
+            subject: self.state.preview_signature(),
             stage: self.show_stage,
             width,
             height,
         }
     }
-}
-
-/// A digest of the authored shape, so the inspector moving a slider invalidates the preview. The
-/// editor is a tool (§3's bans do not apply to it), and this runs at most once per UI frame against a
-/// tree of a few dozen nodes.
-fn shape_signature(state: &editor::EditorState) -> u64 {
-    let text = ron::to_string(&state.entity_def.shape).unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
 }
 
 impl App for EditorApp {

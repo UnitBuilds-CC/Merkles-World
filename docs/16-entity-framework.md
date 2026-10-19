@@ -132,11 +132,30 @@ pixels instead:
   `assetc::lower` — the same call the shipped compiler makes — and sphere-traces `render::march` over the
   result, so a preview cannot disagree with the asset the tool would emit. A refusal paints the frame in
   `Frame::NOT_DRAWN_RGB` and prints the reason; it never substitutes a guess.
+- **The transform is applied to the ray, not to the records.** A-07's grammar has no translate or scale
+  node (OQ-55), so `assetc::compile_entity` yields a tree that stays in *shape space* and the placement
+  lives beside it. `gpu_renderer::Placement` reads `position`, `rotation` and `scale` off the
+  `EntityDef`, and the march maps each world ray into shape space (`(p - position) / scale`, rotated by
+  the conjugate quaternion), marches there, and converts the hit back: `t` by `scale`, point and normal
+  by the same rotation. A rotation and a uniform scale take a straight ray to a straight ray, so this is
+  exact rather than an approximation — and it is why the viewport can show what the file says while the
+  emitted asset stays shape-space. Before it, `position`, `rotation` and `scale` were all silently
+  ignored by the preview: an entity authored at `[0, 0.5, 0]` and one at the origin rendered the same
+  image, so the inspector's transform sliders moved nothing you could see.
+  `Placement::to_shape`/`to_world` are asserted as an exact round trip, the `[x, y, z, w]` quaternion
+  order is pinned by the quarter-turn-it-takes-+X-to-Z test (read the tuple as `[w, x, y, z]` and every
+  rotated entity faces a different way from the one the file describes), and an impossible placement —
+  zero scale, non-unit quaternion — is refused into `NOT_DRAWN` by the same `compile_entity` the shipped
+  compiler uses, rather than marched with a guess.
 - **The stage is marched, not painted.** `Stage::under` puts the grid floor at the lowest surface the
   entity actually reaches, found by tracing one ray straight up per column of a grid over the enclosure.
   Deriving it from the authored parameters instead was tried and is wrong twice over: the enclosure is a
   *sphere*, so its bottom floats the animal above its own feet, and chaining each `SmoothUnion`'s `k`
-  into the minimum overshoots at every level the leg passes through.
+  into the minimum overshoots at every level the leg passes through. The measurement is taken with the
+  translation zeroed (`Placement::contact`) and the grid centred on the authored `position`, so the
+  floor is the ground the *shape* would stand on: lifting the entity with `position.y` moves it off its
+  own contact plane and shows the grid underneath, which is the only way a y-offset is distinguishable
+  from a shape that simply has long legs.
 - **The material reaches the pixel.** The viewport multiplies its lambert shade by
   `Material::base_color`, read from the single `MaterialRegistry` that `EditorState` owns — the same
   object the panel's swatches read, so a swatch cannot promise a colour the render disagrees with.
@@ -151,9 +170,17 @@ pixels instead:
   temp dir (§6: never into the repo) and prints the hit-pixel count and wall time per frame, so a
   geometry change is judged by looking at it rather than by reading the code that made it. Every
   rejected revision of `pig.ron` is recorded in that file's header, which is how the second attempt at a
-  mistake got avoided instead of re-litigated.
+  mistake got avoided instead of re-litigated. The current revision of `pig.ron` was looked at that way
+  on 2026-10-20: front, back, side, three-quarter, low and top dumps all read as a snouted quadruped
+  standing on the grid, with the head still larger than the body — a bear cub's proportions, which is a
+  content decision about `pig.ron`, not a defect in the instrument.
 - **The interactive window** (`--example entity_editor`, run in release) adds orbit, zoom, the inspector,
-  the material panel, and a facing compass projected through the same camera basis as the raster.
+  the material panel, and a facing compass projected through the same camera basis as the raster. It
+  repaints only when `EditorState::preview_signature` moves — that digest covers the shape, the
+  placement and the material slot, and deliberately *not* `flags` or `quantity`, which reach the file but
+  no pixel. A key that missed a pixel-changing field would keep showing the old frame while the
+  inspector believed it had moved the animal, so `lib::tests` edits each field and requires the key to
+  change, and edits the two invisible ones and requires it not to.
 - **The window's dependency surface is trimmed, and that is load-bearing.** `crates/editor` asks for
   `eframe` with `default-features = false` and re-enables only `default_fonts`, `glow` and `x11`.
   eframe's defaults also turn on `accesskit` and `web_screen_reader`, which on Linux pull

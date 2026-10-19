@@ -64,9 +64,10 @@ impl CpuRenderer {
         );
 
         // A refused lowering draws nothing rather than a guess: an invented sphere in the viewport
-        // would be judged as if it were the authored shape.
-        let tree = match assetc::lower(&entity_def.shape) {
-            Ok(asset) => asset.tree,
+        // would be judged as if it were the authored shape. `compile_entity` is the contract's own
+        // gate, so a non-unit quaternion or a zero scale is refused here too instead of being ignored.
+        let compiled = match assetc::compile_entity(entity_def) {
+            Ok(compiled) => compiled,
             Err(refusal) => {
                 eprintln!(
                     "✗ preview refused by assetc: {refusal} at {}",
@@ -75,9 +76,16 @@ impl CpuRenderer {
                 return refused_frame(self.width, self.height);
             }
         };
+        let place = Placement::from(entity_def);
 
         let start = std::time::Instant::now();
-        let frame = render_frame(&tree, &camera, stage, tint_of(entity_def, materials));
+        let frame = render_frame(
+            &compiled.asset.tree,
+            &camera,
+            stage,
+            tint_of(entity_def, materials),
+            &place,
+        );
         let elapsed = start.elapsed();
 
         if elapsed.as_millis() > 100 {
@@ -86,7 +94,7 @@ impl CpuRenderer {
                 elapsed.as_millis(),
                 self.width,
                 self.height,
-                tree.nodes.len()
+                compiled.asset.tree.nodes.len()
             );
         }
 
@@ -100,6 +108,135 @@ impl CpuRenderer {
     }
 }
 
+/// The authored transform from shape space to world, taken from an [`EntityDef`] the same way
+/// `assetc::compile_entity` reads it.
+///
+/// A-07's grammar has no translate or scale node (OQ-55), so the lowered tree stays in shape space and
+/// the viewport applies the placement to the ray instead of to the records: a rotation and a uniform
+/// scale map a straight ray to a straight ray, and only its parameter stretches by `1 / scale`. That is
+/// why marching happens in shape space and every value the frame reports comes back in world units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    pub position: [f32; 3],
+    /// `[x, y, z, w]`, the order `assetc::EntityDef` stores it in.
+    pub quat: [f32; 4],
+    pub scale: f32,
+}
+
+impl Placement {
+    /// The identity placement: shape space is world.
+    pub const IDENTITY: Self = Self {
+        position: [0.0; 3],
+        quat: [0.0, 0.0, 0.0, 1.0],
+        scale: 1.0,
+    };
+
+    pub fn from(entity_def: &EntityDef) -> Self {
+        Self {
+            position: entity_def.position,
+            quat: entity_def.rotation,
+            scale: entity_def.scale,
+        }
+    }
+
+    /// This placement without its translation — the shape's own extent, which is what the stage
+    /// measures against. See [`Stage::under`].
+    fn contact(&self) -> Self {
+        Self {
+            position: [0.0; 3],
+            ..*self
+        }
+    }
+
+    /// A world point into shape space.
+    fn to_shape(self, p: [f32; 3]) -> [f32; 3] {
+        let shifted = [
+            (p[0] - self.position[0]) / self.scale,
+            (p[1] - self.position[1]) / self.scale,
+            (p[2] - self.position[2]) / self.scale,
+        ];
+        rotate(conjugate(self.quat), shifted)
+    }
+
+    /// A shape point into world.
+    fn to_world(self, q: [f32; 3]) -> [f32; 3] {
+        let rotated = rotate(self.quat, q);
+        [
+            self.position[0] + self.scale * rotated[0],
+            self.position[1] + self.scale * rotated[1],
+            self.position[2] + self.scale * rotated[2],
+        ]
+    }
+
+    /// A world direction into shape space. Rotation only: `scale` is carried by the parameter.
+    fn dir_to_shape(&self, d: [f32; 3]) -> [f32; 3] {
+        rotate(conjugate(self.quat), d)
+    }
+
+    /// A shape-space normal into world. A uniform scale leaves a normal's direction alone.
+    fn normal_to_world(&self, n: [f32; 3]) -> [f32; 3] {
+        rotate(self.quat, n)
+    }
+}
+
+/// Rotate a vector by `[x, y, z, w]`: `v + w * t + q × t`, with `t = 2 (q × v)`.
+fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let axis = [q[0], q[1], q[2]];
+    let t = {
+        let c = cross(axis, v);
+        [2.0 * c[0], 2.0 * c[1], 2.0 * c[2]]
+    };
+    let second = cross(axis, t);
+    [
+        v[0] + q[3] * t[0] + second[0],
+        v[1] + q[3] * t[1] + second[1],
+        v[2] + q[3] * t[2] + second[2],
+    ]
+}
+
+fn conjugate(q: [f32; 4]) -> [f32; 4] {
+    [-q[0], -q[1], -q[2], q[3]]
+}
+
+/// A surface found by [`march_placed`], in world units.
+struct PlacedHit {
+    t: f32,
+    point: [f32; 3],
+    normal: [f32; 3],
+}
+
+/// Trace one world ray against a placed tree.
+///
+/// The tolerance is converted too: the camera asks for a world-space `surface`, and a shape-space
+/// epsilon of `surface / scale` is what delivers that after the point comes back out. Leaving it raw
+/// would make a scaled-up entity sharper than the author asked for and a scaled-down one blurred.
+fn march_placed(
+    tree: &Tree,
+    place: &Placement,
+    origin: [f32; 3],
+    dir: [f32; 3],
+    max_t: f32,
+    surface: f32,
+    max_steps: u32,
+) -> Option<PlacedHit> {
+    let shape_surface = surface / place.scale;
+    let hit = march(
+        tree,
+        ROOT,
+        place.to_shape(origin),
+        place.dir_to_shape(dir),
+        max_t / place.scale,
+        shape_surface,
+        max_steps,
+    )?;
+    let normal_shape = normal(tree, ROOT, hit.point, shape_surface);
+    Some(PlacedHit {
+        t: hit.t * place.scale,
+        point: place.to_world(hit.point),
+        normal: place.normal_to_world(normal_shape),
+    })
+}
+
 /// A ground plane to stand the entity on, so scale and contact are legible.
 #[derive(Debug, Clone, Copy)]
 pub struct Stage {
@@ -107,13 +244,21 @@ pub struct Stage {
     pub y: f32,
     /// Grid spacing in world units.
     pub spacing: f32,
-    /// Beyond this radius from the world origin the plane fades to sky, so it reads as a platform
+    /// Beyond this radius from the disc's own centre the plane fades to sky, so it reads as a platform
     /// rather than an infinite floor.
     pub radius: f32,
+    /// World `x, z` of the disc. The grid lines stay in world coordinates, so moving an entity slides
+    /// it across the grid rather than re-centring the grid under its feet.
+    pub centre: [f32; 2],
 }
 
 impl Stage {
     /// A floor at the lowest surface the entity actually reaches, so its feet meet the grid.
+    ///
+    /// Measured with the placement's rotation and scale but **not** its translation: if the floor
+    /// followed `position.y` upward, the slider that lifts the animal would be invisible by
+    /// construction. So the stage is the shape's own contact plane and `position` is what it is placed
+    /// on — a raised entity floats over the grid, which is the honest reading of a placement value.
     ///
     /// Two shortcuts were tried and are wrong. The enclosure (`render::cull::scene_enclosure`) bounds a
     /// subtree by a *sphere*, and for the pig that sphere's bottom is ~0.2 below the hooves, which reads
@@ -127,11 +272,12 @@ impl Stage {
     /// the tree actually defines, transformed nodes and all. The tree has already been lowered once for
     /// the frame; this runs only when the shape changes.
     pub fn under(entity_def: &EntityDef) -> Stage {
+        let place = Placement::from(entity_def).contact();
         let y = assetc::lower(&entity_def.shape)
             .ok()
             .and_then(|asset| match render::cull::scene_enclosure(&asset.tree) {
                 render::cull::Enclosure::Bounded { centre, radius } => {
-                    lowest_surface(&asset.tree, centre, radius)
+                    lowest_surface(&asset.tree, &place, centre, radius)
                 }
                 render::cull::Enclosure::Unbounded => None,
             })
@@ -141,15 +287,27 @@ impl Stage {
             y,
             spacing: 0.25,
             radius: 1.6,
+            centre: [entity_def.position[0], entity_def.position[2]],
         }
     }
 }
 
-/// The lowest `y` reachable by casting one ray straight up per column of a grid over the enclosure's
-/// footprint, and taking the nearest underside. `None` if no column hits, which is the shape's own
-/// business — the caller falls back to the enclosure.
-fn lowest_surface(tree: &Tree, centre: [f32; 3], radius: f32) -> Option<f32> {
+/// The lowest world `y` reachable by casting one ray straight up per column of a grid over the
+/// enclosure's footprint, and taking the nearest underside. `None` if no column hits, which is the
+/// shape's own business — the caller falls back to the enclosure.
+///
+/// `centre_shape` and `radius_shape` are the enclosure in shape space, which is what
+/// `render::cull::scene_enclosure` reports; a rotation and a uniform scale take that sphere to a
+/// sphere, so the footprint needs no re-derivation.
+fn lowest_surface(
+    tree: &Tree,
+    place: &Placement,
+    centre_shape: [f32; 3],
+    radius_shape: f32,
+) -> Option<f32> {
     const COLUMNS: u32 = 24;
+    let centre = place.to_world(centre_shape);
+    let radius = place.scale * radius_shape;
     // Start clear of the enclosure, so the trace begins outside a solid that is entirely within it.
     let floor = centre[1] - radius - 1.0;
     let span = 2.0 * radius;
@@ -168,9 +326,9 @@ fn lowest_surface(tree: &Tree, centre: [f32; 3], radius: f32) -> Option<f32> {
                 continue;
             }
 
-            if let Some(hit) = march(
+            if let Some(hit) = march_placed(
                 tree,
-                ROOT,
+                place,
                 [x, floor, z],
                 [0.0, 1.0, 0.0],
                 2.0 + span,
@@ -251,7 +409,17 @@ fn tint_of(entity_def: &EntityDef, materials: &MaterialRegistry) -> [f32; 3] {
 }
 
 /// Render a tree with the given camera, optionally over a [`Stage`].
-fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>, tint: [f32; 3]) -> Frame {
+///
+/// The rays start in world space and the tree lives in shape space, so [`Placement`] is what the
+/// march needs — without it an authored `position`, `rotation` or `scale` changes the file and nothing
+/// else.
+fn render_frame(
+    tree: &Tree,
+    camera: &Camera,
+    stage: Option<Stage>,
+    tint: [f32; 3],
+    place: &Placement,
+) -> Frame {
     let mut frame = Frame::new(camera.width, camera.height);
     let light = key_light(camera);
     let aspect = camera.width as f32 / camera.height as f32;
@@ -267,9 +435,9 @@ fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>, tint: [f32; 
                 camera.forward[2] + camera.right[2] * px + camera.up[2] * py,
             ]);
 
-            let hit = march(
+            let hit = march_placed(
                 tree,
-                ROOT,
+                place,
                 camera.origin,
                 dir,
                 camera.max_t,
@@ -283,16 +451,12 @@ fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>, tint: [f32; 
             let (t, rgb) = match (hit.as_ref(), ground.as_ref()) {
                 (Some(hit), Some(ground)) => {
                     if hit.t <= ground.t {
-                        let n = normal(tree, ROOT, hit.point, camera.surface);
-                        (hit.t, tinted(shade_at(n, light), tint))
+                        (hit.t, tinted(shade_at(hit.normal, light), tint))
                     } else {
                         (ground.t, [ground.shade; 3])
                     }
                 }
-                (Some(hit), None) => {
-                    let n = normal(tree, ROOT, hit.point, camera.surface);
-                    (hit.t, tinted(shade_at(n, light), tint))
-                }
+                (Some(hit), None) => (hit.t, tinted(shade_at(hit.normal, light), tint)),
                 (None, Some(ground)) => (ground.t, [ground.shade; 3]),
                 (None, None) => {
                     frame.pixels.extend_from_slice(&[30, 30, 35]);
@@ -335,7 +499,9 @@ fn stage_hit(camera: &Camera, dir: &[f32; 3], stage: Stage) -> Option<Ground> {
     }
     let gx = camera.origin[0] + dir[0] * t;
     let gz = camera.origin[2] + dir[2] * t;
-    let reach = (gx * gx + gz * gz).sqrt();
+    let dx = gx - stage.centre[0];
+    let dz = gz - stage.centre[1];
+    let reach = (dx * dx + dz * dz).sqrt();
     if reach > stage.radius {
         return None;
     }
@@ -430,5 +596,224 @@ mod tests {
         let materials = MaterialRegistry::with_defaults();
         let hit = centre_pixel(&renderer.render(&sphere(200), &materials, 0.0, 0.0, 3.0));
         assert!(hit.0 > 0, "an unassigned material lost the shape: {hit:?}");
+    }
+
+    /// The authored `pig_skin` is the only thing in a frame whose channels differ — sky is
+    /// `[30, 30, 35]`, the stage is grey — so `R != G` selects the subject out of the picture without
+    /// depending on where it landed.
+    fn entity_mask(frame: &Frame) -> Vec<bool> {
+        frame.pixels.chunks(3).map(|rgb| rgb[0] != rgb[1]).collect()
+    }
+
+    fn entity_count(frame: &Frame) -> usize {
+        entity_mask(frame).iter().filter(|on| **on).count()
+    }
+
+    /// `(mean row, mean column)` of the subject's pixels, in raster order (row grows downward).
+    fn subject_centre(frame: &Frame) -> (f32, f32) {
+        let mask = entity_mask(frame);
+        let width = frame.width as usize;
+        let (mut rows, mut cols, mut n) = (0.0f32, 0.0f32, 0.0f32);
+        for (i, on) in mask.iter().enumerate() {
+            if *on {
+                rows += (i / width) as f32;
+                cols += (i % width) as f32;
+                n += 1.0;
+            }
+        }
+        assert!(
+            n > 0.0,
+            "no subject pixel in the frame — the mask measured only sky and stage"
+        );
+        (rows / n, cols / n)
+    }
+
+    /// How far the subject reaches across the frame, in pixels.
+    fn column_spread(frame: &Frame) -> usize {
+        let mask = entity_mask(frame);
+        let width = frame.width as usize;
+        let cols: Vec<usize> = (0..mask.len())
+            .filter(|i| mask[*i])
+            .map(|i| i % width)
+            .collect();
+        assert!(!cols.is_empty(), "no subject pixel to measure");
+        cols[cols.len() - 1] - cols[0]
+    }
+
+    #[test]
+    fn the_placement_round_trips_and_pins_the_quaternion_convention() {
+        // `[x, y, z, w]` is the order `assetc::EntityDef` stores it in, and a quarter turn about Y
+        // takes +X to -Z. Read the tuple as `[w, x, y, z]` and every rotated entity faces a different
+        // way from the one the file describes — which no amount of looking at a symmetric pig would
+        // reveal.
+        let quarter_turn_y = [
+            0.0,
+            core::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            core::f32::consts::FRAC_1_SQRT_2,
+        ];
+        let turned = rotate(quarter_turn_y, [1.0, 0.0, 0.0]);
+        assert!(
+            turned[0].abs() < 1e-5 && turned[1].abs() < 1e-5 && (turned[2] + 1.0).abs() < 1e-5,
+            "a 90° turn about Y sent +X to {turned:?}, not -Z"
+        );
+
+        let place = Placement {
+            position: [0.3, -0.2, 1.1],
+            quat: quarter_turn_y,
+            scale: 2.5,
+        };
+        for p in [
+            [1.0, 2.0, 3.0],
+            [-4.0, 0.5, 7.25],
+            [0.0, 0.0, 0.0],
+            [13.5, -9.25, 0.125],
+        ] {
+            let back = place.to_world(place.to_shape(p));
+            for axis in 0..3 {
+                assert!(
+                    (back[axis] - p[axis]).abs() < 1e-4,
+                    "{p:?} round-tripped to {back:?} — world→shape→world is not a round trip"
+                );
+            }
+        }
+        assert_eq!(
+            Placement::IDENTITY.to_shape([2.5, -1.5, 0.75]),
+            [2.5, -1.5, 0.75],
+            "the default placement must not move anything"
+        );
+    }
+
+    #[test]
+    fn the_authored_scale_reaches_the_pixels() {
+        let renderer = CpuRenderer::new(64, 64);
+        let materials = MaterialRegistry::with_defaults();
+        let mut big = sphere(0);
+        big.scale = 2.0;
+
+        let small = renderer.render(&sphere(0), &materials, 0.0, 0.0, 3.0);
+        let large = renderer.render(&big, &materials, 0.0, 0.0, 3.0);
+        assert!(
+            entity_count(&large) > entity_count(&small),
+            "doubling the scale changed the file and not the frame: {} vs {} subject pixels",
+            entity_count(&small),
+            entity_count(&large)
+        );
+
+        let centre = (32 * 64 + 32) as usize;
+        assert!(
+            large.depth[centre] < small.depth[centre],
+            "a doubled sphere should meet the ray sooner: {} vs {}",
+            small.depth[centre],
+            large.depth[centre]
+        );
+    }
+
+    #[test]
+    fn the_authored_position_lifts_the_subject_off_its_own_contact_plane() {
+        let renderer = CpuRenderer::new(64, 64);
+        let materials = MaterialRegistry::with_defaults();
+        let standing = sphere(0);
+        let mut lifted = standing.clone();
+        lifted.position = [0.0, 0.6, 0.0];
+
+        // The stage is the shape's contact plane, so it must not ride upward with the entity: a floor
+        // that follows `position.y` would make the slider invisible by construction.
+        assert_eq!(
+            Stage::under(&standing).y,
+            Stage::under(&lifted).y,
+            "the floor rose with the animal, so lifting it shows nothing"
+        );
+        // It does follow X/Z, or a moved entity would stand over a disc left behind at the origin.
+        let mut shifted = standing.clone();
+        shifted.position = [0.75, 0.0, -0.5];
+        assert_eq!(Stage::under(&shifted).centre, [0.75, -0.5]);
+
+        let stage = Stage::under(&standing);
+        let still = renderer.render_on_stage(&standing, &materials, 0.0, 0.25, 3.0, Some(stage));
+        let up = renderer.render_on_stage(&lifted, &materials, 0.0, 0.25, 3.0, Some(stage));
+        let (row_still, _) = subject_centre(&still);
+        let (row_up, _) = subject_centre(&up);
+        // 0.6 of a 3-unit span across 64 rows is ~13 rows; the sign is the point, the margin is slack.
+        assert!(
+            row_up < row_still - 3.0,
+            "lifting the sphere by 0.6 did not move it up the frame: row {row_still} → {row_up}"
+        );
+    }
+
+    #[test]
+    fn position_x_slides_and_rotation_turns_what_the_viewport_shows() {
+        let renderer = CpuRenderer::new(64, 64);
+        let materials = MaterialRegistry::with_defaults();
+
+        // At yaw 0 the camera sits on +Z and its `right` axis is world +X, so a positive X placement
+        // has to increase the subject's columns. Applied in the camera's own frame instead of the
+        // world's, it would move them the other way — or not at all.
+        let still = renderer.render(&sphere(0), &materials, 0.0, 0.0, 3.0);
+        let mut moved = sphere(0);
+        moved.position = [0.4, 0.0, 0.0];
+        let shifted = renderer.render(&moved, &materials, 0.0, 0.0, 3.0);
+        let (_, col_still) = subject_centre(&still);
+        let (_, col_moved) = subject_centre(&shifted);
+        assert!(
+            col_moved > col_still + 3.0,
+            "+0.4 in X slid the subject the wrong way: column {col_still} → {col_moved}"
+        );
+
+        // A bar of two spheres laid along X, then turned a quarter about Y: it points at the camera
+        // rather than across it, so its spread collapses. A march that ignored `rotation` would leave
+        // the wide bar exactly as wide.
+        let bar = || assetc::Shape::Union {
+            a: Box::new(assetc::Shape::Sphere {
+                r: 0.15,
+                centre: [0.4, 0.0, 0.0],
+            }),
+            b: Box::new(assetc::Shape::Sphere {
+                r: 0.15,
+                centre: [-0.4, 0.0, 0.0],
+            }),
+        };
+        let mut across = sphere(0);
+        across.shape = bar();
+        let mut toward = across.clone();
+        toward.rotation = [
+            0.0,
+            core::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            core::f32::consts::FRAC_1_SQRT_2,
+        ];
+
+        let wide = renderer.render(&across, &materials, 0.0, 0.0, 3.0);
+        let narrow = renderer.render(&toward, &materials, 0.0, 0.0, 3.0);
+        let (wide, narrow) = (column_spread(&wide), column_spread(&narrow));
+        assert!(
+            narrow * 3 <= wide,
+            "a quarter turn did not shorten the bar's spread: {wide} px across, {narrow} px turned"
+        );
+    }
+
+    #[test]
+    fn an_impossible_placement_is_refused_rather_than_drawn() {
+        let renderer = CpuRenderer::new(16, 16);
+        let materials = MaterialRegistry::with_defaults();
+
+        let mut collapsed = sphere(0);
+        collapsed.scale = 0.0;
+        let frame = renderer.render(&collapsed, &materials, 0.0, 0.0, 3.0);
+        assert!(
+            frame.depth.iter().all(|d| *d == Frame::NOT_DRAWN_DEPTH),
+            "a zero scale was marched anyway"
+        );
+
+        // `compile_entity` is the contract's own gate, and the viewport goes through it: a
+        // non-unit quaternion is refused rather than silently normalised or ignored.
+        let mut wild = sphere(0);
+        wild.rotation = [0.0, 2.0, 0.0, 1.0];
+        let frame = renderer.render(&wild, &materials, 0.0, 0.0, 3.0);
+        assert!(
+            frame.depth.iter().all(|d| *d == Frame::NOT_DRAWN_DEPTH),
+            "a quaternion of length {} was drawn instead of refused",
+            (4.0f32 + 1.0).sqrt()
+        );
     }
 }

@@ -2,16 +2,19 @@
 
 use egui::{Response, Sense, Vec2};
 
-/// Orbit camera state for 3D viewport
+/// Orbit camera state for 3D viewport.
+///
+/// It orbits the world origin, which is also what [`crate::gpu_renderer::CpuRenderer`] marches: an
+/// orbit target here would move the gizmo and the compass while the image underneath them stayed put.
+/// The authored `position` is a placement of the subject *within* that frame, measured against the
+/// stage grid, so it belongs to the entity and not to the camera.
 pub struct ViewportCamera {
-    /// Distance from target point
+    /// Distance from the origin
     pub distance: f32,
     /// Horizontal angle (radians)
     pub yaw: f32,
     /// Vertical angle (radians)
     pub pitch: f32,
-    /// Target point to orbit around
-    pub target: [f32; 3],
 }
 
 impl ViewportCamera {
@@ -25,7 +28,6 @@ impl ViewportCamera {
             distance: 2.0,
             yaw: core::f32::consts::PI,
             pitch: 0.3,
-            target: [0.0, 0.0, 0.0],
         }
     }
 
@@ -43,18 +45,17 @@ impl ViewportCamera {
 
     /// Get camera position in world space
     pub fn position(&self) -> [f32; 3] {
-        let x = self.target[0] + self.distance * self.pitch.cos() * self.yaw.sin();
-        let y = self.target[1] + self.distance * self.pitch.sin();
-        let z = self.target[2] + self.distance * self.pitch.cos() * self.yaw.cos();
-        [x, y, z]
+        [
+            self.distance * self.pitch.cos() * self.yaw.sin(),
+            self.distance * self.pitch.sin(),
+            self.distance * self.pitch.cos() * self.yaw.cos(),
+        ]
     }
 
     /// Get forward direction vector
     pub fn forward(&self) -> [f32; 3] {
         let pos = self.position();
-        let dx = self.target[0] - pos[0];
-        let dy = self.target[1] - pos[1];
-        let dz = self.target[2] - pos[2];
+        let (dx, dy, dz) = (-pos[0], -pos[1], -pos[2]);
         let len = (dx * dx + dy * dy + dz * dz).sqrt();
         if len > 0.001 {
             [dx / len, dy / len, dz / len]
