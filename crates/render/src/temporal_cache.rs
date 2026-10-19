@@ -15,7 +15,7 @@
 //! entity moves (its subtree parameters change), only pixels attributed to that node range are
 //! invalidated, leaving static background surfaces cached.
 
-use crate::{sdf_eval, raster::Camera, Tree, Vec3, ROOT};
+use crate::{raster::Camera, sdf_eval, Tree, Vec3, ROOT};
 
 /// Identifies a subtree within the scene tree for selective invalidation.
 ///
@@ -154,7 +154,9 @@ impl SurfaceCache {
                 let cached = &self.pixels[idx];
 
                 // Try to validate cached data
-                if cached.frame_id > 0 && self.validate_pixel(tree, cached, camera.origin, camera.surface) {
+                if cached.frame_id > 0
+                    && self.validate_pixel(tree, cached, camera.origin, camera.surface)
+                {
                     // Cache is valid! Reuse without marching
                     cache_hits += 1;
                     hits += 1;
@@ -177,7 +179,7 @@ impl SurfaceCache {
                             depth: t,
                             normal,
                             frame_id: self.frame_id,
-                            max_t: 0.0, // Not used for surface pixels
+                            max_t: 0.0,            // Not used for surface pixels
                             entity_node: u32::MAX, // No attribution in this legacy API
                         };
                     }
@@ -196,9 +198,17 @@ impl SurfaceCache {
     /// Get cache statistics
     pub fn stats(&self) -> CacheStats {
         let total = self.pixels.len();
-        let valid = self.pixels.iter().filter(|p| p.frame_id > 0 && !p.is_sky()).count();
+        let valid = self
+            .pixels
+            .iter()
+            .filter(|p| p.frame_id > 0 && !p.is_sky())
+            .count();
         let sky = self.pixels.iter().filter(|p| p.is_sky()).count();
-        let aged = self.pixels.iter().filter(|p| p.frame_id > 0 && p.frame_id < self.frame_id.saturating_sub(10)).count();
+        let aged = self
+            .pixels
+            .iter()
+            .filter(|p| p.frame_id > 0 && p.frame_id < self.frame_id.saturating_sub(10))
+            .count();
 
         CacheStats {
             total_pixels: total,
@@ -226,7 +236,14 @@ impl SurfaceCache {
     }
 
     /// Cache a surface hit at the given pixel index, attributed to a specific tree node
-    pub fn cache_surface(&mut self, index: usize, world_pos: Vec3, depth: f32, normal: Vec3, entity_node: u32) {
+    pub fn cache_surface(
+        &mut self,
+        index: usize,
+        world_pos: Vec3,
+        depth: f32,
+        normal: Vec3,
+        entity_node: u32,
+    ) {
         if index < self.pixels.len() {
             self.pixels[index] = CachedPixel {
                 world_pos,

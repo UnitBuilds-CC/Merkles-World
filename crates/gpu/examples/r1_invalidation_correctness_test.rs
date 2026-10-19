@@ -14,7 +14,7 @@ use render::{Tree, ROOT};
 fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
     let instance = wgpu::Instance::default();
     let adapters = instance.enumerate_adapters(wgpu::Backends::all());
-    
+
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::DiscreteGpu {
@@ -22,7 +22,7 @@ fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.contains("Microsoft") {
@@ -30,7 +30,7 @@ fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     Err("No suitable GPU adapter found".to_string())
 }
 
@@ -70,7 +70,7 @@ fn main() {
 
     let width = 640u32;
     let height = 360u32;
-    
+
     let camera = GpuCamera {
         origin: [0.0f32, 0.6, -4.0],
         forward: {
@@ -94,7 +94,7 @@ fn main() {
         println!("SKIP: temporal cache requires real GPU hardware");
         return;
     }
-    
+
     let cull_variant = interpreter.camera_cull_variant().expect("culled variant");
 
     // Build initial cache
@@ -102,7 +102,7 @@ fn main() {
     let mut frame1 = interpreter.begin_camera_frame(width, height);
     interpreter.write_camera(&mut frame1, &camera);
     let bind1 = interpreter.bind_camera_variant(&cull_variant, &shape, &frame1);
-    
+
     let _result = interpreter
         .march_camera_variant(&cull_variant, &bind1, &frame1)
         .expect("initial march failed");
@@ -127,57 +127,72 @@ fn main() {
     for &(x, y, w, h) in &regions {
         bind1.invalidate_region(interpreter.queue(), x, y, w, h);
     }
-    interpreter.device().poll(wgpu::PollType::wait_indefinitely());
-    
+    interpreter
+        .device()
+        .poll(wgpu::PollType::wait_indefinitely());
+
     // Read back dirty mask from method 1 (no render needed)
-    let dirty_mask_1 = bind1.read_dirty_mask(interpreter.device(), interpreter.queue())
+    let dirty_mask_1 = bind1
+        .read_dirty_mask(interpreter.device(), interpreter.queue())
         .expect("failed to read dirty mask");
     println!("  Dirty mask: {} words", dirty_mask_1.len());
 
     // Clear dirty mask for method 2
     println!("\nClearing dirty mask for method 2...");
     bind1.clear_dirty_mask(interpreter.queue());
-    
+
     // Method 2: Batch invalidation (same regions)
     println!("Method 2: Single invalidate_regions() call...");
     bind1.invalidate_regions(interpreter.queue(), &regions);
-    interpreter.device().poll(wgpu::PollType::wait_indefinitely());
-    
+    interpreter
+        .device()
+        .poll(wgpu::PollType::wait_indefinitely());
+
     // Read back dirty mask from method 2
-    let dirty_mask_2 = bind1.read_dirty_mask(interpreter.device(), interpreter.queue())
+    let dirty_mask_2 = bind1
+        .read_dirty_mask(interpreter.device(), interpreter.queue())
         .expect("failed to read dirty mask");
     println!("  Dirty mask: {} words", dirty_mask_2.len());
 
     // Compare dirty masks
     println!("\nComparing dirty masks...");
     if dirty_mask_1.len() != dirty_mask_2.len() {
-        println!("FAIL: Different number of words ({} vs {})", dirty_mask_1.len(), dirty_mask_2.len());
+        println!(
+            "FAIL: Different number of words ({} vs {})",
+            dirty_mask_1.len(),
+            dirty_mask_2.len()
+        );
         std::process::exit(1);
     }
-    
+
     let mut diff_count = 0;
-    
+
     for i in 0..dirty_mask_1.len() {
         let w1 = dirty_mask_1[i];
         let w2 = dirty_mask_2[i];
-        
+
         if w1 != w2 {
             diff_count += 1;
-            
+
             if diff_count <= 5 {
                 println!("  Word {}: 0x{:08X} vs 0x{:08X}", i, w1, w2);
             }
         }
     }
-    
+
     println!("\nResults:");
     println!("  Total words: {}", dirty_mask_1.len());
-    println!("  Differing words: {} ({:.4}%)", diff_count, 
-             (diff_count as f64 / dirty_mask_1.len() as f64) * 100.0);
-    
+    println!(
+        "  Differing words: {} ({:.4}%)",
+        diff_count,
+        (diff_count as f64 / dirty_mask_1.len() as f64) * 100.0
+    );
+
     if diff_count == 0 {
         println!("\nPASS: Both methods produce identical dirty masks!");
-        println!("Batch invalidation produces bit-for-bit identical invalidation to individual calls.");
+        println!(
+            "Batch invalidation produces bit-for-bit identical invalidation to individual calls."
+        );
     } else {
         println!("\nFAIL: {} words differ between methods!", diff_count);
         std::process::exit(1);

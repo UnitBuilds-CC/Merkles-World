@@ -419,25 +419,19 @@ pub struct CompiledEntity {
 /// Compile an EntityDef into a ready-to-use entity with lowered SDF tree and metadata.
 pub fn compile_entity(def: &EntityDef) -> Result<CompiledEntity, Refusal> {
     let asset = lower(&def.shape)?;
-    
+
     // Validate quaternion is normalized
     let rot = def.rotation;
     let len_sq = rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3];
     if (len_sq - 1.0).abs() > 1e-4 {
-        return Err(Refusal::at(
-            &["rotation"],
-            LowerError::NonFiniteParameter,
-        ));
+        return Err(Refusal::at(&["rotation"], LowerError::NonFiniteParameter));
     }
-    
+
     // Validate scale is positive and finite
     if !def.scale.is_finite() || def.scale <= 0.0 {
-        return Err(Refusal::at(
-            &["scale"],
-            LowerError::NonFiniteParameter,
-        ));
+        return Err(Refusal::at(&["scale"], LowerError::NonFiniteParameter));
     }
-    
+
     Ok(CompiledEntity {
         asset,
         position: def.position,

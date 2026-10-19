@@ -1,6 +1,6 @@
 //! Spatial queries over entities: nearest, within radius, frustum cull.
 
-use crate::component::{AABB, EntityId};
+use crate::component::{EntityId, AABB};
 use crate::manager::EntityManager;
 use render::Vec3;
 
@@ -74,9 +74,7 @@ impl SpatialQuery for EntityManager {
 
     fn intersecting_box(&self, box_: &AABB) -> Vec<EntityId> {
         self.iter()
-            .filter(|entity| {
-                entity.compute_world_bounds().intersects(box_)
-            })
+            .filter(|entity| entity.compute_world_bounds().intersects(box_))
             .map(|entity| entity.id)
             .collect()
     }

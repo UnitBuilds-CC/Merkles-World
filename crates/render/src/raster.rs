@@ -253,7 +253,7 @@ pub fn render_temporal(
     frame: &mut Frame,
 ) -> (Stats, usize) {
     cache.advance_frame(); // Increment frame counter
-    
+
     let forward = unit(camera.forward);
     let right = unit(camera.right);
     let up = unit(camera.up);
@@ -271,10 +271,10 @@ pub fn render_temporal(
     let mut cache_found = 0usize;
     let mut surfaces_cached = 0usize;
     let mut sky_cached = 0usize;
-    
+
     // Get scene enclosure for sky pixel validation
     let scene_enclosure = crate::cull::scene_enclosure(tree);
-    
+
     for py in 0..camera.height {
         for px in 0..camera.width {
             let idx = (py * camera.width + px) as usize;
@@ -284,7 +284,7 @@ pub fn render_temporal(
             cache_lookups += 1;
             if let Some(cached) = cache.get_cached(idx) {
                 cache_found += 1;
-                
+
                 if !cached.is_sky() {
                     // Surface pixel: validate with SDF check
                     if cache.validate_pixel(tree, &cached, camera.origin, camera.surface) {
@@ -362,8 +362,15 @@ pub fn render_temporal(
         not_drawn: 0,
     };
 
-    eprintln!("Frame {}: {} lookups, {} found, {} surfaces, {} sky, {} total hits", 
-             cache.current_frame(), cache_lookups, cache_found, surfaces_cached, sky_cached, cache_hits);
+    eprintln!(
+        "Frame {}: {} lookups, {} found, {} surfaces, {} sky, {} total hits",
+        cache.current_frame(),
+        cache_lookups,
+        cache_found,
+        surfaces_cached,
+        sky_cached,
+        cache_hits
+    );
 
     (stats, cache_hits)
 }

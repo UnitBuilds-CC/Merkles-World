@@ -96,7 +96,12 @@ fn product_scene() -> Tree {
 
 fn main() {
     let tree = product_scene();
-    println!("// Scene: {} nodes, {} params, depth {}", tree.nodes.len(), tree.params.len(), render::tree_depth(&tree));
+    println!(
+        "// Scene: {} nodes, {} params, depth {}",
+        tree.nodes.len(),
+        tree.params.len(),
+        render::tree_depth(&tree)
+    );
     println!();
 
     // March the full grid on CPU reference
@@ -109,7 +114,15 @@ fn main() {
     for py in 0..R1_H {
         for px in 0..R1_W {
             let ray = ray_at(px, py, R1_W, R1_H);
-            let result = march(&tree, ROOT, ray.origin, ray.dir, ray.max_t, ray.surface, ray.max_steps);
+            let result = march(
+                &tree,
+                ROOT,
+                ray.origin,
+                ray.dir,
+                ray.max_t,
+                ray.surface,
+                ray.max_steps,
+            );
             let idx = (py * R1_W + px) as usize;
             depths[idx] = match result {
                 Some(hit) => hit.t,
@@ -122,9 +135,12 @@ fn main() {
     }
 
     let elapsed = start.elapsed();
-    println!("// Full march: {} hits ({:.1}% of pixels) in {:.2} ms",
-             hits, 100.0 * hits as f64 / (R1_W * R1_H) as f64,
-             elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "// Full march: {} hits ({:.1}% of pixels) in {:.2} ms",
+        hits,
+        100.0 * hits as f64 / (R1_W * R1_H) as f64,
+        elapsed.as_secs_f64() * 1000.0
+    );
 
     // Analyze coarse-to-fine potential
     analyze_coarse_to_fine(&depths, R1_W, R1_H);
@@ -162,10 +178,17 @@ fn analyze_coarse_to_fine(depths: &[f32], width: u32, height: u32) {
         }
     }
 
-    println!("// Coarse grid: {}x{} = {} blocks", coarse_w, coarse_h, coarse_w * coarse_h);
-    println!("// Blocks with hits: {} ({:.1}%)",
-             coarse_blocks_with_hits,
-             100.0 * coarse_blocks_with_hits as f64 / (coarse_w * coarse_h) as f64);
+    println!(
+        "// Coarse grid: {}x{} = {} blocks",
+        coarse_w,
+        coarse_h,
+        coarse_w * coarse_h
+    );
+    println!(
+        "// Blocks with hits: {} ({:.1}%)",
+        coarse_blocks_with_hits,
+        100.0 * coarse_blocks_with_hits as f64 / (coarse_w * coarse_h) as f64
+    );
 
     // Step 2: Count how many fine pixels would need marching
     // A fine pixel needs marching if its coarse block OR any neighboring coarse block has a hit
@@ -205,17 +228,24 @@ fn analyze_coarse_to_fine(depths: &[f32], width: u32, height: u32) {
     let pixels_skipped = total_pixels - pixels_to_march;
 
     println!();
-    println!("// Fine pixels to march: {} ({:.1}% of {})",
-             pixels_to_march,
-             100.0 * pixels_to_march as f64 / total_pixels as f64,
-             total_pixels);
-    println!("// Fine pixels to skip:  {} ({:.1}%)",
-             pixels_skipped,
-             100.0 * pixels_skipped as f64 / total_pixels as f64);
+    println!(
+        "// Fine pixels to march: {} ({:.1}% of {})",
+        pixels_to_march,
+        100.0 * pixels_to_march as f64 / total_pixels as f64,
+        total_pixels
+    );
+    println!(
+        "// Fine pixels to skip:  {} ({:.1}%)",
+        pixels_skipped,
+        100.0 * pixels_skipped as f64 / total_pixels as f64
+    );
 
     // Estimate speedup (very rough - assumes coarse pass is free)
     let work_ratio = pixels_to_march as f64 / total_pixels as f64;
     println!();
-    println!("// Estimated work reduction: {:.1}x fewer ray marches", 1.0 / work_ratio);
+    println!(
+        "// Estimated work reduction: {:.1}x fewer ray marches",
+        1.0 / work_ratio
+    );
     println!("// (This ignores coarse pass cost and memory access patterns)");
 }

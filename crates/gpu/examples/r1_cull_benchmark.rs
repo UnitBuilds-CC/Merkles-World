@@ -78,7 +78,9 @@ fn main() {
     let mut unculled_times = Vec::new();
     for i in 0..5 {
         let start = Instant::now();
-        let result = interpreter.march_camera_frame(&bind, &frame).expect("march failed");
+        let result = interpreter
+            .march_camera_frame(&bind, &frame)
+            .expect("march failed");
         let elapsed = start.elapsed();
         unculled_times.push(elapsed);
         if i == 0 {
@@ -91,7 +93,9 @@ fn main() {
 
     println!("Culled path (BVH enabled):");
     println!("--------------------------");
-    let cull_variant = interpreter.camera_cull_variant().expect("cull variant not available");
+    let cull_variant = interpreter
+        .camera_cull_variant()
+        .expect("cull variant not available");
     let mut culled_times = Vec::new();
     for i in 0..5 {
         let start = Instant::now();
@@ -112,7 +116,10 @@ fn main() {
     println!("=======");
     println!("Unculled median: {:?}", unculled_median);
     println!("Culled median:   {:?}", culled_median);
-    println!("Speedup:         {:.2}x", unculled_median.as_secs_f64() / culled_median.as_secs_f64());
+    println!(
+        "Speedup:         {:.2}x",
+        unculled_median.as_secs_f64() / culled_median.as_secs_f64()
+    );
     println!(
         "Gap to R1 (16.67 ms): {:.1}x remaining",
         16.67 / culled_median.as_secs_f64() * 1000.0

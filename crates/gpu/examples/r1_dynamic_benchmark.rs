@@ -23,27 +23,33 @@ use std::time::Instant;
 fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
     let instance = wgpu::Instance::default();
     let adapters = instance.enumerate_adapters(wgpu::Backends::all());
-    
+
     // Find the first DiscreteGpu
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::DiscreteGpu {
-            println!("Using adapter: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            println!(
+                "Using adapter: {} [{:?}, {:?}]",
+                info.name, info.backend, info.device_type
+            );
             return Interpreter::open_with_adapter(adapter.clone())
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     // Fall back to IntegratedGpu
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.contains("Microsoft") {
-            println!("Using integrated GPU: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            println!(
+                "Using integrated GPU: {} [{:?}, {:?}]",
+                info.name, info.backend, info.device_type
+            );
             return Interpreter::open_with_adapter(adapter.clone())
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     Err("No suitable GPU adapter found".to_string())
 }
 
@@ -73,10 +79,13 @@ fn main() {
     println!("Available adapters ({} total):", adapters.len());
     for adapter in &adapters {
         let info = adapter.get_info();
-        println!("  - {} [{:?}, {:?}]", info.name, info.device_type, info.backend);
+        println!(
+            "  - {} [{:?}, {:?}]",
+            info.name, info.device_type, info.backend
+        );
     }
     println!();
-    
+
     let interpreter = match try_open_with_gpu_preference() {
         Ok(i) => i,
         Err(e) => {
@@ -97,7 +106,7 @@ fn main() {
     let height = 360u32;
     let total_pixels = (width * height) as f64;
     println!("Resolution: {}x{}\n", width, height);
-    
+
     let camera = GpuCamera {
         origin: [0.0f32, 0.6, -4.0],
         forward: {
@@ -123,7 +132,7 @@ fn main() {
         println!("Note: Microsoft Basic Render Driver doesn't support multiple bind groups.");
         return;
     }
-    
+
     let cull_variant = interpreter.camera_cull_variant().expect("culled variant");
 
     // Build cache by running one frame
@@ -131,7 +140,7 @@ fn main() {
     let mut frame = interpreter.begin_camera_frame(width, height);
     interpreter.write_camera(&mut frame, &camera);
     let bind = interpreter.bind_camera_variant(&cull_variant, &shape, &frame);
-    
+
     let start = Instant::now();
     let result = interpreter
         .march_camera_variant(&cull_variant, &bind, &frame)
@@ -151,12 +160,12 @@ fn main() {
 
     println!("Dynamic scene performance:");
     println!("--------------------------");
-    
+
     let mut results = Vec::new();
-    
+
     for (label, dirty_fraction) in &test_cases {
         let dirty_pixels = (*dirty_fraction * total_pixels).round() as u32;
-        
+
         // Calculate rectangle dimensions to achieve target dirty pixels
         // Use a square region centered on the screen
         let side = if dirty_pixels > 0 {
@@ -166,17 +175,21 @@ fn main() {
         };
         let x = (width - side) / 2;
         let y = (height - side) / 2;
-        
+
         // Invalidate the region
         if dirty_pixels > 0 && side > 0 {
-            println!("  Invalidating {}x{} region at ({}, {}) = {} pixels", 
-                     side, side, x, y, dirty_pixels);
+            println!(
+                "  Invalidating {}x{} region at ({}, {}) = {} pixels",
+                side, side, x, y, dirty_pixels
+            );
             bind.invalidate_region(interpreter.queue(), x, y, side, side);
         }
-        
+
         // Poll device to ensure invalidation completes
-        interpreter.device().poll(wgpu::PollType::wait_indefinitely());
-        
+        interpreter
+            .device()
+            .poll(wgpu::PollType::wait_indefinitely());
+
         // Measure frame time and collect cache stats
         let mut times = Vec::new();
         let mut cache_hits_total = 0u32;
@@ -186,10 +199,12 @@ fn main() {
                 Ok(_result) => {
                     let elapsed = start.elapsed();
                     times.push(elapsed);
-                    
+
                     // Read cache stats on last iteration
                     if i == 2 {
-                        if let Some((cache_hits, _dirty_checked)) = bind.read_cache_stats(interpreter.device(), interpreter.queue()) {
+                        if let Some((cache_hits, _dirty_checked)) =
+                            bind.read_cache_stats(interpreter.device(), interpreter.queue())
+                        {
                             cache_hits_total = cache_hits;
                         }
                     }
@@ -200,15 +215,15 @@ fn main() {
                 }
             }
         }
-        
+
         if times.is_empty() {
             println!("  {:30} SKIPPED (GPU error)", label);
             continue;
         }
-        
+
         times.sort();
         let median = times[times.len() / 2];
-        
+
         let fps = 1000.0 / median.as_secs_f64();
         let ms = median.as_secs_f64() * 1000.0;
         let hit_rate = if total_pixels > 0.0 {
@@ -216,28 +231,38 @@ fn main() {
         } else {
             0.0
         };
-        
-        println!("  {:30} {:7.2} ms ({:6.1} fps) - {} dirty pixels - {:.1}% cache hits", 
-                 label, ms, fps, dirty_pixels, hit_rate);
-        
+
+        println!(
+            "  {:30} {:7.2} ms ({:6.1} fps) - {} dirty pixels - {:.1}% cache hits",
+            label, ms, fps, dirty_pixels, hit_rate
+        );
+
         results.push((*dirty_fraction, median, cache_hits_total));
     }
-    
+
     // Show speedup relative to 50% dirty
     if let Some((_, baseline, _)) = results.last() {
         println!("\nSpeedup relative to 50% dirty:");
         println!("------------------------------");
         for (fraction, time, cache_hits) in &results {
             let speedup = baseline.as_secs_f64() / time.as_secs_f64();
-            println!("  {:5.0}% dirty: {:.2}x faster ({} cache hits)", fraction * 100.0, speedup, cache_hits);
+            println!(
+                "  {:5.0}% dirty: {:.2}x faster ({} cache hits)",
+                fraction * 100.0,
+                speedup,
+                cache_hits
+            );
         }
     }
-    
+
     // Show absolute time savings
     if results.len() >= 2 {
         let (_, static_time, _) = &results[0];
         let (_, heavy_time, _) = results.last().unwrap();
         let savings_ms = (heavy_time.as_secs_f64() - static_time.as_secs_f64()) * 1000.0;
-        println!("\nTime saved (static vs 50% dirty): {:.2} ms per frame", savings_ms.max(0.0));
+        println!(
+            "\nTime saved (static vs 50% dirty): {:.2} ms per frame",
+            savings_ms.max(0.0)
+        );
     }
 }

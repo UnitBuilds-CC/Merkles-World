@@ -1,17 +1,17 @@
 //! Entity lifecycle management: spawn, update, despawn.
 
-use crate::component::{AABB, EntityId, EntityState, Transform};
-use render::{Tree, Vec3};
+use crate::component::{EntityId, EntityState, Transform, AABB};
 use render::temporal_cache::EntityRange;
+use render::{Tree, Vec3};
 
 /// Runtime entity instance
 #[derive(Debug)]
 pub struct Entity {
     pub id: EntityId,
-    pub shape: Tree,           // SDF tree (compiled from RON)
-    pub transform: Transform,  // World-space position/orientation
-    pub bounds: AABB,          // World-space bounding box
-    pub state: EntityState,    // Material, flags, quantity
+    pub shape: Tree,             // SDF tree (compiled from RON)
+    pub transform: Transform,    // World-space position/orientation
+    pub bounds: AABB,            // World-space bounding box
+    pub state: EntityState,      // Material, flags, quantity
     pub tree_range: EntityRange, // Which nodes in scene tree belong to this entity
 }
 
@@ -89,7 +89,9 @@ impl EntityManager {
 
         // Compute initial world-space bounds
         let local_bounds = AABB {
-            min: shape.nodes.iter()
+            min: shape
+                .nodes
+                .iter()
                 .map(|_| [0.0f32; 3]) // Placeholder: actual bounds computed during asset compilation
                 .next()
                 .unwrap_or([0.0; 3]),

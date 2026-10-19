@@ -340,7 +340,7 @@ impl Interpreter {
         let info = adapter.get_info();
         let adapter_name = format!("{} [{:?}, {:?}]", info.name, info.backend, info.device_type);
         let instance = wgpu::Instance::default(); // Dummy instance, not used after device creation
-        
+
         pollster::block_on(Self::from_adapter(adapter, instance, adapter_name))
     }
 
@@ -355,7 +355,7 @@ impl Interpreter {
         let mut limits = wgpu::Limits::downlevel_defaults();
         limits.max_storage_buffers_per_shader_stage = 8;
         limits.max_bind_groups = 2;
-        
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("a07-agreement"),
@@ -467,7 +467,7 @@ impl Interpreter {
         let mut limits = wgpu::Limits::downlevel_defaults();
         limits.max_storage_buffers_per_shader_stage = 8;
         limits.max_bind_groups = 2;
-        
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("a07-agreement"),
@@ -1376,7 +1376,7 @@ impl Interpreter {
         // Create temporal cache buffers for bind group 1
         let pixels = frame.pixels;
         let pixel_size = std::mem::size_of::<f32>();
-        
+
         // cached_positions: vec3<f32> per pixel (12 bytes each, padded to 16)
         let positions_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-cache-positions"),
@@ -1384,7 +1384,7 @@ impl Interpreter {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // cached_depths: f32 per pixel
         let depths_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-cache-depths"),
@@ -1392,7 +1392,7 @@ impl Interpreter {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // cached_normals: vec3<f32> per pixel (12 bytes each, padded to 16)
         let normals_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-cache-normals"),
@@ -1400,7 +1400,7 @@ impl Interpreter {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // cached_metadata: vec4<u32> per pixel (16 bytes each)
         let metadata_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-cache-metadata"),
@@ -1408,45 +1408,49 @@ impl Interpreter {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // dirty_mask: 1 bit per pixel for delta rendering (u32 words, 32 pixels per word)
         let dirty_words = (pixels + 31) / 32;
         let dirty_mask_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-dirty-mask"),
             size: (dirty_words * 4) as u64, // 4 bytes per u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        
+
         // cache_stats: [cache_hits, total_dirty_checked, reserved, reserved]
         let cache_stats_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-cache-stats"),
             size: 16, // 4 x u32
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        
+
         // Initialize all buffers to zero/invalid state
         let zero_bytes_pos = vec![0u8; pixels * 16];
         self.queue.write_buffer(&positions_buf, 0, &zero_bytes_pos);
-        
+
         let zero_bytes_depth = vec![0u8; pixels * pixel_size];
         self.queue.write_buffer(&depths_buf, 0, &zero_bytes_depth);
-        
+
         let zero_bytes_norm = vec![0u8; pixels * 16];
         self.queue.write_buffer(&normals_buf, 0, &zero_bytes_norm);
-        
+
         let zero_bytes_meta = vec![0u8; pixels * 16];
         self.queue.write_buffer(&metadata_buf, 0, &zero_bytes_meta);
-        
+
         // Initialize dirty mask: all bits set (all pixels dirty on first frame)
         let all_dirty: Vec<u8> = vec![0xFF; dirty_words * 4];
         self.queue.write_buffer(&dirty_mask_buf, 0, &all_dirty);
-        
+
         // Initialize cache stats to zero
         let zero_stats: Vec<u8> = vec![0u8; 16];
         self.queue.write_buffer(&cache_stats_buf, 0, &zero_stats);
-        
+
         // Create bind group 1 using the pipeline's auto-derived layout
         // This should work now that we've increased device limits to support 8 storage buffers
         let cache_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1461,7 +1465,7 @@ impl Interpreter {
                 entry(5, &cache_stats_buf),
             ],
         });
-        
+
         Bind {
             bind: self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("camera-march"),
@@ -1485,15 +1489,15 @@ impl Interpreter {
 
 impl Bind {
     /// Invalidate a rectangular region of the dirty mask, forcing those pixels to be re-marched.
-    /// 
+    ///
     /// This simulates entity movement by marking pixels within a bounding box as dirty.
     /// The region is specified in pixel coordinates (x, y, width, height).
-    /// 
+    ///
     /// Optimized for minimal allocations and direct GPU writes:
     /// - Only allocates bytes for the affected word range, not the entire mask
     /// - Uses u32 bulk operations where possible (32 pixels at once)
     /// - Minimizes GPU transfer by computing exact byte range needed
-    /// 
+    ///
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
     /// * `x`, `y` - Top-left corner of the region in pixels
@@ -1502,34 +1506,34 @@ impl Bind {
         let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
             return; // No dirty mask buffer, nothing to invalidate
         };
-        
+
         let width = self.width;
         if width == 0 || self.height == 0 {
             return;
         }
-        
+
         // Calculate pixel range with clamping
         let x_start = x.min(width);
         let y_start = y.min(self.height);
         let x_end = (x + w).min(width);
         let y_end = (y + h).min(self.height);
-        
+
         if x_start >= x_end || y_start >= y_end {
             return; // Empty region
         }
-        
+
         // Allocate the full dirty mask to ensure we don't lose data from previous invalidations
         let total_words = ((width * self.height + 31) / 32) as usize;
         let mut dirty_words = vec![0xFFFFFFFFu32; total_words]; // Start with all bits set (matching initial GPU state)
-        
+
         // Set dirty bits for this region
         for py in y_start..y_end {
             let row_start = py * width + x_start;
             let row_end = py * width + x_end;
-            
+
             let first_word_idx = (row_start / 32) as usize;
             let last_word_idx = (row_end / 32) as usize;
-            
+
             // Handle partial first word
             if row_start % 32 != 0 {
                 let bit_start = row_start % 32;
@@ -1543,15 +1547,23 @@ impl Bind {
                 };
                 dirty_words[first_word_idx] |= mask;
             }
-            
+
             // Fill complete middle words (32 pixels at once)
-            let middle_start = if row_start % 32 != 0 { first_word_idx + 1 } else { first_word_idx };
-            let middle_end = if row_end % 32 != 0 { last_word_idx } else { last_word_idx + 1 };
-            
+            let middle_start = if row_start % 32 != 0 {
+                first_word_idx + 1
+            } else {
+                first_word_idx
+            };
+            let middle_end = if row_end % 32 != 0 {
+                last_word_idx
+            } else {
+                last_word_idx + 1
+            };
+
             for word_idx in middle_start..middle_end {
                 dirty_words[word_idx] = 0xFFFFFFFF; // All 32 pixels dirty
             }
-            
+
             // Handle partial last word
             if row_end % 32 != 0 && last_word_idx > first_word_idx {
                 let bit_end = row_end % 32;
@@ -1559,49 +1571,49 @@ impl Bind {
                 dirty_words[last_word_idx] |= mask;
             }
         }
-        
+
         // Write the entire dirty mask to GPU using extend_from_slice (more efficient than flat_map)
         let mut bytes = Vec::with_capacity(dirty_words.len() * 4);
         for &word in &dirty_words {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
-        
+
         queue.write_buffer(dirty_mask_buf, 0, &bytes);
     }
-    
+
     /// Invalidate all pixels (force full re-march on next frame)
     pub fn invalidate_all(&self, queue: &wgpu::Queue) {
         let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
             return;
         };
-        
+
         let total_words = ((self.width * self.height + 31) / 32) as usize;
         let all_dirty: Vec<u8> = vec![0xFF; total_words * 4];
         queue.write_buffer(dirty_mask_buf, 0, &all_dirty);
     }
-    
+
     /// Clear all dirty bits (mark all pixels as clean/cached).
     /// Useful for resetting between test runs.
     pub fn clear_dirty_mask(&self, queue: &wgpu::Queue) {
         let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
             return;
         };
-        
+
         let total_words = ((self.width * self.height + 31) / 32) as usize;
         let all_clean: Vec<u8> = vec![0x00; total_words * 4];
         queue.write_buffer(dirty_mask_buf, 0, &all_clean);
     }
-    
+
     /// Read back the dirty mask from GPU memory.
     /// Returns a vector of u32 words representing the dirty state.
     pub fn read_dirty_mask(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u32>> {
         let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
             return None;
         };
-        
+
         let total_words = ((self.width * self.height + 31) / 32) as usize;
         let byte_size = (total_words * 4) as u64;
-        
+
         // Create staging buffer
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("dirty-mask-staging"),
@@ -1609,36 +1621,41 @@ impl Bind {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        
+
         // Copy from GPU to staging
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("dirty-mask-copy"),
         });
         encoder.copy_buffer_to_buffer(dirty_mask_buf, 0, &staging, 0, byte_size);
         queue.submit(Some(encoder.finish()));
-        
+
         // Read back
         let slice = staging.slice(0..byte_size);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        
+
         let view = slice.get_mapped_range();
-        let words: Vec<u32> = view.chunks_exact(4)
+        let words: Vec<u32> = view
+            .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
         drop(view);
         staging.unmap();
-        
+
         Some(words)
     }
-    
+
     /// Read cache statistics after a frame render.
     /// Returns (cache_hits, total_dirty_pixels_checked) or None if no temporal cache is active.
-    pub fn read_cache_stats(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<(u32, u32)> {
+    pub fn read_cache_stats(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Option<(u32, u32)> {
         let Some(ref cache_stats_buf) = self.cache_stats_buf else {
             return None;
         };
-        
+
         // Create a staging buffer to copy into
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("cache-stats-staging"),
@@ -1646,19 +1663,19 @@ impl Bind {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        
+
         // Copy from GPU to staging
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("cache-stats-copy"),
         });
         encoder.copy_buffer_to_buffer(cache_stats_buf, 0, &staging, 0, 16);
         queue.submit(Some(encoder.finish()));
-        
+
         // Read back
         let slice = staging.slice(0..16);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely());
-        
+
         let view = slice.get_mapped_range();
         let stats: [u32; 4] = [
             u32::from_le_bytes(view[0..4].try_into().unwrap()),
@@ -1668,15 +1685,15 @@ impl Bind {
         ];
         drop(view);
         staging.unmap();
-        
+
         Some((stats[0], stats[1]))
     }
-    
+
     /// Invalidate multiple rectangular regions in a single GPU write.
-    /// 
+    ///
     /// More efficient than calling invalidate_region() multiple times when you have
     /// several entities to invalidate, as it batches all writes into one transfer.
-    /// 
+    ///
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
     /// * `regions` - Slice of (x, y, width, height) tuples for each region
@@ -1684,38 +1701,38 @@ impl Bind {
         let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
             return;
         };
-        
+
         if regions.is_empty() {
             return;
         }
-        
+
         let width = self.width;
         if width == 0 || self.height == 0 {
             return;
         }
-        
+
         // Allocate the full dirty mask to ensure we don't lose data from previous invalidations
         let total_words = ((width * self.height + 31) / 32) as usize;
         let mut dirty_words = vec![0xFFFFFFFFu32; total_words]; // Start with all bits set (matching initial GPU state)
-        
+
         // Second pass: set dirty bits for all regions
         for &(x, y, w, h) in regions {
             let x_start = x.min(width);
             let y_start = y.min(self.height);
             let x_end = (x + w).min(width);
             let y_end = (y + h).min(self.height);
-            
+
             if x_start >= x_end || y_start >= y_end {
                 continue;
             }
-            
+
             for py in y_start..y_end {
                 let row_start = py * width + x_start;
                 let row_end = py * width + x_end;
-                
+
                 let first_word_idx = (row_start / 32) as usize;
                 let last_word_idx = (row_end / 32) as usize;
-                
+
                 // Handle partial first word
                 if row_start % 32 != 0 {
                     let bit_start = row_start % 32;
@@ -1729,15 +1746,23 @@ impl Bind {
                     };
                     dirty_words[first_word_idx] |= mask;
                 }
-                
+
                 // Fill complete middle words
-                let middle_start = if row_start % 32 != 0 { first_word_idx + 1 } else { first_word_idx };
-                let middle_end = if row_end % 32 != 0 { last_word_idx } else { last_word_idx + 1 };
-                
+                let middle_start = if row_start % 32 != 0 {
+                    first_word_idx + 1
+                } else {
+                    first_word_idx
+                };
+                let middle_end = if row_end % 32 != 0 {
+                    last_word_idx
+                } else {
+                    last_word_idx + 1
+                };
+
                 for word_idx in middle_start..middle_end {
                     dirty_words[word_idx] = 0xFFFFFFFF;
                 }
-                
+
                 // Handle partial last word
                 if row_end % 32 != 0 && last_word_idx > first_word_idx {
                     let bit_end = row_end % 32;
@@ -1746,28 +1771,28 @@ impl Bind {
                 }
             }
         }
-        
+
         // Write the entire dirty mask to GPU using extend_from_slice (more efficient than flat_map)
         let mut bytes = Vec::with_capacity(dirty_words.len() * 4);
         for &word in &dirty_words {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
-        
+
         queue.write_buffer(dirty_mask_buf, 0, &bytes);
     }
-    
+
     /// Invalidate an entity's screen-space bounding box.
-    /// 
+    ///
     /// Projects a world-space axis-aligned bounding box (AABB) to screen space using the camera
     /// parameters, then invalidates the resulting pixel region. This is more convenient than
     /// manually computing screen coordinates when tracking moving entities.
-    /// 
+    ///
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
     /// * `camera` - Camera parameters for projection
     /// * `world_min` - Minimum corner of entity's world-space AABB [x, y, z]
     /// * `world_max` - Maximum corner of entity's world-space AABB [x, y, z]
-    /// 
+    ///
     /// # Returns
     /// Invalidate all pixels covered by a world-space AABB.
     ///
@@ -1792,40 +1817,43 @@ impl Bind {
                 p[1] - camera.origin[1],
                 p[2] - camera.origin[2],
             ];
-            
+
             // Check if point is behind camera or too close for stable projection
-            let forward_dot = rel[0] * camera.forward[0] + rel[1] * camera.forward[1] + rel[2] * camera.forward[2];
+            let forward_dot = rel[0] * camera.forward[0]
+                + rel[1] * camera.forward[1]
+                + rel[2] * camera.forward[2];
             if forward_dot <= 0.001 {
                 return None; // Behind camera or too close (prevents division by near-zero)
             }
-            
+
             // Project to screen space
-            let right_dot = rel[0] * camera.right[0] + rel[1] * camera.right[1] + rel[2] * camera.right[2];
+            let right_dot =
+                rel[0] * camera.right[0] + rel[1] * camera.right[1] + rel[2] * camera.right[2];
             let up_dot = rel[0] * camera.up[0] + rel[1] * camera.up[1] + rel[2] * camera.up[2];
-            
+
             // Guard against numerical instability when half_height is very small
             let denom = forward_dot * camera.half_height;
             if denom.abs() < 1e-6 {
                 return None; // Denominator too small, projection would be unstable
             }
-            
+
             let ndc_x = right_dot / denom;
             let ndc_y = up_dot / denom;
-            
+
             // Convert to pixel coordinates
             let px = ((ndc_x + 1.0) * 0.5) * camera.width as f32;
             let py = ((1.0 - ndc_y) * 0.5) * camera.height as f32;
-            
+
             Some([px, py])
         };
-        
+
         // Project all 8 corners of the AABB and find screen-space bounds
         let mut min_px = f32::MAX;
         let mut max_px = f32::MIN;
         let mut min_py = f32::MAX;
         let mut max_py = f32::MIN;
         let mut any_visible = false;
-        
+
         for x in &[world_min[0], world_max[0]] {
             for y in &[world_min[1], world_max[1]] {
                 for z in &[world_min[2], world_max[2]] {
@@ -1839,24 +1867,24 @@ impl Bind {
                 }
             }
         }
-        
+
         if !any_visible {
             return None; // Entity completely behind camera
         }
-        
+
         // Clamp to viewport and convert to integer pixel coordinates
         let x_start = min_px.max(0.0).min(camera.width as f32) as u32;
         let y_start = min_py.max(0.0).min(camera.height as f32) as u32;
         let x_end = max_px.max(0.0).min(camera.width as f32) as u32;
         let y_end = max_py.max(0.0).min(camera.height as f32) as u32;
-        
+
         if x_start >= x_end || y_start >= y_end {
             return None; // Degenerate rectangle
         }
-        
+
         let w = x_end - x_start;
         let h = y_end - y_start;
-        
+
         self.invalidate_region(queue, x_start, y_start, w, h);
         Some((x_start, y_start, w, h))
     }
@@ -1917,7 +1945,7 @@ impl Interpreter {
                 label: Some("interp-culled-camera"),
                 source: wgpu::ShaderSource::Wgsl(shipped.into()),
             });
-        
+
         // Use auto-generated layout from shader (wgpu infers bind groups from @group/@binding annotations)
         let pipeline = self
             .device
@@ -1929,7 +1957,7 @@ impl Interpreter {
                 compilation_options: Default::default(),
                 cache: None,
             });
-        
+
         Ok(CameraVariant {
             depth: STACK_DEPTH,
             pipeline,

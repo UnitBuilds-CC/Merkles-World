@@ -9,9 +9,9 @@
 //!
 //! Run with: cargo run --package entity --example pig_demo
 
-use entity::{EntityManager, Transform, EntityState};
-use render::Tree;
 use contracts::sdf::NodeRecord;
+use entity::{EntityManager, EntityState, Transform};
+use render::Tree;
 use std::fs;
 
 /// Load a Tree from compiled asset bytes
@@ -36,7 +36,10 @@ fn main() {
     // Note: In production, use assetc::reader::from_bytes(&bytes)
     // For this demo, we create a placeholder tree
     let pig_tree = load_asset(pig_path);
-    println!("Loaded {} nodes, depth determined by structure\n", pig_tree.nodes.len());
+    println!(
+        "Loaded {} nodes, depth determined by structure\n",
+        pig_tree.nodes.len()
+    );
 
     // 2. Create entity manager and spawn pig herd
     let mut entity_mgr = EntityManager::new();
@@ -101,14 +104,21 @@ fn main() {
     let visible = entity_mgr.within_radius(camera_pos, view_radius);
     println!(
         "Entities within {:.1} units of camera at ({:.1}, {:.1}, {:.1}): {}",
-        view_radius, camera_pos[0], camera_pos[1], camera_pos[2], visible.len()
+        view_radius,
+        camera_pos[0],
+        camera_pos[1],
+        camera_pos[2],
+        visible.len()
     );
 
     let far_camera = [20.0, 0.0, 0.0];
     let far_visible = entity_mgr.within_radius(far_camera, 5.0);
     println!(
         "Entities near ({:.1}, {:.1}, {:.1}): {} (should be 0)",
-        far_camera[0], far_camera[1], far_camera[2], far_visible.len()
+        far_camera[0],
+        far_camera[1],
+        far_camera[2],
+        far_visible.len()
     );
 
     // 5. Demonstrate despawn and ID recycling

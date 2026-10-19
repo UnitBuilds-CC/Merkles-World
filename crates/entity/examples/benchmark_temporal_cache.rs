@@ -8,9 +8,9 @@
 //!
 //! Run with: cargo run --package entity --example benchmark_temporal_cache --release
 
-use entity::{EntityManager, Transform, EntityState};
-use render::Tree;
 use contracts::sdf::NodeRecord;
+use entity::{EntityManager, EntityState, Transform};
+use render::Tree;
 use std::time::Instant;
 
 /// Create a simple sphere tree for testing
@@ -80,19 +80,19 @@ fn run_benchmark(
             if let Some(entity) = entity_mgr.get_mut(id) {
                 let new_pos = move_fn(id_val, frame as f32 * dt);
                 let old_pos = entity.transform.position;
-                
+
                 // Check if position changed significantly
                 let dx = (new_pos[0] - old_pos[0]).abs();
                 let dy = (new_pos[1] - old_pos[1]).abs();
                 let dz = (new_pos[2] - old_pos[2]).abs();
-                
+
                 if dx > 0.01 || dy > 0.01 || dz > 0.01 {
                     entity.transform.position = new_pos;
                     moved_count += 1;
                 }
             }
         }
-        
+
         total_moved += moved_count as u64;
         entity_mgr.advance_tick();
     }
@@ -119,7 +119,10 @@ fn main() {
     let num_entities = 50;
     let frames = 100;
 
-    println!("Configuration: {} entities, {} frames\n", num_entities, frames);
+    println!(
+        "Configuration: {} entities, {} frames\n",
+        num_entities, frames
+    );
 
     let mut results = Vec::new();
 
@@ -172,11 +175,7 @@ fn main() {
                 [base_x, 0.0, base_z]
             } else {
                 // Moving half
-                [
-                    base_x + (time * 1.0).sin() * 0.5,
-                    0.0,
-                    base_z + time * 0.5,
-                ]
+                [base_x + (time * 1.0).sin() * 0.5, 0.0, base_z + time * 0.5]
             }
         },
     ));
@@ -191,8 +190,14 @@ fn main() {
     // Summary
     println!("\nKey Findings:");
     println!("-------------");
-    let best = results.iter().max_by(|a, b| a.cache_hit_rate.partial_cmp(&b.cache_hit_rate).unwrap()).unwrap();
-    let worst = results.iter().min_by(|a, b| a.cache_hit_rate.partial_cmp(&b.cache_hit_rate).unwrap()).unwrap();
+    let best = results
+        .iter()
+        .max_by(|a, b| a.cache_hit_rate.partial_cmp(&b.cache_hit_rate).unwrap())
+        .unwrap();
+    let worst = results
+        .iter()
+        .min_by(|a, b| a.cache_hit_rate.partial_cmp(&b.cache_hit_rate).unwrap())
+        .unwrap();
 
     println!(
         "Best cache hit rate:  {} ({:.1}% pixels reused)",

@@ -24,27 +24,33 @@ fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
     // Manually select the MX250 since Interpreter::open() is picking the wrong adapter
     let instance = wgpu::Instance::default();
     let adapters = instance.enumerate_adapters(wgpu::Backends::all());
-    
+
     // Find the first DiscreteGpu (MX250 or similar)
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::DiscreteGpu {
-            println!("Using adapter: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            println!(
+                "Using adapter: {} [{:?}, {:?}]",
+                info.name, info.backend, info.device_type
+            );
             return Interpreter::open_with_adapter(adapter.clone())
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     // Fall back to IntegratedGpu if no discrete GPU found
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.contains("Microsoft") {
-            println!("Using integrated GPU: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            println!(
+                "Using integrated GPU: {} [{:?}, {:?}]",
+                info.name, info.backend, info.device_type
+            );
             return Interpreter::open_with_adapter(adapter.clone())
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     Err("No suitable GPU adapter found".to_string())
 }
 
@@ -74,10 +80,13 @@ fn main() {
     println!("Available adapters ({} total):", adapters.len());
     for adapter in &adapters {
         let info = adapter.get_info();
-        println!("  - {} [{:?}, {:?}]", info.name, info.device_type, info.backend);
+        println!(
+            "  - {} [{:?}, {:?}]",
+            info.name, info.device_type, info.backend
+        );
     }
     println!();
-    
+
     // Try to open an interpreter with a real GPU
     let interpreter = match try_open_with_gpu_preference() {
         Ok(i) => i,
@@ -124,7 +133,9 @@ fn main() {
         let bind = interpreter.bind_camera(&shape, &frame);
 
         let start = Instant::now();
-        let result = interpreter.march_camera_frame(&bind, &frame).expect("march failed");
+        let result = interpreter
+            .march_camera_frame(&bind, &frame)
+            .expect("march failed");
         let elapsed = start.elapsed();
         unculled_times.push(elapsed);
 
@@ -139,7 +150,7 @@ fn main() {
     // Benchmark culled path WITHOUT cache (first run creates empty cache)
     println!("Culled path (with temporal cache):");
     println!("-----------------------------------");
-    
+
     // Check if this adapter supports temporal cache
     let adapter_name = interpreter.adapter();
     if adapter_name.contains("Microsoft Basic Render Driver") {
@@ -149,7 +160,7 @@ fn main() {
         println!("        This is a software renderer limitation, not a code issue.");
         return;
     }
-    
+
     let cull_variant = interpreter.camera_cull_variant().expect("culled variant");
 
     let mut frame = interpreter.begin_camera_frame(width, height);
@@ -185,7 +196,7 @@ fn main() {
     cached_times.sort();
     let cached_median = cached_times[cached_times.len() / 2];
     println!("  Median: {:?}", cached_median);
-    
+
     // Delta rendering diagnostic: compare first vs last frame
     if cached_times.len() >= 2 {
         let first = cached_times[0];
@@ -195,10 +206,16 @@ fn main() {
         } else {
             0.0
         };
-        println!("  Delta rendering effect: {:.1}% {} from frame 1 to {}", 
-                 improvement.abs(),
-                 if improvement > 0.0 { "faster" } else { "slower" },
-                 cached_times.len());
+        println!(
+            "  Delta rendering effect: {:.1}% {} from frame 1 to {}",
+            improvement.abs(),
+            if improvement > 0.0 {
+                "faster"
+            } else {
+                "slower"
+            },
+            cached_times.len()
+        );
     }
 
     // Calculate speedup
@@ -207,10 +224,7 @@ fn main() {
 
     // Show absolute savings
     let savings_ms = (unculled_median - cached_median).as_secs_f64() * 1000.0;
-    println!(
-        "Time saved per frame: {:.2} ms",
-        savings_ms.max(0.0)
-    );
+    println!("Time saved per frame: {:.2} ms", savings_ms.max(0.0));
 
     // FPS estimates
     let fps_unculled = 1000.0 / unculled_median.as_secs_f64();

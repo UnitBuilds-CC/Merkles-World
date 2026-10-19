@@ -10,9 +10,9 @@
 //! This is a headless simulation - no window, just the integration pattern.
 //! Run with: cargo run --package entity --example render_integration
 
-use entity::{EntityManager, Transform, EntityState, SpatialQuery};
-use render::Tree;
 use contracts::sdf::NodeRecord;
+use entity::{EntityManager, EntityState, SpatialQuery, Transform};
+use render::Tree;
 
 fn make_simple_entity() -> Tree {
     // Single sphere entity for testing

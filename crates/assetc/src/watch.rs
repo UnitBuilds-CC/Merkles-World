@@ -21,7 +21,7 @@
 
 use crate::reader::from_bytes;
 use crate::writer::to_bytes;
-use crate::{lower, compile_entity, EntityDef, Shape};
+use crate::{compile_entity, lower, EntityDef, Shape};
 
 /// What one observation of the authoring file decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,7 +122,7 @@ pub fn fingerprint(text: &str) -> u64 {
 fn compile_bytes(input: &str, text: &str) -> Result<(Vec<u8>, crate::budget::Cost), String> {
     // Try parsing as EntityDef first (Phase 2 format), then fall back to raw Shape (Phase 1)
     let is_entity = ron::from_str::<EntityDef>(text).is_ok();
-    
+
     if is_entity {
         compile_entity_file(text)
     } else {
@@ -136,12 +136,12 @@ fn compile_entity_file(text: &str) -> Result<(Vec<u8>, crate::budget::Cost), Str
         Ok(def) => def,
         Err(error) => return Err(format!("not a valid entity file: {error}")),
     };
-    
+
     let compiled = match compile_entity(&def) {
         Ok(entity) => entity,
         Err(refusal) => return Err(format!("entity schema violation: {refusal}")),
     };
-    
+
     let cost = crate::budget::cost_of(&compiled.asset);
     let label = "entity".to_string();
     Ok((to_bytes(&compiled.asset, &label), cost))

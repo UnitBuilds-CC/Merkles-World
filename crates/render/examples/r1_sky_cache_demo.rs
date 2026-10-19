@@ -76,7 +76,12 @@ fn main() {
     let start = Instant::now();
     render_into(&tree, &camera, &mut frame);
     let baseline_time = start.elapsed();
-    println!("  Time: {:?} ({} hits, {} total pixels)", baseline_time, frame.hit_count(), width * height);
+    println!(
+        "  Time: {:?} ({} hits, {} total pixels)",
+        baseline_time,
+        frame.hit_count(),
+        width * height
+    );
 
     let hit_rate = frame.hit_count() as f64 / (width * height) as f64 * 100.0;
     let sky_rate = 100.0 - hit_rate;
@@ -110,7 +115,11 @@ fn main() {
 
         println!(
             "  Frame {}: {:?} ({} surface hits, {} cache hits = {:.1}% reuse)",
-            frame_num + 1, elapsed, stats.hits, cache_hits, hit_rate
+            frame_num + 1,
+            elapsed,
+            stats.hits,
+            cache_hits,
+            hit_rate
         );
 
         temporal_times.push(elapsed);
@@ -128,7 +137,10 @@ fn main() {
     println!("=======");
     println!("Baseline (full march):       {:?}", baseline_time);
     println!("Temporal cache median:       {:?}", temporal_median);
-    println!("Speedup:                     {:.2}x", baseline_time.as_secs_f64() / temporal_median.as_secs_f64());
+    println!(
+        "Speedup:                     {:.2}x",
+        baseline_time.as_secs_f64() / temporal_median.as_secs_f64()
+    );
     println!("Avg cache hit rate:          {:.1}%", avg_cache_hit_rate);
 
     let cache_stats = cache.stats();

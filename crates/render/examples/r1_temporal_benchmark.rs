@@ -113,12 +113,14 @@ fn main() {
 
         total_hits += stats.hits as usize;
         total_cache_hits += cache_hits;
-        
+
         // Check cache state after first frame
         if frame_num == 0 {
             let cache_stats = cache.stats();
-            eprintln!("After Frame 0: {} cached surfaces, {} sky, {} total", 
-                     cache_stats.cached_surfaces, cache_stats.sky_pixels, cache_stats.total_pixels);
+            eprintln!(
+                "After Frame 0: {} cached surfaces, {} sky, {} total",
+                cache_stats.cached_surfaces, cache_stats.sky_pixels, cache_stats.total_pixels
+            );
         }
 
         if frame_num == 0 || frame_num == 9 {
@@ -177,11 +179,20 @@ fn main() {
     println!("=======");
     println!("Baseline (full march):       {:?}", baseline_median);
     println!("Temporal cache:              {:?}", temporal_median);
-    println!("Speedup:                     {:.2}x", baseline_median.as_secs_f64() / temporal_median.as_secs_f64());
+    println!(
+        "Speedup:                     {:.2}x",
+        baseline_median.as_secs_f64() / temporal_median.as_secs_f64()
+    );
     println!("Avg cache hit rate:          {:.1}%", avg_cache_hit_rate);
     println!("\nR1 budget (16.67 ms):        NOT MET by either method");
-    println!("Gap remaining:               {:.2}x for temporal", 16.67 / temporal_median.as_secs_f64() * 1000.0);
+    println!(
+        "Gap remaining:               {:.2}x for temporal",
+        16.67 / temporal_median.as_secs_f64() * 1000.0
+    );
 
     println!("\nNote: CPU timings are not GPU frame times. This measures work reduction,");
-    println!("not absolute performance. The temporal cache reduces evaluations by ~{:.0}%.", 100.0 - avg_cache_hit_rate);
+    println!(
+        "not absolute performance. The temporal cache reduces evaluations by ~{:.0}%.",
+        100.0 - avg_cache_hit_rate
+    );
 }

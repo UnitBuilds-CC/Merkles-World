@@ -14,6 +14,6 @@ pub use manager::EntityManager;
 pub use material::{Material, MaterialRegistry, NoiseKind};
 pub use query::SpatialQuery;
 
-/// Re-export render types we depend on
-pub use render::{Vec3, Tree};
 pub use render::temporal_cache::EntityRange;
+/// Re-export render types we depend on
+pub use render::{Tree, Vec3};

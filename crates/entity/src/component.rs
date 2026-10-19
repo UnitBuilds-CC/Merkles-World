@@ -65,7 +65,8 @@ impl Quat {
 
     /// Normalize the quaternion in place
     pub fn normalize(&mut self) {
-        let mag = (self.0[0].powi(2) + self.0[1].powi(2) + self.0[2].powi(2) + self.0[3].powi(2)).sqrt();
+        let mag =
+            (self.0[0].powi(2) + self.0[1].powi(2) + self.0[2].powi(2) + self.0[3].powi(2)).sqrt();
         if mag > 1e-6 {
             self.0[0] /= mag;
             self.0[1] /= mag;
@@ -94,16 +95,22 @@ impl AABB {
 
     /// Check if point is inside this AABB
     pub fn contains_point(&self, p: Vec3) -> bool {
-        p[0] >= self.min[0] && p[0] <= self.max[0]
-            && p[1] >= self.min[1] && p[1] <= self.max[1]
-            && p[2] >= self.min[2] && p[2] <= self.max[2]
+        p[0] >= self.min[0]
+            && p[0] <= self.max[0]
+            && p[1] >= self.min[1]
+            && p[1] <= self.max[1]
+            && p[2] >= self.min[2]
+            && p[2] <= self.max[2]
     }
 
     /// Check if this AABB intersects another
     pub fn intersects(&self, other: &AABB) -> bool {
-        self.min[0] <= other.max[0] && self.max[0] >= other.min[0]
-            && self.min[1] <= other.max[1] && self.max[1] >= other.min[1]
-            && self.min[2] <= other.max[2] && self.max[2] >= other.min[2]
+        self.min[0] <= other.max[0]
+            && self.max[0] >= other.min[0]
+            && self.min[1] <= other.max[1]
+            && self.max[1] >= other.min[1]
+            && self.min[2] <= other.max[2]
+            && self.max[2] >= other.min[2]
     }
 
     /// Expand this AABB to include a point
@@ -217,7 +224,7 @@ impl EntityState {
 
 /// Flag constants for EntityState::flags
 pub mod flag {
-    pub const ALIVE: u8 = 0x01;  // Bit 0: entity is alive
+    pub const ALIVE: u8 = 0x01; // Bit 0: entity is alive
     pub const ACTIVE: u8 = 0x02; // Bit 1: entity is active (not paused)
 }
 

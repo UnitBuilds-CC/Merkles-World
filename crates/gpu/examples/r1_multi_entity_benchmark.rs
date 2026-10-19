@@ -17,25 +17,31 @@ use std::time::Instant;
 fn try_open_with_gpu_preference() -> Result<Interpreter, String> {
     let instance = wgpu::Instance::default();
     let adapters = instance.enumerate_adapters(wgpu::Backends::all());
-    
+
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::DiscreteGpu {
-            println!("Using adapter: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            println!(
+                "Using adapter: {} [{:?}, {:?}]",
+                info.name, info.backend, info.device_type
+            );
             return Interpreter::open_with_adapter(adapter.clone())
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     for adapter in &adapters {
         let info = adapter.get_info();
         if info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.contains("Microsoft") {
-            println!("Using integrated GPU: {} [{:?}, {:?}]", info.name, info.backend, info.device_type);
+            println!(
+                "Using integrated GPU: {} [{:?}, {:?}]",
+                info.name, info.backend, info.device_type
+            );
             return Interpreter::open_with_adapter(adapter.clone())
                 .map_err(|e| format!("Failed to open with {}: {:?}", info.name, e));
         }
     }
-    
+
     Err("No suitable GPU adapter found".to_string())
 }
 
@@ -62,7 +68,7 @@ fn main() {
     let instance = wgpu::Instance::default();
     let adapters = instance.enumerate_adapters(wgpu::Backends::all());
     println!("Available adapters ({} total):\n", adapters.len());
-    
+
     let interpreter = match try_open_with_gpu_preference() {
         Ok(i) => i,
         Err(e) => {
@@ -81,7 +87,7 @@ fn main() {
     let width = 640u32;
     let height = 360u32;
     println!("Resolution: {}x{}\n", width, height);
-    
+
     let camera = GpuCamera {
         origin: [0.0f32, 0.6, -4.0],
         forward: {
@@ -105,7 +111,7 @@ fn main() {
         println!("SKIP: temporal cache requires real GPU hardware");
         return;
     }
-    
+
     let cull_variant = interpreter.camera_cull_variant().expect("culled variant");
 
     // Build initial cache
@@ -113,37 +119,40 @@ fn main() {
     let mut frame = interpreter.begin_camera_frame(width, height);
     interpreter.write_camera(&mut frame, &camera);
     let bind = interpreter.bind_camera_variant(&cull_variant, &shape, &frame);
-    
+
     let start = Instant::now();
     let _result = interpreter
         .march_camera_variant(&cull_variant, &bind, &frame)
         .expect("march failed");
     let elapsed = start.elapsed();
-    println!("  Initial build: {:.2} ms\n", elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "  Initial build: {:.2} ms\n",
+        elapsed.as_secs_f64() * 1000.0
+    );
 
     // Test different entity counts
     let entity_counts = vec![1, 5, 10, 20, 50, 100, 200, 500];
-    
+
     println!("Comparing single vs batch invalidation:");
     println!("----------------------------------------");
-    
+
     for &entity_count in &entity_counts {
         // Generate random entity positions (small 16x16 pixel entities)
         let mut regions = Vec::new();
         let entity_size = 16u32;
-        
+
         for i in 0..entity_count {
             // Spread entities across the screen
             let cols = (entity_count as f32).sqrt().ceil() as u32;
             let col = i % cols;
             let row = i / cols;
-            
+
             let x = (col * (width / cols)) / 2 + width / (cols * 4);
             let y = (row * (height / cols)) / 2 + height / (cols * 4);
-            
+
             regions.push((x, y, entity_size, entity_size));
         }
-        
+
         // Test individual invalidations
         let mut single_times = Vec::new();
         for _ in 0..3 {
@@ -151,33 +160,39 @@ fn main() {
             for &(x, y, w, h) in &regions {
                 bind.invalidate_region(interpreter.queue(), x, y, w, h);
             }
-            interpreter.device().poll(wgpu::PollType::wait_indefinitely());
+            interpreter
+                .device()
+                .poll(wgpu::PollType::wait_indefinitely());
             let elapsed = start.elapsed();
             single_times.push(elapsed);
         }
         single_times.sort();
         let single_median = single_times[single_times.len() / 2];
-        
+
         // Test batch invalidation
         let mut batch_times = Vec::new();
         for _ in 0..3 {
             let start = Instant::now();
             bind.invalidate_regions(interpreter.queue(), &regions);
-            interpreter.device().poll(wgpu::PollType::wait_indefinitely());
+            interpreter
+                .device()
+                .poll(wgpu::PollType::wait_indefinitely());
             let elapsed = start.elapsed();
             batch_times.push(elapsed);
         }
         batch_times.sort();
         let batch_median = batch_times[batch_times.len() / 2];
-        
+
         let speedup = single_median.as_secs_f64() / batch_median.as_secs_f64();
         let single_ms = single_median.as_secs_f64() * 1000.0;
         let batch_ms = batch_median.as_secs_f64() * 1000.0;
-        
-        println!("  {:3} entities: single={:7.3} ms, batch={:7.3} ms ({:.2}x speedup)", 
-                 entity_count, single_ms, batch_ms, speedup);
+
+        println!(
+            "  {:3} entities: single={:7.3} ms, batch={:7.3} ms ({:.2}x speedup)",
+            entity_count, single_ms, batch_ms, speedup
+        );
     }
-    
+
     println!("\nNote: Times include GPU polling overhead.");
     println!("Batch API eliminates N-1 GPU transfers, saving bus bandwidth.");
 }

@@ -78,7 +78,10 @@ fn main() {
     println!("  Time: {:?} ({} hits)", elapsed, stats.hits);
 
     let cache_stats = cache.stats();
-    println!("  Cached: {} surfaces, {} sky\n", cache_stats.cached_surfaces, cache_stats.sky_pixels);
+    println!(
+        "  Cached: {} surfaces, {} sky\n",
+        cache_stats.cached_surfaces, cache_stats.sky_pixels
+    );
 
     println!("Frame 1: Small camera movement (no entity move)");
     println!("------------------------------------------------");
@@ -88,8 +91,14 @@ fn main() {
     let start = Instant::now();
     let (stats, cache_hits) = render_temporal(&tree, &moved_camera, &mut cache, &mut frame);
     let elapsed = start.elapsed();
-    println!("  Time: {:?} ({} hits, {} cache hits)", elapsed, stats.hits, cache_hits);
-    println!("  Speedup: {:.2}x vs baseline\n", 1.97 / elapsed.as_secs_f64());
+    println!(
+        "  Time: {:?} ({} hits, {} cache hits)",
+        elapsed, stats.hits, cache_hits
+    );
+    println!(
+        "  Speedup: {:.2}x vs baseline\n",
+        1.97 / elapsed.as_secs_f64()
+    );
 
     println!("Entity moves: Invalidate sphere at [3, 0, 0] with radius 2.0");
     println!("-------------------------------------------------------------");
@@ -105,7 +114,10 @@ fn main() {
     let start = Instant::now();
     let (stats, cache_hits) = render_temporal(&tree, &moved_camera, &mut cache, &mut frame);
     let elapsed = start.elapsed();
-    println!("  Time: {:?} ({} hits, {} cache hits)", elapsed, stats.hits, cache_hits);
+    println!(
+        "  Time: {:?} ({} hits, {} cache hits)",
+        elapsed, stats.hits, cache_hits
+    );
 
     let final_stats = cache.stats();
     println!("\nFinal cache state:");
