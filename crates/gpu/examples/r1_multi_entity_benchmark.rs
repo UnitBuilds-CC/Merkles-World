@@ -162,7 +162,8 @@ fn main() {
             }
             interpreter
                 .device()
-                .poll(wgpu::PollType::wait_indefinitely());
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("device poll failed; this timing would not include the invalidation");
             let elapsed = start.elapsed();
             single_times.push(elapsed);
         }
@@ -176,7 +177,8 @@ fn main() {
             bind.invalidate_regions(interpreter.queue(), &regions);
             interpreter
                 .device()
-                .poll(wgpu::PollType::wait_indefinitely());
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("device poll failed; this timing would not include the invalidation");
             let elapsed = start.elapsed();
             batch_times.push(elapsed);
         }

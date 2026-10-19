@@ -3,7 +3,7 @@
 //! This compares three render paths:
 //! 1. Baseline: full march every frame (current R1 measurement)
 //! 2. Temporal cache: reuse cached surfaces with validation
-//! 3. Temporal + culling: cache + BVH bounds checks
+//! 3. BVH culling alone: branch-and-bound bounds checks, no cache
 //!
 //! The goal: quantify how much temporal coherence reduces marched rays, and whether
 //! it can close R1's 5.5x gap on the GTX 1070.
@@ -14,7 +14,7 @@ use contracts::sdf::{
 };
 use render::raster::{render_bnb_into, render_into, render_temporal, Camera, Frame};
 use render::temporal_cache::SurfaceCache;
-use render::{cull, Tree};
+use render::Tree;
 use std::time::Instant;
 
 fn build_demo_scene() -> Tree {
@@ -55,7 +55,6 @@ fn main() {
     println!("========================================\n");
 
     let tree = build_demo_scene();
-    let bounds = cull::scene_bounds(&tree);
 
     // Camera setup matching r1_march_alone
     let width = 1920;
@@ -149,11 +148,11 @@ fn main() {
     println!("  Median: {:?}", temporal_median);
     println!("  Avg cache hit rate: {:.1}%\n", avg_cache_hit_rate);
 
-    println!("Temporal + BVH culling");
+    println!("BVH culling, no cache");
     println!("----------------------");
 
-    // Reset cache for fair comparison
-    cache = SurfaceCache::new(width, height);
+    // render_bnb_into takes no cache, so the section measures bounds checks alone —
+    // resetting the cache here would imply a reuse path this arm never runs.
     moving_camera = camera;
 
     let mut combined_times = Vec::new();
@@ -161,7 +160,6 @@ fn main() {
         moving_camera.origin[2] += 0.05;
 
         let start = Instant::now();
-        // Use BVH culling with temporal cache
         render_bnb_into(&tree, &moving_camera, &mut frame);
         let elapsed = start.elapsed();
 

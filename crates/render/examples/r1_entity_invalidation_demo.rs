@@ -7,7 +7,7 @@ use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
     NODE_SMOOTH_UNION, NODE_SPHERE,
 };
-use render::raster::{render_into, render_temporal, Camera, Frame};
+use render::raster::{render_temporal, Camera, Frame};
 use render::temporal_cache::{EntityRange, SurfaceCache};
 use render::Tree;
 use std::time::Instant;

@@ -1375,7 +1375,7 @@ impl Interpreter {
     ) -> Bind {
         // Create temporal cache buffers for bind group 1
         let pixels = frame.pixels;
-        let pixel_size = std::mem::size_of::<f32>();
+        let pixel_size = core::mem::size_of::<f32>();
 
         // cached_positions: vec3<f32> per pixel (12 bytes each, padded to 16)
         let positions_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1410,7 +1410,7 @@ impl Interpreter {
         });
 
         // dirty_mask: 1 bit per pixel for delta rendering (u32 words, 32 pixels per word)
-        let dirty_words = (pixels + 31) / 32;
+        let dirty_words = pixels.div_ceil(32);
         let dirty_mask_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("temporal-dirty-mask"),
             size: (dirty_words * 4) as u64, // 4 bytes per u32
@@ -1523,7 +1523,7 @@ impl Bind {
         }
 
         // Allocate the full dirty mask to ensure we don't lose data from previous invalidations
-        let total_words = ((width * self.height + 31) / 32) as usize;
+        let total_words = (width * self.height).div_ceil(32) as usize;
         let mut dirty_words = vec![0xFFFFFFFFu32; total_words]; // Start with all bits set (matching initial GPU state)
 
         // Set dirty bits for this region
@@ -1535,7 +1535,7 @@ impl Bind {
             let last_word_idx = (row_end / 32) as usize;
 
             // Handle partial first word
-            if row_start % 32 != 0 {
+            if !row_start.is_multiple_of(32) {
                 let bit_start = row_start % 32;
                 let bits_in_first_word = 32 - bit_start;
                 let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
@@ -1549,23 +1549,21 @@ impl Bind {
             }
 
             // Fill complete middle words (32 pixels at once)
-            let middle_start = if row_start % 32 != 0 {
+            let middle_start = if !row_start.is_multiple_of(32) {
                 first_word_idx + 1
             } else {
                 first_word_idx
             };
-            let middle_end = if row_end % 32 != 0 {
+            let middle_end = if !row_end.is_multiple_of(32) {
                 last_word_idx
             } else {
                 last_word_idx + 1
             };
 
-            for word_idx in middle_start..middle_end {
-                dirty_words[word_idx] = 0xFFFFFFFF; // All 32 pixels dirty
-            }
+            dirty_words[middle_start..middle_end].fill(0xFFFFFFFF); // All 32 pixels dirty
 
             // Handle partial last word
-            if row_end % 32 != 0 && last_word_idx > first_word_idx {
+            if !row_end.is_multiple_of(32) && last_word_idx > first_word_idx {
                 let bit_end = row_end % 32;
                 let mask = (1u32 << bit_end) - 1;
                 dirty_words[last_word_idx] |= mask;
@@ -1587,7 +1585,7 @@ impl Bind {
             return;
         };
 
-        let total_words = ((self.width * self.height + 31) / 32) as usize;
+        let total_words = (self.width * self.height).div_ceil(32) as usize;
         let all_dirty: Vec<u8> = vec![0xFF; total_words * 4];
         queue.write_buffer(dirty_mask_buf, 0, &all_dirty);
     }
@@ -1599,19 +1597,18 @@ impl Bind {
             return;
         };
 
-        let total_words = ((self.width * self.height + 31) / 32) as usize;
+        let total_words = (self.width * self.height).div_ceil(32) as usize;
         let all_clean: Vec<u8> = vec![0x00; total_words * 4];
         queue.write_buffer(dirty_mask_buf, 0, &all_clean);
     }
 
     /// Read back the dirty mask from GPU memory.
-    /// Returns a vector of u32 words representing the dirty state.
+    /// Returns a vector of u32 words representing the dirty state, or None if there is no temporal
+    /// cache or the read-back did not complete.
     pub fn read_dirty_mask(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u32>> {
-        let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
-            return None;
-        };
+        let dirty_mask_buf = self.dirty_mask_buf.as_ref()?;
 
-        let total_words = ((self.width * self.height + 31) / 32) as usize;
+        let total_words = (self.width * self.height).div_ceil(32) as usize;
         let byte_size = (total_words * 4) as u64;
 
         // Create staging buffer
@@ -1632,7 +1629,9 @@ impl Bind {
         // Read back
         let slice = staging.slice(0..byte_size);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        // A failed poll means the staging buffer never mapped, and reading it would panic; the
+        // caller's `None` is the honest answer for "no mask could be read".
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
 
         let view = slice.get_mapped_range();
         let words: Vec<u32> = view
@@ -1646,15 +1645,14 @@ impl Bind {
     }
 
     /// Read cache statistics after a frame render.
-    /// Returns (cache_hits, total_dirty_pixels_checked) or None if no temporal cache is active.
+    /// Returns (cache_hits, total_dirty_pixels_checked) or None if no temporal cache is active or
+    /// the read-back did not complete.
     pub fn read_cache_stats(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Option<(u32, u32)> {
-        let Some(ref cache_stats_buf) = self.cache_stats_buf else {
-            return None;
-        };
+        let cache_stats_buf = self.cache_stats_buf.as_ref()?;
 
         // Create a staging buffer to copy into
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1674,7 +1672,7 @@ impl Bind {
         // Read back
         let slice = staging.slice(0..16);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        device.poll(wgpu::PollType::wait_indefinitely());
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
 
         let view = slice.get_mapped_range();
         let stats: [u32; 4] = [
@@ -1712,7 +1710,7 @@ impl Bind {
         }
 
         // Allocate the full dirty mask to ensure we don't lose data from previous invalidations
-        let total_words = ((width * self.height + 31) / 32) as usize;
+        let total_words = (width * self.height).div_ceil(32) as usize;
         let mut dirty_words = vec![0xFFFFFFFFu32; total_words]; // Start with all bits set (matching initial GPU state)
 
         // Second pass: set dirty bits for all regions
@@ -1734,7 +1732,7 @@ impl Bind {
                 let last_word_idx = (row_end / 32) as usize;
 
                 // Handle partial first word
-                if row_start % 32 != 0 {
+                if !row_start.is_multiple_of(32) {
                     let bit_start = row_start % 32;
                     let bits_in_first_word = 32 - bit_start;
                     let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
@@ -1748,23 +1746,21 @@ impl Bind {
                 }
 
                 // Fill complete middle words
-                let middle_start = if row_start % 32 != 0 {
+                let middle_start = if !row_start.is_multiple_of(32) {
                     first_word_idx + 1
                 } else {
                     first_word_idx
                 };
-                let middle_end = if row_end % 32 != 0 {
+                let middle_end = if !row_end.is_multiple_of(32) {
                     last_word_idx
                 } else {
                     last_word_idx + 1
                 };
 
-                for word_idx in middle_start..middle_end {
-                    dirty_words[word_idx] = 0xFFFFFFFF;
-                }
+                dirty_words[middle_start..middle_end].fill(0xFFFFFFFF);
 
                 // Handle partial last word
-                if row_end % 32 != 0 && last_word_idx > first_word_idx {
+                if !row_end.is_multiple_of(32) && last_word_idx > first_word_idx {
                     let bit_end = row_end % 32;
                     let mask = (1u32 << bit_end) - 1;
                     dirty_words[last_word_idx] |= mask;

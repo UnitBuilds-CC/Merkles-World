@@ -15,7 +15,7 @@
 //! per 256x192 frame here. The viewport renders only when the camera or the shape actually changed, and
 //! at a quarter of the pixels while a drag is in progress.
 
-use std::hash::{Hash, Hasher};
+use core::hash::{Hash, Hasher};
 
 use editor::{
     export::export_menu,

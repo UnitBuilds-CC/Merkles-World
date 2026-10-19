@@ -188,7 +188,8 @@ fn main() {
         // Poll device to ensure invalidation completes
         interpreter
             .device()
-            .poll(wgpu::PollType::wait_indefinitely());
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("device poll failed; the frame times below would not follow a settled cache");
 
         // Measure frame time and collect cache stats
         let mut times = Vec::new();

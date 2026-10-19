@@ -1,30 +1,40 @@
 //! Vector-field cache probe: measure how many pixels' cached surfaces survive a camera move.
 //!
 //! This simulates the vector-field approach without implementing it on the GPU. The idea:
-//! 1. March a frame normally, storing per-pixel {ray_dir, hit_t, hit_point}
+//! 1. March a frame normally, storing per-pixel {hit_point}
 //! 2. Move camera by some delta (translation or rotation)
-//! 3. For each pixel: transform cached ray by camera delta, check if it still hits
+//! 3. For each pixel: evaluate the SDF at the cached world point and accept it if |SDF| is
+//!    within tolerance
 //! 4. Count how many validate successfully vs need remarching
 //!
 //! What this measures: the potential work reduction from temporal caching. If 90% of pixels
 //! validate, we only march 10% of rays per frame instead of 100%.
+//!
+//! What it does NOT measure: this is an upper bound, not a re-hit test. Step 3 asks only whether
+//! the surface still exists at that world point. It never re-marches the ray, so it cannot see a
+//! surface that became occluded, and tolerance accepts a point that is merely near the surface
+//! rather than the point the moved camera would actually hit. `render::temporal_cache` is the
+//! path that validates by re-marching, and its numbers are the ones to quote.
 
 use render::{march, raster::Camera, sdf_eval, Tree, Vec3, ROOT};
 
 /// Cached surface data for one pixel
 #[derive(Debug, Clone, Copy)]
 struct SurfaceCache {
-    ray_dir: Vec3,   // Direction of ray that found this surface
-    hit_t: f32,      // Distance along that ray
     hit_point: Vec3, // World-space hit position
     valid: bool,     // Whether this pixel found a surface
 }
 
 /// Simulate camera movement and measure cache hit rate
+///
+/// `_moved_camera` is deliberately unused: the validity test below asks only whether the cached
+/// world point still lies near the surface, which a static scene answers the same way from every
+/// camera. This probe therefore cannot report motion sensitivity — its rate is the initial hit
+/// rate. See the header.
 fn measure_cache_hit_rate(
     tree: &Tree,
     initial_camera: &Camera,
-    moved_camera: &Camera,
+    _moved_camera: &Camera,
     surface_eps: f32,
 ) -> (usize, usize, Vec<bool>) {
     let width = initial_camera.width;
@@ -51,16 +61,12 @@ fn measure_cache_hit_rate(
                 Some(hit) => {
                     initial_hits += 1;
                     cache.push(SurfaceCache {
-                        ray_dir: dir,
-                        hit_t: hit.t,
                         hit_point: hit.point,
                         valid: true,
                     });
                 }
                 None => {
                     cache.push(SurfaceCache {
-                        ray_dir: dir,
-                        hit_t: f32::MAX,
                         hit_point: [0.0, 0.0, 0.0],
                         valid: false,
                     });
@@ -92,13 +98,6 @@ fn measure_cache_hit_rate(
                 validation_results.push(false);
                 continue;
             }
-
-            // Transform cached ray by camera movement
-            // The key insight: if camera moves by delta D, the ray from new position
-            // toward the same world point has direction adjusted by -D
-
-            // New ray from moved camera toward cached hit point
-            let _new_dir = normalize(subtract(cached.hit_point, moved_camera.origin));
 
             // Quick validation: evaluate SDF at predicted hit point
             // If |SDF(predicted)| < tolerance, the cached surface is still approximately valid
@@ -147,16 +146,8 @@ fn normalize_vec3(v: Vec3) -> Vec3 {
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
-fn subtract(a: Vec3, b: Vec3) -> Vec3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn normalize(v: Vec3) -> Vec3 {
-    normalize_vec3(v)
-}
-
 fn main() {
-    println!("Vector-field cache probe: measuring temporal coherence");
+    println!("Vector-field cache probe: measuring surviving surface coverage");
     println!("=====================================================\n");
 
     // Build a simple test scene: sphere on ground plane
@@ -190,7 +181,7 @@ fn main() {
         ("Translate forward 0.5 units", [0.0, 0.0, 0.5]),
         ("Translate right 0.5 units", [0.5, 0.0, 0.0]),
         ("Translate up 0.3 units", [0.0, 0.3, 0.0]),
-        ("Rotate slightly (simulated)", [0.0, 0.0, 0.0]), // Will adjust direction
+        ("Rotate slightly (not implemented)", [0.0, 0.0, 0.0]), // No origin delta; see the note below
         ("Large translation 2 units", [2.0, 0.0, 0.0]),
     ];
 
@@ -218,9 +209,12 @@ fn main() {
     }
 
     println!("\nInterpretation:");
-    println!("- High hit rate (>80%) means caching could provide large speedup");
-    println!("- Low hit rate (<50%) means most rays need remarching anyway");
-    println!("- Sky pixels are always misses (no surface to cache)");
+    println!("- Every row above is the same number by construction: the validity test never reads");
+    println!("  the moved camera, so this table does not measure how reuse decays with motion.");
+    println!("- What it does measure: the share of pixels that found a surface at all, since a");
+    println!("  surface point that exists still evaluates to |SDF| ~ 0 however the camera moved.");
+    println!("- Sky pixels are always misses (no surface to cache).");
+    println!("- For a motion-dependent reuse rate use render::temporal_cache, which re-marches.");
 }
 
 fn build_test_scene() -> Tree {

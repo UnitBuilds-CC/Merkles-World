@@ -38,7 +38,7 @@ impl ViewportCamera {
     /// Handle scroll wheel for zoom
     pub fn handle_zoom(&mut self, delta: f32) {
         self.distance *= 1.0 - delta * 0.1;
-        self.distance = self.distance.max(0.5).min(50.0);
+        self.distance = self.distance.clamp(0.5, 50.0);
     }
 
     /// Get camera position in world space

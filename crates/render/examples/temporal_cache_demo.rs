@@ -88,7 +88,7 @@ fn main() {
 
         // Also do a full render for comparison
         render_into(&tree, &camera, &mut frame);
-        let full_hits = frame.hit_count();
+        let full_hits = frame.hit_count() as usize;
 
         let total_pixels = (width * height) as usize;
         let hit_rate = (hits as f64 / total_pixels as f64) * 100.0;
@@ -104,14 +104,24 @@ fn main() {
         };
 
         println!(
-            "Frame {:2}: {:5} hits ({:.1}%), {:5} cache hits ({:.1}% of hits), {:5} remarched ({:.1}% saved)",
+            "Frame {:2}: {:5} hits ({:.1}%), {:5} cache hits ({:.1}% of hits), {:5} remarched ({:.1}% saved) | full render {:5} hits{}",
             frame_num,
             hits,
             hit_rate,
             cache_hits,
             cache_hit_rate,
             hits - cache_hits,
-            work_saved
+            work_saved,
+            full_hits,
+            // Both paths see the same camera this frame, so a disagreement is a cached surface
+            // the validator accepted while a full march would not have hit it. Agreement is only
+            // on the aggregate count — offsetting per-pixel errors would still sum to the same
+            // number, so this flags a suspected reuse bug, it does not clear the cache.
+            if hits == full_hits {
+                ""
+            } else {
+                " <- DISAGREES"
+            }
         );
     }
 

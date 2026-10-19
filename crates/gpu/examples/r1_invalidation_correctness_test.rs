@@ -129,7 +129,8 @@ fn main() {
     }
     interpreter
         .device()
-        .poll(wgpu::PollType::wait_indefinitely());
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("device poll after invalidation failed; the mask read-back would be meaningless");
 
     // Read back dirty mask from method 1 (no render needed)
     let dirty_mask_1 = bind1
@@ -146,7 +147,8 @@ fn main() {
     bind1.invalidate_regions(interpreter.queue(), &regions);
     interpreter
         .device()
-        .poll(wgpu::PollType::wait_indefinitely());
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("device poll after invalidation failed; the mask read-back would be meaningless");
 
     // Read back dirty mask from method 2
     let dirty_mask_2 = bind1
