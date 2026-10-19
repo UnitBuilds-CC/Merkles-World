@@ -5,6 +5,7 @@
 //! its own device today, and eframe already owns one.
 
 use assetc::EntityDef;
+use entity::MaterialRegistry;
 use render::{
     march, normal,
     raster::{Camera, Frame},
@@ -26,11 +27,19 @@ impl CpuRenderer {
     pub fn render(
         &self,
         entity_def: &EntityDef,
+        materials: &MaterialRegistry,
         camera_yaw: f32,
         camera_pitch: f32,
         camera_distance: f32,
     ) -> Frame {
-        self.render_on_stage(entity_def, camera_yaw, camera_pitch, camera_distance, None)
+        self.render_on_stage(
+            entity_def,
+            materials,
+            camera_yaw,
+            camera_pitch,
+            camera_distance,
+            None,
+        )
     }
 
     /// As [`Self::render`], composited over a ground plane at `stage.y`.
@@ -40,6 +49,7 @@ impl CpuRenderer {
     pub fn render_on_stage(
         &self,
         entity_def: &EntityDef,
+        materials: &MaterialRegistry,
         camera_yaw: f32,
         camera_pitch: f32,
         camera_distance: f32,
@@ -67,7 +77,7 @@ impl CpuRenderer {
         };
 
         let start = std::time::Instant::now();
-        let frame = render_frame(&tree, &camera, stage);
+        let frame = render_frame(&tree, &camera, stage, tint_of(entity_def, materials));
         let elapsed = start.elapsed();
 
         if elapsed.as_millis() > 100 {
@@ -222,8 +232,26 @@ fn key_light(camera: &Camera) -> [f32; 3] {
     ])
 }
 
+/// The entity's material as a per-channel multiplier on the shaded pixel.
+///
+/// Only `base_color` is read. Doc 04's materials are functions of the surface point, and the noise
+/// term is not evaluated here, so the viewport shows the flat base colour and nothing about the
+/// pattern — the swatch and the render agree, and neither yet speaks for the authored `noise`.
+fn tint_of(entity_def: &EntityDef, materials: &MaterialRegistry) -> [f32; 3] {
+    match materials.get(entity_def.material_id) {
+        Some(m) => m.base_color,
+        None => {
+            eprintln!(
+                "⚠ material slot {} is empty; rendering unlit white — assign a registered material",
+                entity_def.material_id
+            );
+            [1.0, 1.0, 1.0]
+        }
+    }
+}
+
 /// Render a tree with the given camera, optionally over a [`Stage`].
-fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>) -> Frame {
+fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>, tint: [f32; 3]) -> Frame {
     let mut frame = Frame::new(camera.width, camera.height);
     let light = key_light(camera);
     let aspect = camera.width as f32 / camera.height as f32;
@@ -250,21 +278,22 @@ fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>) -> Frame {
             );
             let ground = stage.and_then(|stage| stage_hit(camera, &dir, stage));
 
-            // Whichever of the two is nearer owns the pixel.
-            let (t, shade) = match (hit.as_ref(), ground.as_ref()) {
+            // Whichever of the two is nearer owns the pixel. Only the entity carries a material:
+            // the stage is the editor's measuring grid, not a thing in the world.
+            let (t, rgb) = match (hit.as_ref(), ground.as_ref()) {
                 (Some(hit), Some(ground)) => {
                     if hit.t <= ground.t {
                         let n = normal(tree, ROOT, hit.point, camera.surface);
-                        (hit.t, shade_at(n, light))
+                        (hit.t, tinted(shade_at(n, light), tint))
                     } else {
-                        (ground.t, ground.shade)
+                        (ground.t, [ground.shade; 3])
                     }
                 }
                 (Some(hit), None) => {
                     let n = normal(tree, ROOT, hit.point, camera.surface);
-                    (hit.t, shade_at(n, light))
+                    (hit.t, tinted(shade_at(n, light), tint))
                 }
-                (None, Some(ground)) => (ground.t, ground.shade),
+                (None, Some(ground)) => (ground.t, [ground.shade; 3]),
                 (None, None) => {
                     frame.pixels.extend_from_slice(&[30, 30, 35]);
                     frame.depth.push(Frame::NO_HIT);
@@ -272,12 +301,21 @@ fn render_frame(tree: &Tree, camera: &Camera, stage: Option<Stage>) -> Frame {
                 }
             };
 
-            frame.pixels.extend_from_slice(&[shade, shade, shade]);
+            frame.pixels.extend_from_slice(&rgb);
             frame.depth.push(t);
         }
     }
 
     frame
+}
+
+/// Apply a material's base colour to a lambert shade.
+fn tinted(shade: u8, tint: [f32; 3]) -> [u8; 3] {
+    [
+        (shade as f32 * tint[0]) as u8,
+        (shade as f32 * tint[1]) as u8,
+        (shade as f32 * tint[2]) as u8,
+    ]
 }
 
 /// A ground pixel: how far along the ray, and how bright.
@@ -338,4 +376,59 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sphere(material_id: u8) -> EntityDef {
+        EntityDef {
+            shape: assetc::Shape::Sphere {
+                r: 1.0,
+                centre: [0.0, 0.0, 0.0],
+            },
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: 1.0,
+            material_id,
+            flags: 0,
+            quantity: 0,
+        }
+    }
+
+    /// The centre pixel of a 16x16 frame, as (R, G, B).
+    fn centre_pixel(frame: &Frame) -> (u8, u8, u8) {
+        let i = ((8 * 16) + 8) * 3;
+        (frame.pixels[i], frame.pixels[i + 1], frame.pixels[i + 2])
+    }
+
+    #[test]
+    fn assigned_material_reaches_the_pixel_and_the_stage_does_not() {
+        let renderer = CpuRenderer::new(16, 16);
+        let materials = MaterialRegistry::with_defaults();
+
+        // Slot 0 is pig_skin [1.0, 0.7, 0.75], slot 2 is stone [0.5, 0.5, 0.5].
+        let pig = centre_pixel(&renderer.render(&sphere(0), &materials, 0.0, 0.0, 3.0));
+        let rock = centre_pixel(&renderer.render(&sphere(2), &materials, 0.0, 0.0, 3.0));
+
+        assert!(pig.0 > 0 && pig.1 > 0, "nothing was shaded: {pig:?}");
+        assert!(
+            pig.0 > pig.1,
+            "the viewport is grayscale again — base_color never reached the pixel: {pig:?}"
+        );
+        assert_eq!(rock.0, rock.1, "stone's channels must stay equal: {rock:?}");
+        assert!(
+            pig.0 > rock.0,
+            "pig_skin (1.0) and stone (0.5) rendered the same red: {pig:?} vs {rock:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_slot_renders_instead_of_refusing_the_frame() {
+        let renderer = CpuRenderer::new(16, 16);
+        let materials = MaterialRegistry::with_defaults();
+        let hit = centre_pixel(&renderer.render(&sphere(200), &materials, 0.0, 0.0, 3.0));
+        assert!(hit.0 > 0, "an unassigned material lost the shape: {hit:?}");
+    }
 }

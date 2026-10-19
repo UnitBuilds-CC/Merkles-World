@@ -137,6 +137,16 @@ pixels instead:
   Deriving it from the authored parameters instead was tried and is wrong twice over: the enclosure is a
   *sphere*, so its bottom floats the animal above its own feet, and chaining each `SmoothUnion`'s `k`
   into the minimum overshoots at every level the leg passes through.
+- **The material reaches the pixel.** The viewport multiplies its lambert shade by
+  `Material::base_color`, read from the single `MaterialRegistry` that `EditorState` owns — the same
+  object the panel's swatches read, so a swatch cannot promise a colour the render disagrees with.
+  (It did: the panel carried its own copy of `pig_skin` as `[1.0, 0.7, 0.8]` against the registry's
+  `[1.0, 0.7, 0.75]`, and the viewport ignored materials entirely, so assigning one changed nothing
+  you could see.) Only `base_color` is honoured. Doc 04's noise term is *not* evaluated, so an
+  authored Voronoi `pig_skin` still reads as flat pink, and `gpu_renderer::tests` asserts exactly the
+  part that is wired: two different slots must produce two different centre pixels, and a tinted slot
+  must not come out with R == G. An empty slot renders white and prints a warning rather than
+  refusing the frame, because the shape is still the thing under inspection.
 - **The instrument is `cargo run -p editor --example render_png`.** It writes six camera angles to the
   temp dir (§6: never into the repo) and prints the hit-pixel count and wall time per frame, so a
   geometry change is judged by looking at it rather than by reading the code that made it. Every

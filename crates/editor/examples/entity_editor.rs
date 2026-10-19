@@ -179,6 +179,7 @@ impl App for EditorApp {
                     let started = std::time::Instant::now();
                     let frame = self.cpu_renderer.render_on_stage(
                         &self.state.entity_def,
+                        &self.state.materials,
                         self.camera.yaw,
                         self.camera.pitch,
                         self.camera.distance,

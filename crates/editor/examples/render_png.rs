@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use assetc::EntityDef;
 use editor::gpu_renderer::{CpuRenderer, Stage};
+use entity::MaterialRegistry;
 use image::{ColorType, ImageFormat};
 use render::raster::Frame;
 
@@ -54,8 +55,10 @@ fn main() {
 
     let (width, height) = (480u32, 360u32);
     let renderer = CpuRenderer::new(width, height);
-    // The floor sits at the bottom of the entity's enclosure, and the grid is 0.25 apart, which is
-    // also the scale check: the body should cover about three cells.
+    let materials = MaterialRegistry::with_defaults();
+    // The floor is marched to the lowest surface the tree actually reaches, so the hooves meet the
+    // grid rather than the animal floating over it. The grid is 0.25 apart, which is also the scale
+    // check: the body should cover about three cells.
     let stage = Stage::under(&def);
 
     for (name, yaw, pitch, distance) in VIEWS {
@@ -65,7 +68,8 @@ fn main() {
             }
         }
         let started = std::time::Instant::now();
-        let frame = renderer.render_on_stage(&def, *yaw, *pitch, *distance, Some(stage));
+        let frame =
+            renderer.render_on_stage(&def, &materials, *yaw, *pitch, *distance, Some(stage));
         let took = started.elapsed().as_millis();
 
         let surface = frame.depth.iter().filter(|t| **t != Frame::NO_HIT).count();

@@ -2,6 +2,12 @@
 
 use crate::EditorState;
 
+/// Display names for the slots [`entity::MaterialRegistry::with_defaults`] fills. The registry
+/// stores no names — `Material` is a render value, not a catalogue entry — so only the labels live
+/// here. The colours do not: they are read back out of the registry, which is the same object the
+/// viewport shades with, so a swatch cannot promise a colour the render disagrees with.
+const NAMED_SLOTS: [(u8, &str); 3] = [(0, "pig_skin"), (1, "wood"), (2, "stone")];
+
 /// Render material selection panel
 pub fn material_panel(ui: &mut egui::Ui, state: &mut EditorState) {
     ui.heading("Material Registry");
@@ -9,19 +15,17 @@ pub fn material_panel(ui: &mut egui::Ui, state: &mut EditorState) {
 
     ui.label("Available Materials:");
 
-    // Show predefined materials
-    let materials = [
-        (0, "pig_skin", [1.0, 0.7, 0.8]), // Pink
-        (1, "wood", [0.6, 0.4, 0.2]),     // Brown
-        (2, "stone", [0.5, 0.5, 0.5]),    // Gray
-    ];
+    for (id, name) in NAMED_SLOTS {
+        let Some(material) = state.materials.get(id) else {
+            continue;
+        };
+        let color = material.base_color;
 
-    for (id, name, color) in &materials {
-        let selected = state.entity_def.material_id == *id;
-        let button = ui.selectable_label(selected, *name);
+        let selected = state.entity_def.material_id == id;
+        let button = ui.selectable_label(selected, name);
 
         if button.clicked() {
-            state.entity_def.material_id = *id;
+            state.entity_def.material_id = id;
             state.mark_dirty();
         }
 
@@ -39,5 +43,10 @@ pub fn material_panel(ui: &mut egui::Ui, state: &mut EditorState) {
     }
 
     ui.separator();
-    ui.label(format!("Selected: ID {}", state.entity_def.material_id));
+    let current = state.entity_def.material_id;
+    let status = match state.materials.get(current) {
+        Some(_) => format!("Selected: ID {current}"),
+        None => format!("Selected: ID {current} (empty slot — nothing to shade with)"),
+    };
+    ui.label(status);
 }

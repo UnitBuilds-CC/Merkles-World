@@ -16,11 +16,15 @@ pub mod material_panel;
 pub mod viewport;
 
 use assetc::{EntityDef, Shape};
+use entity::MaterialRegistry;
 
 /// Editor state: tracks the currently loaded entity and dirty flag
 pub struct EditorState {
     /// Current entity definition being edited
     pub entity_def: EntityDef,
+    /// The materials a `material_id` may point at. One registry, read by both the panel's swatches
+    /// and the viewport's shading, so the two cannot disagree about what slot 0 looks like.
+    pub materials: MaterialRegistry,
     /// Whether parameters have been modified since last save
     pub dirty: bool,
     /// Path to loaded file (if any)
@@ -43,6 +47,7 @@ impl EditorState {
                 flags: 0x03, // ALIVE | ACTIVE
                 quantity: 0,
             },
+            materials: MaterialRegistry::with_defaults(),
             dirty: false,
             file_path: None,
         }
