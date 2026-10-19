@@ -1319,7 +1319,7 @@ impl Interpreter {
         {
             block[64 + index * 4..68 + index * 4].copy_from_slice(&word.to_le_bytes());
         }
-        for (index, word) in [camera.width as f32, camera.height as f32, 0.0f32, 0.0f32]
+        for (index, word) in [camera.width as f32, camera.height as f32, 0.0f32, 64.0f32]
             .iter()
             .enumerate()
         {
@@ -1769,7 +1769,14 @@ impl Bind {
     /// * `world_max` - Maximum corner of entity's world-space AABB [x, y, z]
     /// 
     /// # Returns
-    /// Some((x, y, w, h)) if the entity is visible, None if culled
+    /// Invalidate all pixels covered by a world-space AABB.
+    ///
+    /// Projects the 8 corners of the AABB to screen space and marks the bounding
+    /// rectangle as dirty. Note: this only projects corner points, so the resulting
+    /// screen bounds may be larger than the actual projected entity for rotated or
+    /// non-axis-aligned objects (conservative over-approximation).
+    ///
+    /// Returns `Some((x, y, w, h))` if any pixels were marked dirty, `None` if culled.
     pub fn invalidate_entity(
         &self,
         queue: &wgpu::Queue,
@@ -1786,18 +1793,24 @@ impl Bind {
                 p[2] - camera.origin[2],
             ];
             
-            // Check if point is behind camera
+            // Check if point is behind camera or too close for stable projection
             let forward_dot = rel[0] * camera.forward[0] + rel[1] * camera.forward[1] + rel[2] * camera.forward[2];
-            if forward_dot <= 0.0 {
-                return None; // Behind camera
+            if forward_dot <= 0.001 {
+                return None; // Behind camera or too close (prevents division by near-zero)
             }
             
             // Project to screen space
             let right_dot = rel[0] * camera.right[0] + rel[1] * camera.right[1] + rel[2] * camera.right[2];
             let up_dot = rel[0] * camera.up[0] + rel[1] * camera.up[1] + rel[2] * camera.up[2];
             
-            let ndc_x = right_dot / (forward_dot * camera.half_height);
-            let ndc_y = up_dot / (forward_dot * camera.half_height);
+            // Guard against numerical instability when half_height is very small
+            let denom = forward_dot * camera.half_height;
+            if denom.abs() < 1e-6 {
+                return None; // Denominator too small, projection would be unstable
+            }
+            
+            let ndc_x = right_dot / denom;
+            let ndc_y = up_dot / denom;
             
             // Convert to pixel coordinates
             let px = ((ndc_x + 1.0) * 0.5) * camera.width as f32;

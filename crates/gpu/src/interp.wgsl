@@ -723,10 +723,11 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
         if cached_flags > 0u {
             let cached_depth = cached_depths[index];
             
-            // Age out stale cache entries (older than 64 frames)
+            // Age out stale cache entries (threshold set by host in cam.grid.w)
             let current_frame = header.stack_depth;
             let age = current_frame - cached_frame;
-            let is_stale = age > 64u;
+            let max_age_frames = u32(cam.grid.w);
+            let is_stale = age > max_age_frames;
             
             // Trust cache without SDF validation if depth is reasonable and not stale
             if !is_stale && cached_depth > 0.0 && cached_depth <= max_t {
