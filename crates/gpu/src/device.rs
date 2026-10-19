@@ -542,6 +542,11 @@ impl Interpreter {
         &self.adapter
     }
 
+    /// Return a reference to the wgpu queue for buffer writes (e.g., dirty mask invalidation).
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
     /// Evaluate `tree` at `points` on the device and compare with the reference.
     pub fn compare_with_reference(
         &self,
