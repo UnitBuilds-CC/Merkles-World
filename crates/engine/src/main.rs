@@ -694,8 +694,11 @@ fn main() {
         slab.len(),
         slab.capacity()
     );
-    println!("// boot complete. Not met: macro sim, compaction, mod loading, four devices.");
-    println!("// rendered scene : CPU raster only (64x48 grid); the windowed path lives in crates/gpu/examples/demo_window.rs");
+    // Gate P1.5's hashed artifact is the whole stdout, and docs/evidence.json records both named devices as
+    // agreeing against its digest: rewording a line here moves that digest and costs a re-boot on two machines.
+    // So this sentence is deliberately about this binary's own scope -- the windowed path exists, in
+    // crates/gpu/examples/demo_window.rs, and the engine never presents it.
+    println!("// boot complete. Not met: a drawn scene, macro sim, compaction, mod loading, four devices.");
 }
 
 /// The engine's scene, arriving the way content will arrive: authored `Shape` -> `assetc::lower` ->
