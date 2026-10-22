@@ -230,11 +230,18 @@ pixels instead:
 The preview is a CPU march rather than a device march, so it is an authoring instrument and not a frame
 budget. In a debug build the six-angle dump measured 11.0–17.1 s per 480×360 frame and the editor's own
 256×192 preview 2.5–4.6 s; the same six-angle dump in a **release** build measured 0.85–1.16 s per
-480×360 frame on the run that closed the part-selection unit (2026-10-20, this machine, the 32-node
+480×360 frame on the run that closed the part-selection unit (2026-10-20, this machine, the then-32-node
 `pig.ron`), where the run earlier the same day measured 1.20–1.43 s — the same binary, so the spread is
 the machine's, not the renderer's, and no number in this paragraph should be read tighter than "about a
 second". Both are why the examples are run with `--release`. No number here is an R1 measurement —
 §3's hot-path bans do not apply to a tool, but nothing it prints is evidence about a game frame.
+
+The same instrument on the re-authored pig measures **2.2–2.6 s** per 480×360 frame (2026-10-22, this
+machine, 36 nodes, every join a smooth union). That is roughly the doubling one would expect from four
+more parts and a leg column that went from two blended spheres to three, but it is not a measurement of
+the `k` cost the comment in `pig.ron` hypothesises: nothing here holds the node count fixed while it
+varies the blend, so the same machine's load confounds it exactly as it confounded the numbers above.
+It is a reason to build that control pair before anyone prices an authored creature into a frame budget.
 
 ## Runtime lifecycle
 

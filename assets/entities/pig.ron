@@ -3,8 +3,8 @@
 //
 // Proportions are driven by what the viewport shows, not by the numbers: see
 // `cargo run -p editor --example render_png`, which dumps the marched silhouette from six angles.
-// The grammar has no translate node (OQ-55), so every placed part is a sphere and the only primitive
-// that may sit at the origin is `RoundedBox`.
+// The grammar has no translate node (OQ-55) and no cylinder, so every placed part is a sphere and a
+// leg is a column of them; the only primitive that may sit at the origin is `RoundedBox`.
 //
 // What the renders rejected, in order:
 // - `RoundedBox(half: (0.22, 0.18, 0.34), r: 0.15)` — a rounded box spans `2 * (half + r)`, so this was
@@ -21,18 +21,23 @@
 //   that were two wide balls each sitting directly under a belly that nearly touched the floor, and a
 //   head the size of the torso merged into the chest. The `low` view made it unmistakable — four teats
 //   under a ball, not four legs under an animal.
+// - The corrective pass fixed the detachment but not the stance. Two spheres per leg reach only as far
+//   below the belly as their own diameter, so the column was 0.36 long against a 0.61 animal: a stump.
+//   `low` still read as teats, and `three_quarter` showed a head whose crown came nearly level with the
+//   back, which is the one silhouette a pig never has.
 //
-// So the corrective pass is proportion, not new parts: the body is spread along Z so it is longer than
-// tall and lifted so its belly clears the ground; each leg is a thin thigh and a thinner hoof reaching
-// well below the belly; the head is smaller than the torso and raised onto a neck thinner than both;
-// and every join is still a smooth union with `k` well under the overlap so it reads as flesh, not a
-// cluster.
+// So the second pass is stance and neck, not new parts: each leg is a three-sphere column that reaches
+// well below a belly lifted to y ~0.10, the legs sit outside the body's own width so they read in front
+// view, and the head is smaller than the torso and carried *below* the topline on a neck thinner than
+// both. The snout is low on the face, and the ears are small enough to read as ears rather than a
+// bear's. Every join is still a smooth union with `k` well under the overlap so it reads as flesh.
 //
 // Hypothesis for docs/04, not a measurement: every blended join is a place the marcher cannot skip,
 // since ADR-024's k-aware skip refuses exactly the large-`k` case, so an authored creature is an R1
 // expense per part. Nothing here controls for that yet — the debug CPU raster's timings swing by more
 // than the effect under machine load, so the claim stays a hypothesis until someone times a hard-union
-// twin of this tree.
+// twin of this tree. docs/16 § Visual authoring records what the instrument did print for this tree
+// (36 nodes, ~2.2-2.6 s per 480x360 preview frame), and why it is not the price of a blend.
 
 EntityDef(
     shape: SmoothUnion(
@@ -46,61 +51,67 @@ EntityDef(
                 a: SmoothUnion(
                     // Body: rump and chest either side of a mid sphere lifted to arch the back. Spread
                     // along Z so the torso is longer than it is tall, and raised so the belly clears
-                    // the floor the legs stand on.
-                    k: 0.12,
+                    // the floor the legs stand on by more than a leg's own width.
+                    k: 0.11,
                     a: Sphere(
-                        r: 0.24,
-                        centre: (0.0, 0.15, 0.28),
+                        r: 0.22,
+                        centre: (0.0, 0.30, 0.26),
                     ),
                     b: SmoothUnion(
-                        k: 0.12,
+                        k: 0.11,
                         a: Sphere(
-                            r: 0.23,
-                            centre: (0.0, 0.17, 0.04),
+                            r: 0.215,
+                            centre: (0.0, 0.33, 0.03),
                         ),
                         b: Sphere(
-                            r: 0.20,
-                            centre: (0.0, 0.14, -0.20),
+                            r: 0.19,
+                            centre: (0.0, 0.29, -0.19),
                         ),
                     ),
                 ),
                 b: SmoothUnion(
-                    // Neck into head into snout: the neck is thinner and lower than the head, which is
-                    // what makes the head read as a head and not a hump on the back.
+                    // Neck into head into snout: the neck is thinner than both, and the head's crown
+                    // stays well under the topline. That drop is what makes it a head and not a hump.
+                    // The head is smaller than it looks in the `front` view, because in that view the
+                    // torso is directly behind it; the snout has to win the silhouette on its own.
                     k: 0.05,
                     a: Sphere(
-                        r: 0.13,
-                        centre: (0.0, 0.17, -0.36),
+                        r: 0.11,
+                        centre: (0.0, 0.27, -0.33),
                     ),
                     b: SmoothUnion(
                         k: 0.05,
                         a: Sphere(
-                            r: 0.18,
-                            centre: (0.0, 0.19, -0.54),
+                            r: 0.14,
+                            centre: (0.0, 0.225, -0.49),
                         ),
                         b: Subtract(
                             // Snout: two spheres smoothed sideways, because a single sphere reads as a
-                            // muzzle and a pig's is a disc wider than it is tall. Nostrils cut into its
-                            // front face.
+                            // muzzle and a pig's is a disc wider than it is tall. Set low on the face,
+                            // under the head's own centre, which is where a pig carries it.
+                            // The nostrils are shallow dimples in the snout's front face, not holes
+                            // through it: a cutter whose centre sits just inside the snout sphere, with
+                            // a radius under a fifth of the snout's own. Wider than that and the pair
+                            // reads, in `front`, as eye sockets on a bear rather than a pig's nose.
                             kept: SmoothUnion(
-                                k: 0.04,
+                                k: 0.035,
                                 a: Sphere(
-                                    r: 0.075,
-                                    centre: (0.06, 0.12, -0.70),
+                                    r: 0.072,
+                                    centre: (0.048, 0.15, -0.655),
                                 ),
                                 b: Sphere(
-                                    r: 0.075,
-                                    centre: (-0.06, 0.12, -0.70),
+                                    r: 0.072,
+                                    centre: (-0.048, 0.15, -0.655),
                                 ),
                             ),
                             cutter: Union(
                                 a: Sphere(
-                                    r: 0.018,
-                                    centre: (0.045, 0.12, -0.765),
+                                    r: 0.012,
+                                    centre: (0.032, 0.155, -0.717),
                                 ),
                                 b: Sphere(
-                                    r: 0.018,
-                                    centre: (-0.045, 0.12, -0.765),
+                                    r: 0.012,
+                                    centre: (-0.032, 0.155, -0.717),
                                 ),
                             ),
                         ),
@@ -108,35 +119,53 @@ EntityDef(
                 ),
             ),
             b: Mirror(
-                // Two authored legs — each a thin thigh and a thinner hoof smoothed into a column —
-                // mirrored about X into four. They reach well below the belly, which is what makes the
-                // animal stand instead of rest on the ground.
+                // Two authored legs — each a thigh, shin and hoof sphere, tapering downward and smoothed
+                // into one continuous column — mirrored about X into four. The authored pair sits at
+                // x = 0.14, outside the body's own half-width, so the front view shows legs at the sides
+                // of the animal rather than four bumps under one belly.
                 axis: 0,
                 child: Union(
                     a: SmoothUnion(
-                        // Front leg: the thigh sits inside the chest and the hoof overlaps it, so the
-                        // column is continuous from belly to floor. A hoof that only touches the thigh
-                        // reads as a detached ball once `k` is smaller than the gap between them.
-                        k: 0.06,
-                        a: Sphere(
-                            r: 0.095,
-                            centre: (0.13, 0.02, -0.18),
+                        // Front leg: the thigh starts inside the chest, and each joint overlaps by more
+                        // than its `k`, so the column is continuous from belly to floor. A hoof that
+                        // only touches the shin reads as a detached ball once `k` is under the gap.
+                        // All three spheres share one radius: a taper shows as a ring at every joint,
+                        // because a blend can hide a change of position but not a change of width. The
+                        // earlier tapered column read as a string of three balls, not as a leg.
+                        k: 0.07,
+                        a: SmoothUnion(
+                            k: 0.07,
+                            a: Sphere(
+                                r: 0.082,
+                                centre: (0.14, 0.135, -0.16),
+                            ),
+                            b: Sphere(
+                                r: 0.082,
+                                centre: (0.14, 0.0, -0.16),
+                            ),
                         ),
                         b: Sphere(
-                            r: 0.08,
-                            centre: (0.13, -0.14, -0.18),
+                            r: 0.082,
+                            centre: (0.14, -0.145, -0.16),
                         ),
                     ),
                     b: SmoothUnion(
-                        // Back leg: same, under the rump, a touch thicker to carry the haunch.
-                        k: 0.06,
-                        a: Sphere(
-                            r: 0.10,
-                            centre: (0.13, 0.02, 0.30),
+                        // Back leg: same column, under the rump, a touch wider to carry the haunch.
+                        k: 0.07,
+                        a: SmoothUnion(
+                            k: 0.07,
+                            a: Sphere(
+                                r: 0.09,
+                                centre: (0.14, 0.125, 0.28),
+                            ),
+                            b: Sphere(
+                                r: 0.09,
+                                centre: (0.14, -0.01, 0.28),
+                            ),
                         ),
                         b: Sphere(
-                            r: 0.085,
-                            centre: (0.13, -0.15, 0.30),
+                            r: 0.09,
+                            centre: (0.14, -0.145, 0.28),
                         ),
                     ),
                 ),
@@ -144,19 +173,20 @@ EntityDef(
         ),
         b: Union(
             // Tail and ears: neither pair touches, so a hard union between them costs nothing, and the
-            // root's `k` is what blends each of them into the body and head.
+            // root's `k` is what blends each of them into the body and head. The ears are barely
+            // larger than the head's own surface so they read as tips, not as a second pair of ears.
             a: Sphere(
                 r: 0.04,
-                centre: (0.0, 0.26, 0.50),
+                centre: (0.0, 0.34, 0.47),
             ),
             b: Union(
                 a: Sphere(
-                    r: 0.06,
-                    centre: (0.10, 0.34, -0.48),
+                    r: 0.055,
+                    centre: (0.105, 0.345, -0.44),
                 ),
                 b: Sphere(
-                    r: 0.06,
-                    centre: (-0.10, 0.34, -0.48),
+                    r: 0.055,
+                    centre: (-0.105, 0.345, -0.44),
                 ),
             ),
         ),
