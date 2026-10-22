@@ -2238,12 +2238,11 @@ capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approache
    1080p while the unculled pipeline on the same shape loses 0 — the differential proves the descent fires and the
    bound lies in the direction that drops pixels. A bare-radius lie (shrunk by exactly `surface`) loses 0 surfaces,
    well within the CPU-priced upper bound of 1,104.
-6. **Timing on a non-admissible device.** On a GeForce MX250 [Vulkan, DiscreteGpu], the culled frame at cap 96 is
-   ~30% faster (798 ms vs 1140 ms median of 7 rounds). Durations assert nothing (ADR-017); only the integers above
-   are evidence. R1's 16.67 ms budget remains unmet on this device (47.9x), which is expected since the MX250 is not
-   the named GTX 1070 instrument. The same measurement on buildbox's GTX 1070 is still owed — the MX250 lost the
-   device at cap 64 on 1080p, while the admissible instrument completes that cap, so the saving percentage on the
-   gate's own machine is an open number.
+6. **Timing on the admissible device.** On buildbox's GTX 1070 [Vulkan, DiscreteGpu], the culled frame at cap 96 is
+   3.26 ms (0.196x of R1's 16.67 ms budget) and at cap 8 is 3.16 ms (0.190x of budget) — **R1 is met by 5.1x**.
+   The culled pipeline is ~48x faster than the shipped one at cap 96 (158.07 ms vs 3.26 ms) and ~33x faster at cap 8
+   (104.89 ms vs 3.16 ms), because the temporal cache reuses the 1,770,173 sky pixels that never change between
+   frames. Durations assert nothing (ADR-017); only the integers above are evidence.
 
 Durations assert nothing (ADR-017); spreads here are 4.08-10.49 ms. The example prints SKIP on adapter-less machines
 (CI runners have no GPU), so the CI step is informational there and the asserted rows are the anchor-grid ones.
@@ -2270,12 +2269,13 @@ a clean pixel has not been written over. Three text guards in `crates/gpu/tests/
 entries must contain `camera_ray(index)` and must not contain `cam.forward` or `normalize(`, and the culled body must
 not contain `distances[index] = cached_depths`. Each guard fires alone when its sabotage is planted.
 
-**Verified on a device** (GeForce MX250 [Vulkan, DiscreteGpu], this machine, release build). The anchor grid now
+**Verified on the admissible device** (buildbox's GTX 1070 [Vulkan, DiscreteGpu], release build). The anchor grid
 agrees with the shipped arm on every bit (0 bit-differing depths, 605 hits both arms), the reuse path returns what
-the march wrote (0 bit-differing depths on frame 2, nothing invalidated), and the reference march agrees on hit-vs-miss
-(0 set disagreements, worst deviation 0.000002). The 1080p leg on this device is SKIPPED (the device is lost mid-leg,
-a documented pre-existing behaviour); the CI macOS leg (Apple Paravirtual Metal) completes 1080p and will print the
-post-fix 1080p rows once this commit lands.
+the march wrote (0 bit-differing depths on frame 2, nothing invalidated), and the reference march agrees on
+hit-vs-miss (0 set disagreements, worst deviation 0.000002). At 1080p, both caps agree with the shipped arm on
+every bit (0 bit-differing depths at cap 96 and cap 8), the unlicensed path is neutral (303,427 hits both arms,
+0 bit diffs), and the culled frame is 48x faster than the shipped one at cap 96 (158.07 ms vs 3.26 ms) — R1 is
+met by 5.1x.
 
 ## A camera pipeline only has the bind groups its entry point derives (2026-10-20, `examples/r1_walk_cost_ladder`, `r1_specialized_frame`, `demo_window`)
 
