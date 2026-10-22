@@ -299,6 +299,77 @@ fn the_culled_camera_entry_point_checks_cache_before_marching() {
 }
 
 #[test]
+fn both_camera_entries_ask_one_shared_ray() {
+    // `r1_descent_arm` compares two pipelines over one grid and asserts their depths agree bit for bit, so
+    // anything but the bound may differ between them - and the cache port (a19c81c) gave the culled entry its
+    // own ray derivation: `normalize()` instead of the explicit length, and the frustum terms associated the
+    // other way. On a GeForce MX250 that put 46 of the anchor grid's 3,072 depths out of agreement, and on
+    // Apple's paravirtual adapter 0, which is the worst shape for a bug: a rounding difference that only some
+    // machines can see. One helper, called twice, removes the question rather than tracking its symptoms.
+    let shipped = body_of("march_rays_from_camera");
+    let culled = body_of("march_rays_from_camera_culled");
+    let helper = body_of("camera_ray");
+    for (name, body) in [("shipped", &shipped), ("culled", &culled)] {
+        assert!(
+            body.contains("camera_ray(index)"),
+            "the {name} camera entry no longer asks the shared ray helper, so it has its own spelling of the \
+             frustum again: {body}"
+        );
+        assert!(
+            !body.contains("cam.forward") && !body.contains("normalize("),
+            "the {name} camera entry re-spells the ray basis instead of calling camera_ray: {body}"
+        );
+    }
+    assert!(
+        helper.contains("cam.forward") && helper.contains("cam.right") && helper.contains("cam.up"),
+        "camera_ray lost the basis it exists to spell once"
+    );
+}
+
+#[test]
+fn a_clean_pixel_keeps_what_the_march_wrote_not_the_hit_only_cache() {
+    // The reuse branch runs for every pixel the dirty mask leaves clean, which after one frame is all of
+    // them. It used to copy `cached_depths`, and that array only ever receives a write when the march *hit*
+    // - a sky pixel's entry is still the 0.0 the buffer was created with, and 0.0 is a surface at the
+    // camera. At 1080p that made 1,770,173 of 2,073,600 pixels geometry on the second frame; the anchor grid
+    // reproduces it at 2,467 of 3,072, which is why the example now asserts it there where every device can
+    // reach it. The correct spelling writes nothing at all: `distances` is the buffer the previous frame
+    // already answered into.
+    let culled = body_of("march_rays_from_camera_culled");
+    assert!(
+        !culled.contains("distances[index] = cached_depths"),
+        "the culled entry copies the hit-only depth cache into a clean pixel's output again, which turns \
+         every sky pixel into a surface at the camera: {culled}"
+    );
+}
+
+/// One function's body, braces counted - the camera entries nest their `if`s, so stopping at the first `}`
+/// returns a fragment of the function instead of it.
+fn body_of(name: &str) -> String {
+    let at = INTERP
+        .find(&format!("fn {name}("))
+        .unwrap_or_else(|| panic!("interp.wgsl has no `{name}`"));
+    let open = INTERP[at..]
+        .find('{')
+        .unwrap_or_else(|| panic!("`{name}` has no body"));
+    let body = &INTERP[at + open..];
+    let mut depth = 0usize;
+    for (offset, ch) in body.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return body[..=offset].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("`{name}` is unterminated");
+}
+
+#[test]
 fn the_cache_group_belongs_to_the_culled_camera_march_and_to_no_other() {
     // `layout: None` means wgpu derives a pipeline's bind group layouts from the resources the entry point it
     // was compiled *for* references, so a march that never names the cache has one group - and binding a second

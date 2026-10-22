@@ -547,12 +547,14 @@ struct CameraUniform {
 
 @group(0) @binding(5) var<uniform> cam: CameraUniform;
 
-@compute @workgroup_size(64)
-fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
-    let index = id.x;
-    if index >= header.point_count {
-        return;
-    }
+/// The ray for one pixel of the camera grid, spelled once so no two camera entries can disagree about it.
+///
+/// `march_rays_from_camera_culled` used to derive its own — `normalize()` instead of the explicit length,
+/// and the frustum terms associated the other way — and on a GeForce MX250 that put 46 of the anchor grid's
+/// 3,072 depths out of agreement with the shipped arm at the same step cap. The descent instrument exists
+/// to catch the arm changing the picture, and this made it unable to tell a lying bound from a differently
+/// rounded ray. One spelling removes the question.
+fn camera_ray(index: u32) -> vec3<f32> {
     let width = u32(cam.grid.x);
     let height = u32(cam.grid.y);
     let px = index % width;
@@ -566,8 +568,16 @@ fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
     // `select(fallback, chosen, condition)` reads as "use `chosen` when the condition holds", so the
     // zero-length ray collapses to the same zero vector `render`'s `unit` returns. The division is
     // computed either way; it is simply not used when length is zero.
-    let direction = select(span / vec3(length), vec3(0.0, 0.0, 0.0), length == 0.0);
-    march_one(index, cam.root, cam.origin, direction, cam.geom.z);
+    return select(span / vec3(length), vec3(0.0, 0.0, 0.0), length == 0.0);
+}
+
+@compute @workgroup_size(64)
+fn march_rays_from_camera(@builtin(global_invocation_id) id: vec3<u32>) {
+    let index = id.x;
+    if index >= header.point_count {
+        return;
+    }
+    march_one(index, cam.root, cam.origin, camera_ray(index), cam.geom.z);
 }
 
 // Task #69's ray-level cull: the device's own copy of `render::cull::SceneBounds::may_reach_subtree`, asked
@@ -684,32 +694,23 @@ fn march_rays_from_camera_culled(@builtin(global_invocation_id) id: vec3<u32>) {
     let is_dirty = (atomicLoad(&dirty_mask[dirty_word_idx]) & dirty_bit) != 0u;
     
     if !is_dirty {
-        // Pixel unchanged - reuse cached depth directly, no marching needed
-        if index < arrayLength(&cached_depths) {
-            distances[index] = cached_depths[index];
-        }
+        // The pixel is unchanged, so the frame it was last marched into still carries its answer:
+        // `distances` is the same buffer every frame writes, and a clean pixel has not been written over.
+        // This used to copy `cached_depths`, which only ever holds *hits* — a sky pixel's entry stays at
+        // the zero the buffer was created with, and 0.0 is a surface at the camera's own position. On
+        // 1080p's second frame that turned 1,770,173 of 2,073,600 pixels (every one the scene does not
+        // cover) from absence into geometry.
         return;
     }
     
     // Track total dirty pixels checked for cache hit rate calculation
     atomicAdd(&cache_stats[1], 1u);
     
-    // Extract camera parameters (optimized: use precomputed values from cam uniform)
-    let width = u32(cam.grid.x);
-    let height = u32(cam.grid.y);
-    let px = f32(index % width);
-    let py = f32(index / width);
-    
-    // Ray direction from precomputed camera basis (avoid redundant normalization)
-    // cam.geom.x = half_height, cam.geom.y = aspect ratio
-    let ndc_x = (2.0 * (px + 0.5) / f32(width) - 1.0) * cam.geom.y;
-    let ndc_y = 1.0 - 2.0 * (py + 0.5) / f32(height);
-    let direction = normalize(cam.forward + cam.right * (ndc_x * cam.geom.x) + cam.up * (ndc_y * cam.geom.x));
-    
     // Temporal cache check: validate cached surface before marching (optimized v2)
     let surface_tolerance = bitcast<f32>(header.march_surface_bits);
     let max_t = cam.geom.z;
     let origin = cam.origin;
+    let direction = camera_ray(index);
     
     // Ultra-fast cache path: skip validation for same-frame caches
     var use_cache = false;

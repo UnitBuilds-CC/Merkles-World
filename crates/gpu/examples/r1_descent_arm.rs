@@ -181,6 +181,34 @@ fn main() {
         "the anchor grid finds no surfaces, so there is nothing to compare"
     );
 
+    // A second culled frame with nothing invalidated must reproduce the first, bit for bit.
+    //
+    // This is the cheap version of the row that only failed at 1080p. The culled entry clears each pixel's
+    // own dirty bit after marching it, so every pixel is clean on the next dispatch and takes the reuse
+    // branch - and that branch used to copy `cached_depths`, which stores *hits only*. Every pixel the scene
+    // does not cover therefore came back as 0.0, which is a surface at the camera's own position: at R1's
+    // resolution, 1,770,173 of 2,073,600 depths changed by the arm between two identical frames. Nothing
+    // above this line ever marched the culled arm twice, so the anchor grid could not see it and the MX250
+    // cannot reach the 1080p leg at all (it loses the device there).
+    let again = interpreter
+        .march_camera_variant(&variant, &culled_bind, &frame)
+        .expect("culled anchor must march a second time");
+    let reuse_diffs = bit_differences(&culled.depths, &again.depths);
+    println!(
+        "// reuse        : frame 2, nothing invalidated - {reuse_diffs} bit-differing depths, {} hits (frame 1 had {})",
+        again.hits, culled.hits
+    );
+    assert_eq!(
+        reuse_diffs, 0,
+        "{reuse_diffs} depths differ between two identical culled frames - the reuse branch returns something \
+         other than what the march wrote"
+    );
+    assert_eq!(
+        again.hits, culled.hits,
+        "the second culled frame found {} surfaces where the first found {}",
+        again.hits, culled.hits
+    );
+
     // Reference agreement: culled vs render::march
     let mut set_diffs = 0usize;
     let mut worst = 0.0f32;

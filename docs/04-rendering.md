@@ -636,7 +636,7 @@ now bounds an out-of-range child as unbounded-and-unlicenced, and
 pins it on all three CI architectures (the example only reproduces it on a device runner, which is why the test
 exists). The test found its own boundary: walking that fixture with `sdf_eval_bnb` still panics, in
 `lower_bound`, and that is left as the correct behaviour — the contract that refuses malformed assets is
-`validate`, not the hot branch of a walk that is already invalid. Suite size is **237 tests in 33 suites**.
+`validate`, not the hot branch of a walk that is already invalid. Suite size is **239 tests in 33 suites**.
 
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
@@ -2215,6 +2215,7 @@ capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approache
 | shipped hits | 605 | 303,427 | 207,743 |
 | culled hits | 605 | 303,427 | 207,743 |
 | bit-differing depths | **0** | **0** | **0** |
+| reuse (frame 2, nothing invalidated) | **0** | — | — |
 | reference set disagreements | **0** | — | — |
 | unlicensed (+inf bounds) diffs | **0** | **0** | — |
 | shrunk by 1.0: culled loss | — | 97,709 | — |
@@ -2224,17 +2225,20 @@ capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approache
 1. **Soundness at two resolutions.** On both the anchor grid and at 1080p, the culled pipeline reproduces the shipped
    depths with 0 bit-differing depths and equal surface counts. At the anchor grid, the culled frame also agrees with
    `render::march` on hit-vs-miss (0 set disagreements, worst deviation 0.000002).
-2. **Licensing neutrality.** With `upload_bounds_refused` (all radii `+inf`), both arms produce identical pictures at
+2. **The reuse branch returns what the march wrote.** Marching the same culled frame twice without invalidating any
+   region produces 0 bit-differing depths and the same hit count both times — the clean-pixel path returns the answer
+   the first march wrote, not a copy of the hit-only cache.
+3. **Licensing neutrality.** With `upload_bounds_refused` (all radii `+inf`), both arms produce identical pictures at
    both resolutions — the licensing spelling is neutral, and a shape without a bound table degrades to the honest
    frame rather than an empty one.
-3. **The arm fires and is in control.** Shrinking every bound by 100 units makes all radii negative; the descent then
+4. **The arm fires and is in control.** Shrinking every bound by 100 units makes all radii negative; the descent then
    refuses every ray and the culled pipeline finds exactly 0 surfaces at both resolutions. This is a hard proof that
    the arm reads the tail and affects the output, not a no-op.
-4. **A lying bound eats geometry, measured.** Shrinking by 1.0 causes the culled pipeline to lose 97,709 surfaces at
+5. **A lying bound eats geometry, measured.** Shrinking by 1.0 causes the culled pipeline to lose 97,709 surfaces at
    1080p while the unculled pipeline on the same shape loses 0 — the differential proves the descent fires and the
    bound lies in the direction that drops pixels. A bare-radius lie (shrunk by exactly `surface`) loses 0 surfaces,
    well within the CPU-priced upper bound of 1,104.
-5. **Timing on a non-admissible device.** On a GeForce MX250 [Vulkan, DiscreteGpu], the culled frame at cap 96 is
+6. **Timing on a non-admissible device.** On a GeForce MX250 [Vulkan, DiscreteGpu], the culled frame at cap 96 is
    ~30% faster (798 ms vs 1140 ms median of 7 rounds). Durations assert nothing (ADR-017); only the integers above
    are evidence. R1's 16.67 ms budget remains unmet on this device (47.9x), which is expected since the MX250 is not
    the named GTX 1070 instrument. The same measurement on buildbox's GTX 1070 is still owed — the MX250 lost the
@@ -2243,6 +2247,35 @@ capacity 8, and writes `UNSUPPORTED` for every ray whose segment never approache
 
 Durations assert nothing (ADR-017); spreads here are 4.08-10.49 ms. The example prints SKIP on adapter-less machines
 (CI runners have no GPU), so the CI step is informational there and the asserted rows are the anchor-grid ones.
+
+**Two defects the temporal-cache port introduced and the fix removed.** The cache port (2026-10-18, `a19c81c`) added
+the clean-pixel reuse path and the temporal cache check to `march_rays_from_camera_culled`, and left two soundness
+defects in it:
+
+1. **The ray was spelled twice.** The culled entry derived its own direction — `normalize()` instead of the explicit
+   length the shipped entry used, and the frustum terms associated the other way — and on a GeForce MX250 that put 46
+   of the anchor grid's 3,072 depths out of agreement with the shipped arm at the same step cap. The anchor grid is
+   small enough to run on any device, so the divergence was reproducible here; on the CI macOS leg (Apple Paravirtual
+   Metal) the anchor agreed but the 1080p cap-96 leg diverged by 1,770,173 bit-differing depths (every device-miss
+   pixel, exactly the number the second defect below explains).
+2. **The clean-pixel branch copied the hit-only cache.** `cached_depths` stores only hits; a sky pixel's entry stays
+   at the zero the buffer was created with, and 0.0 is a surface at the camera's own position. On 1080p's second
+   frame that turned 1,770,173 of 2,073,600 pixels (every one the scene does not cover) from absence into geometry —
+   the exact number the macOS leg printed.
+
+The fix asks the shader instead of assuming it. Both camera entries now call a shared `camera_ray(index)` helper
+(lines 557-572 of `interp.wgsl`), so a ray spelling can diverge in one place and both entries see it; and the
+clean-pixel branch now returns without writing, trusting that `distances` is the same buffer every frame writes and
+a clean pixel has not been written over. Three text guards in `crates/gpu/tests/wgsl_validates.rs` hold it: both
+entries must contain `camera_ray(index)` and must not contain `cam.forward` or `normalize(`, and the culled body must
+not contain `distances[index] = cached_depths`. Each guard fires alone when its sabotage is planted.
+
+**Verified on a device** (GeForce MX250 [Vulkan, DiscreteGpu], this machine, release build). The anchor grid now
+agrees with the shipped arm on every bit (0 bit-differing depths, 605 hits both arms), the reuse path returns what
+the march wrote (0 bit-differing depths on frame 2, nothing invalidated), and the reference march agrees on hit-vs-miss
+(0 set disagreements, worst deviation 0.000002). The 1080p leg on this device is SKIPPED (the device is lost mid-leg,
+a documented pre-existing behaviour); the CI macOS leg (Apple Paravirtual Metal) completes 1080p and will print the
+post-fix 1080p rows once this commit lands.
 
 ## A camera pipeline only has the bind groups its entry point derives (2026-10-20, `examples/r1_walk_cost_ladder`, `r1_specialized_frame`, `demo_window`)
 
