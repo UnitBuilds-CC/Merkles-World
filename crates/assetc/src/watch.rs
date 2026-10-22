@@ -119,14 +119,23 @@ pub fn fingerprint(text: &str) -> u64 {
 }
 
 /// Compile already-read authoring text into asset bytes.
+///
+/// The two formats are tried in order, and a file that fails both reports **both** errors. Reporting only
+/// the `Shape` failure sent an `EntityDef` closed by a stray `}` off with "Unexpected variant named
+/// `EntityDef` in enum `Shape`" - a message about the format the file is not, which reads as a bad
+/// primitive and points the author at the wrong half of the tree.
 fn compile_bytes(input: &str, text: &str) -> Result<(Vec<u8>, crate::budget::Cost), String> {
-    // Try parsing as EntityDef first (Phase 2 format), then fall back to raw Shape (Phase 1)
-    let is_entity = ron::from_str::<EntityDef>(text).is_ok();
-
-    if is_entity {
-        compile_entity_file(text)
-    } else {
-        compile_shape_file(input, text)
+    let entity = ron::from_str::<EntityDef>(text);
+    if entity.is_ok() {
+        return compile_entity_file(text);
+    }
+    match ron::from_str::<Shape>(text) {
+        Ok(_) => compile_shape_file(input, text),
+        Err(shape_error) => Err(format!(
+            "not a valid authoring file: as an entity it failed with {}, and as a bare shape with {}",
+            entity.unwrap_err(),
+            shape_error
+        )),
     }
 }
 
@@ -207,4 +216,51 @@ pub fn temp_for(path: &str) -> std::path::PathBuf {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "asset.bin".to_string());
     target.with_file_name(format!("{file_name}.tmp"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile_bytes;
+
+    /// The exact mistake this reports on: an `EntityDef` whose root node is closed by `}` instead of `)`.
+    /// Both formats fail on it, and the author needs the entity half of that.
+    const BROKEN_ENTITY: &str = r#"
+EntityDef(
+    shape: Sphere(r: 1.0, centre: (0.0, 0.0, 0.0)),
+    position: (0.0, 0.0, 0.0),
+}
+"#;
+
+    #[test]
+    fn a_broken_entity_reports_the_entity_error_too() {
+        let reason = compile_bytes("in.ron", BROKEN_ENTITY)
+            .expect_err("an EntityDef closed by `}` must not compile");
+        assert!(
+            reason.contains("as an entity") && reason.contains("as a bare shape"),
+            "the author is told only about the format the file is not: {reason}"
+        );
+    }
+
+    #[test]
+    fn both_formats_still_compile_when_they_are_valid() {
+        let authored = include_str!("../../../assets/entities/pig.ron");
+        compile_bytes("pig.ron", authored).expect("the shipped pig must compile as an entity file");
+        compile_bytes("sphere.ron", "Sphere(r: 0.5, centre: (0.0, 0.0, 0.0))")
+            .expect("a bare Phase 1 shape must still compile");
+    }
+
+    #[test]
+    fn the_shape_half_of_the_message_is_the_real_one() {
+        // Guards the report against a fixed string: a file that is a broken *shape* must show the shape
+        // parser's complaint, and it is a different sentence from the entity parser's.
+        let reason = compile_bytes(
+            "in.ron",
+            "Union(a: Sphere(r: 1.0, centre: (0.0, 0.0, 0.0)))",
+        )
+        .expect_err("a Union missing its second child must not compile");
+        assert!(
+            reason.contains("as a bare shape"),
+            "a broken shape must name the shape half: {reason}"
+        );
+    }
 }
