@@ -426,10 +426,10 @@ would leave the wrapper holding nothing, which is the grammar's refusal rather t
 increment 7 the answer to that is one call, not a subtree: the wrapper over it unwraps wherever it sits, so a
 `Repeat` inside a `Mirror` comes out and leaves the `Mirror` standing.
 Material fields other than `base_color` are read by no shader
-(see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
-setting them changes no pixel.
+(see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them,
+`set_material` writes them, and writing them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 49 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 55 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -842,7 +842,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 49 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 55 tests |
 
 ## Migration from current code
 
