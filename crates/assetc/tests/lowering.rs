@@ -6,7 +6,7 @@
 //! answers distance questions identically, its spans are pre-order-consistent (`render::validate`
 //! recomputes them independently), the root is flagged once, and the refusals refuse.
 
-use assetc::{lower, LowerError, Shape};
+use assetc::{compile_entity, lower, EntityDef, LowerError, Shape};
 
 use contracts::sdf::{
     pack_first_and_flags, pack_kind_and_arity, pack_params_len, NodeRecord, FLAG_IS_ROOT,
@@ -222,4 +222,49 @@ fn a_refusal_names_the_authored_route_not_the_record_index() {
         other => panic!("expected a refusal, got {other:?}"),
     }
     assert!(!output.exists(), "a refused shape writes nothing");
+}
+
+#[test]
+fn a_placement_refusal_names_the_clause_that_moved() {
+    // The editor's preview and its MCP pipe both quote these sentences back to an author. Calling a
+    // finite, merely-unnormalised quaternion "non-finite" sends them hunting for a NaN that is not in
+    // the file, and the two mistakes have opposite fixes: one is deleted, the other normalised.
+    let sphere = || EntityDef {
+        shape: Shape::Sphere {
+            r: 1.0,
+            centre: [0.0, 0.0, 0.0],
+        },
+        position: [0.0, 0.0, 0.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: 1.0,
+        material_id: 0,
+        flags: 0x03,
+        quantity: 0,
+    };
+
+    let mut wild = sphere();
+    wild.rotation = [0.0, 2.0, 0.0, 1.0];
+    let refusal =
+        compile_entity(&wild).expect_err("a quaternion of squared length 5 is not a rotation");
+    assert_eq!(refusal.error, LowerError::NonUnitQuaternion);
+    let words = refusal.to_string();
+    assert!(
+        words.contains("unit quaternion") && !words.contains("non-finite"),
+        "the sentence has to name the clause that moved: {words}"
+    );
+
+    let mut flat = sphere();
+    flat.scale = 0.0;
+    let refusal = compile_entity(&flat).expect_err("nothing has an inside at scale zero");
+    assert_eq!(refusal.error, LowerError::NonPositiveScale);
+    assert!(
+        !refusal.to_string().contains("non-finite"),
+        "a zero scale is a finite number: {refusal}"
+    );
+
+    // The case the shared name was right for still says what it means.
+    let mut nan = sphere();
+    nan.rotation = [0.0, f32::NAN, 0.0, 1.0];
+    let refusal = compile_entity(&nan).expect_err("NaN in a lane is refused");
+    assert_eq!(refusal.error, LowerError::NonFiniteParameter);
 }

@@ -69,10 +69,9 @@ impl CpuRenderer {
         let compiled = match assetc::compile_entity(entity_def) {
             Ok(compiled) => compiled,
             Err(refusal) => {
-                eprintln!(
-                    "✗ preview refused by assetc: {refusal} at {}",
-                    refusal.location()
-                );
+                // `Refusal`'s own Display already opens with the place ("rotation is not a unit
+                // quaternion…"), so appending `at {location}` printed the same word twice.
+                eprintln!("✗ preview refused by assetc: {refusal}");
                 return refused_frame(self.width, self.height);
             }
         };

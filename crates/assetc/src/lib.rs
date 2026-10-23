@@ -158,6 +158,14 @@ pub enum LowerError {
     /// A non-finite parameter. NaN travels through a distance field into every pixel and raises nothing,
     /// so this is where it dies.
     NonFiniteParameter,
+    /// A placement quaternion whose four components do not satisfy `x² + y² + z² + w² = 1`. Distinct from
+    /// [`Self::NonFiniteParameter`] on purpose: the finite-but-unnormalised case is the one an author
+    /// actually types, and telling them their numbers are NaN is a message that sends them looking for
+    /// the wrong mistake.
+    NonUnitQuaternion,
+    /// A scale of zero or below. The compiler's refusal, not a clamp — a creature flattened to nothing
+    /// still has to be *said* to have no inside.
+    NonPositiveScale,
     /// A kind the grammar defines but the evaluator refuses, so lowering it would produce an asset
     /// that `render::validate` rejects at load.
     Unlowerable,
@@ -209,6 +217,18 @@ impl core::fmt::Display for Refusal {
             LowerError::BadAxis => write!(f, "{here} has an axis outside 0..=2"),
             LowerError::NonFiniteParameter => {
                 write!(f, "{here} carries a non-finite parameter (NaN or infinite)")
+            }
+            LowerError::NonUnitQuaternion => {
+                write!(
+                    f,
+                    "{here} is not a unit quaternion: x² + y² + z² + w² must equal 1"
+                )
+            }
+            LowerError::NonPositiveScale => {
+                write!(
+                    f,
+                    "{here} must be greater than zero; nothing has an inside at that scale"
+                )
             }
             LowerError::Unlowerable => {
                 write!(
@@ -420,16 +440,23 @@ pub struct CompiledEntity {
 pub fn compile_entity(def: &EntityDef) -> Result<CompiledEntity, Refusal> {
     let asset = lower(&def.shape)?;
 
-    // Validate quaternion is normalized
+    // A non-finite number is refused before any clause-specific check, because `(NaN - 1.0).abs() > 1e-4`
+    // is true and would otherwise report a NaN as "not a unit quaternion" - the wrong mistake, in the
+    // wrong words, for the one value an author cannot fix by normalising.
     let rot = def.rotation;
-    let len_sq = rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3];
-    if (len_sq - 1.0).abs() > 1e-4 {
+    if !rot.iter().all(|lane| lane.is_finite()) {
         return Err(Refusal::at(&["rotation"], LowerError::NonFiniteParameter));
     }
+    let len_sq = rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3];
+    if (len_sq - 1.0).abs() > 1e-4 {
+        return Err(Refusal::at(&["rotation"], LowerError::NonUnitQuaternion));
+    }
 
-    // Validate scale is positive and finite
-    if !def.scale.is_finite() || def.scale <= 0.0 {
+    if !def.scale.is_finite() {
         return Err(Refusal::at(&["scale"], LowerError::NonFiniteParameter));
+    }
+    if def.scale <= 0.0 {
+        return Err(Refusal::at(&["scale"], LowerError::NonPositiveScale));
     }
 
     Ok(CompiledEntity {

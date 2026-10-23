@@ -213,17 +213,25 @@ fn set_transform(state: &mut EditorState, arguments: &Value) -> Result<Value, St
         None => None,
     };
 
+    // Checked in `compile_entity`'s order: a non-finite lane satisfies `(len_sq - 1.0).abs() > 1e-4` too,
+    // and reporting that as a normalisation mistake would send the caller off to fix the wrong thing.
     if let Some(rotation) = rotation {
+        if !rotation.iter().all(|lane| lane.is_finite()) {
+            return Err(format!("rotation lanes must be finite, got {rotation:?}"));
+        }
         let len_sq = rotation.iter().map(|x| x * x).sum::<f32>();
         if (len_sq - 1.0).abs() > 1e-4 {
             return Err(format!(
-                "rotation must be a unit quaternion, this one has |q| = {len_sq:.6}"
+                "rotation must be a unit quaternion, this one has |q|² = {len_sq:.6}"
             ));
         }
     }
     if let Some(scale) = scale {
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(format!("scale must be finite and positive, got {scale}"));
+        if !scale.is_finite() {
+            return Err(format!("scale must be finite, got {scale}"));
+        }
+        if scale <= 0.0 {
+            return Err(format!("scale must be positive, got {scale}"));
         }
     }
     if let Some([x, y, z]) = position {
