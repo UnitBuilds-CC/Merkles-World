@@ -253,12 +253,13 @@ anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handl
 it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
 same module rather than a mock of it.
 
-Eleven tools:
+Twelve tools:
 
 | Tool | Answers |
 |------|---------|
 | `editor_state` | file, dirty flag, `preview_signature`, the selected route, the transform block, the material block, `node_count`, and every node's route, kind, current summary and the parameters `set_part` takes for it |
 | `list_materials` | every occupied slot, with all six authored fields |
+| `set_material` | one slot and at least one of the six fields a material carries — `base_color` (three lanes, `0..=1`), `roughness` (`0..=1`), `emissive` (`>= 0`), `index_ior` (`>= 1`), `noise` (one of `Voronoi`, `Value`, `Perlin`, `None`) or `noise_frequency` (`> 0`) — written only after every field on the call validates. The reply separates `changed_a_pixel` from `changed_no_pixel`, because only `base_color` has a reader yet (OQ-10), and says that the registry is not in the entity file: the slot the entity points at persists, the values in it do not |
 | `load_entity` | a `.ron` path in, the state out; a file that will not parse answers with `ron`'s own error and leaves the held state untouched |
 | `set_transform` | `position`, `rotation`, `scale`, `material_id` — every field validated before any field is applied |
 | `select_part` | a route as `editor_state` prints it (`root`, `root.b`, `root.b.kept`) in, the node's kind, summary and parameter list out. Selecting is not editing: it marks nothing dirty and leaves `preview_signature` alone |
@@ -269,7 +270,7 @@ Eleven tools:
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts. `view` names one of the six angles; only leaving it off steers by `yaw`, `pitch` and `distance`, and the file is then named `custom`. A `view` of any other type — a number, a boolean, an array, an object, `null` — is refused rather than read as "no view" |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
-Ten of those decisions are about honesty rather than features:
+Eleven of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
   1e-4 of 1; scale finite and positive; every `position` lane finite), and validates the whole call before
@@ -353,15 +354,34 @@ Ten of those decisions are about honesty rather than features:
   box — a `Plane`, or a tiling nested inside it — gets the honesty that fits: the notice says the pipe cannot
   tell, and to look at the frame. `order::extent`'s `Mirror` arm was the understating kind of wrong before
   this call existed (doc 09), which is the one place an increment in the editor's pipe repaired the compiler.
-- **`render_view` names the state in the filename** (`{view}-{preview_signature:016x}.png`), so two
-  renders of two states cannot collide into one path and a reader told "this is the pig after the scale
-  edit" can check that against the signature the same call returns.
+- **`render_view` names the frame in the filename** (`{view}-{width}x{height}-{stage|bare}-{preview_signature:016x}.png`),
+  so two renders that differ in state *or* in camera, size or stage cannot collide into one path, and a reader
+  told "this is the pig after the scale edit" can check that against the signature the same call returns. The
+  name keyed on the state alone until increment 10's pixel test rendered the same front view at 64x48 to a file
+  another concurrent render had already claimed with the stage on: the two pictures overwrote one path, and a
+  reader got a half-written PNG. Two calls with every field equal still name one file, which is intended — the
+  bytes are the same picture.
 - **The frame reports what it did not draw.** `surface_pixels` counts rays that hit the entity or the
   stage; `undrawn_pixels` counts the `Frame::NOT_DRAWN_DEPTH` sentinel a refused placement leaves behind.
   Counting only the first — which is what the first draft did — reports a frame the march refused to draw
   as one covered entirely by pig. The test for it loads a finite-but-non-unit quaternion from a file, the
   one such state `set_transform` cannot author and `load_entity` can, and requires 0 surface against 768
   undrawn of 768.
+- **A material edit says which half of it you can see, because the other half has no reader yet.**
+  `set_material` writes one registry slot from the same table `params.rs` hands the inspector, so the
+  refusal, the published `inputSchema` and the panel's sliders are one statement: a field the panel cannot
+  offer is one the pipe refuses, and a limit quoted in an error is the limit the schema publishes. Only
+  `base_color` reaches a pixel — `tint_of` reads it and multiplies the lambert shade — so the reply splits
+  what moved into `changed_a_pixel` and `changed_no_pixel` rather than reporting a flat `changed` and
+  letting a caller believe a roughness edit drew something. The five that do not are named in the notice
+  with OQ-10's reason: inventing their response is the shading model's decision, not the pipe's. The edit
+  is also session-only, and says so: `save_entity` writes the `material_id` the entity carries, and there
+  is no materials file, so a recolour cannot be something a save carries and does not mark the entity
+  `dirty`. And the assigned slot's `base_color` is now part of `preview_signature`, because it is part of
+  the picture: before this call existed nothing could recolour a slot, so the key could omit the one
+  registry field a shader reads with nothing noticing. The moment a pipe can write it, a key that omits it
+  means an author edits a colour and the viewport keeps showing the old animal while every other field of
+  the reply agrees the edit landed.
 
 A refusal says what was available. `select_part` with a name the node does not carry is refused with the
 children it does carry (`root.b has no child "kept"; it names "a", "b"`), and a route into a leaf is refused
@@ -622,6 +642,55 @@ box this increment found and fixed — named the assetc row and nothing else, at
 notice that is built from it: the warning still fires, still quotes a box, and is simply wrong about the geometry,
 which is why the containment invariant had to be stated where the box is. All three reverted, files compared
 byte-for-byte against the pre-plant copies, and both suites re-run green afterwards.
+Increment 10 adds six, and the first of them exists because a material write exposed a defect in
+`render_view` rather than in a material. The pixel row renders the front view with the stage off — the stage
+floor is not tinted, so with a black `base_color` every pixel is either black or the sky — recolours slot 0
+black through `set_material`, and requires the black count of the decoded PNG to equal `surface_pixels` and
+the sky literal's count to equal the remainder: the two counts partition the file, so the tint is shown to
+reach exactly the pixels the depth buffer calls surface, not merely that the bytes differ. The same row
+asserts that `preview_signature` moved, because without that the viewport would keep the old frame. That
+assertion was not true of the key as it stood: `preview_signature` hashed `material_id` and not the slot's
+colour, and nothing could recolour a slot until this call existed, so the blind spot was unreachable rather
+than harmless. While the row was being written, two tests in the file rendered one state at once — both at
+64×48, one with the stage and one without — and one of them decoded a half-written PNG: `render_view` named
+its file from `{view}-{signature}` alone, so the same state at 32×24 bare, 32×24 staged and 48×36 bare was
+three pictures under one path. The name now carries
+width, height and stage, and the sixth row pins it: three calls of one state agree on the key, write three
+distinct files, and each file is the size its own call asked for.
+
+The five fields no shader reads get their own row, and each is written with a value read out of the slot
+first, so the row cannot pass by writing what was already there. Every write is observed three ways — the
+reply's `changed` names exactly that field, the registry read-back holds the value, and `preview_signature`
+stays where it was with `changed_a_pixel` empty — and after all five the dumped PNG is byte-identical to
+the baseline frame, with a blue `base_color` control at the end so that "identical" is a fact about the
+five fields rather than about an instrument that never moves. The refusal row walks fifteen calls — an
+empty slot, an unknown field, a missing, string, fractional or out-of-range slot, a two-lane or non-numeric
+colour, a roughness past its contract, a negative lane, a zero frequency, an ior below air, a noise kind
+given as a number and one given as a misspelled string, and a call with a slot and nothing to write — and
+after each it reads the whole registry and the state back, requiring that neither moved; the sixteenth call
+writes a value the slot already carried and answers with the no-op sentence. The session row saves and
+reloads: the entity's slot assignment comes back, and the slot's colour is the preset again, which is the
+honest statement of what a save can carry. The schema row reads `tools/list` and compares the published
+`inputSchema` to literals — the six fields, their limits and the noise kinds in `NoiseKind`'s declaration
+order — rather than to the table, so a limit that moves has to be written down in the test as well as
+published.
+
+Ten plants ran. Ignoring the tint in the renderer, and dropping the slot's `base_color` from
+`preview_signature`, each named `set_material_paints_base_color_into_exactly_the_pixels_the_march_reports`;
+moving the sky literal named the same row's second count. Marking `roughness` as shaded and skipping the
+`noise` write each named the five-fields row, by its `changed_a_pixel` and by its registry read-back
+respectively. Skipping the `roughness` ceiling check and disabling the no-field refusal each named the
+refusal row; the call the second plant let through answered "Every value you wrote is the one the slot
+already carried" to a call that wrote no values, which is the sentence that made the refusal worth adding
+rather than a nicety. Marking the entity dirty on a write named the two rows that assert `dirty` is false.
+Reordering the schema's noise enum named the schema row. Restoring the old filename named the filename row.
+All ten were reverted and the suite re-run green at 309.
+
+The increment names two limits instead of working around them. The five unread fields are writable because
+the registry is the contract's object, but OQ-10 owns whether they shade anything, so the pipe reports them
+as no-pixel changes and does not invent a response. And the registry has no file: the entity's `material_id`
+persists, the slot's contents do not, so a material edit is session-scoped until someone decides what a
+materials asset is — a contract change, not a tool.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in

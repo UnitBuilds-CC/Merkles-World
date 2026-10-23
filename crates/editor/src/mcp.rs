@@ -55,6 +55,7 @@ pub fn dump_dir() -> PathBuf {
 pub const TOOL_NAMES: &[&str] = &[
     "editor_state",
     "list_materials",
+    "set_material",
     "load_entity",
     "set_transform",
     "select_part",
@@ -150,6 +151,7 @@ fn dispatch(
     match name {
         "editor_state" => Some(Ok(state_json(state))),
         "list_materials" => Some(Ok(materials_json(state))),
+        "set_material" => Some(set_material(state, arguments)),
         "load_entity" => Some(load(state, arguments)),
         "set_transform" => Some(set_transform(state, arguments)),
         "select_part" => Some(select_part(state, arguments)),
@@ -286,6 +288,256 @@ fn set_transform(state: &mut EditorState, arguments: &Value) -> Result<Value, St
         "preview_signature": state.preview_signature(),
         "state": state_json(state),
     }))
+}
+
+/// Write fields of an occupied material slot, and say which of them the renderer can see.
+///
+/// Two facts about this state are invisible to the caller, so both go into the reply rather than into a
+/// description it may not have read. First, of the six authored fields only `base_color` reaches a pixel:
+/// doc 04 § Materials, lighting, sky leaves the shading model to OQ-10, and the other five have no reader
+/// to disagree with. Second, the registry is not part of the entity file — `save_entity` carries the
+/// entity's `material_id`, not the fields of the slot it points at — so nothing written here survives a
+/// reload. Both are measured by tests, one per fact, because a notice that only *describes* a claim is
+/// worth as much as the claim.
+///
+/// The limits come from `params::MATERIAL_FIELDS`, which is the same table `editor_state`'s two lists are
+/// derived from, so a refusal and a published list cannot describe different fields.
+fn set_material(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let raw = number(arguments, "slot")?;
+    if !raw.is_finite() || raw != raw.trunc() || !(0.0..=255.0).contains(&raw) {
+        return Err(format!("\"slot\" must be a whole slot 0-255, got {raw}"));
+    }
+    let slot = raw as u8;
+    let Some(current) = state.materials.get(slot).copied() else {
+        let occupied: Vec<String> = (0..=255u8)
+            .filter(|other| state.materials.is_occupied(*other))
+            .map(|other| other.to_string())
+            .collect();
+        return Err(format!(
+            "material slot {slot} is empty. `set_material` writes a slot that exists — filling an empty \
+             one needs every field at once, which is what `register` does in code and not what a patch \
+             means. Registered slots: {}",
+            if occupied.is_empty() {
+                "none".to_string()
+            } else {
+                occupied.join(", ")
+            }
+        ));
+    };
+
+    // A key that is neither `slot` nor a field of the table is a caller that believes it is writing
+    // something. Silently dropping it is the exact drift the `params` table exists to prevent.
+    let known: Vec<&str> = params::MATERIAL_FIELDS
+        .iter()
+        .map(|field| field.name)
+        .collect();
+    if let Some(map) = arguments.as_object() {
+        for key in map.keys() {
+            if key != "slot" && !known.contains(&key.as_str()) {
+                return Err(format!(
+                    "a material has no field {key:?}; it has {}",
+                    known
+                        .iter()
+                        .map(|name| format!("{name:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
+
+    // A call with `slot` and no field is not a patch, and answering it as one would print the no-op
+    // sentence about values that were never handed over. The list it refuses with is the list the call
+    // needed.
+    if !params::MATERIAL_FIELDS
+        .iter()
+        .any(|field| arguments.get(field.name).is_some())
+    {
+        return Err(format!(
+            "no field to write: `set_material` takes `slot` plus at least one of {}",
+            known
+                .iter()
+                .map(|name| format!("{name:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    let mut next = current;
+    let mut changed: Vec<&'static str> = Vec::new();
+    for field in &params::MATERIAL_FIELDS {
+        let Some(value) = arguments.get(field.name) else {
+            continue;
+        };
+        let lanes = match field.choices {
+            // A choice is spelled, not numbered: `noise: 2` would be a call that works today and silently
+            // means something else the next time the list is reordered.
+            Some(choices) => {
+                let name = value.as_str().ok_or_else(|| {
+                    format!(
+                        "\"{}\" must be {}, got {value}",
+                        field.name,
+                        field.limit_text()
+                    )
+                })?;
+                let index = choices
+                    .iter()
+                    .position(|kind| *kind == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "no noise kind {name:?}; {}",
+                            choices
+                                .iter()
+                                .map(|kind| format!("{kind:?}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?;
+                vec![index as f32]
+            }
+            None => material_lanes(value, field)?,
+        };
+        check_material_lanes(field, &lanes)?;
+        if params::read_material_field(&next, field.name).as_deref() != Some(lanes.as_slice()) {
+            changed.push(field.name);
+        }
+        params::write_material_field(&mut next, field.name, &lanes)
+            .expect("a field the table lists is a field the writer knows");
+    }
+
+    let before = if changed.is_empty() {
+        current
+    } else {
+        // `current` was read out of this slot above and nothing between the two can empty a registry, so
+        // the write lands: a `None` here would be a bug in `set`, not a caller's mistake.
+        state
+            .materials
+            .set(slot, next)
+            .expect("an occupied slot stays occupied")
+    };
+
+    let (read, _) = params::material_names_by_shading();
+    let pixels: Vec<&str> = changed
+        .iter()
+        .copied()
+        .filter(|name| read.contains(name))
+        .collect();
+    let no_pixels: Vec<&str> = changed
+        .iter()
+        .copied()
+        .filter(|name| !read.contains(name))
+        .collect();
+    let quoted = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut notice = String::from(
+        "the registry is not part of the entity file: save_entity writes the entity's `material_id`, not \
+         these fields, so loading the file again restores the material this slot was registered with. \
+         Assign the slot with `set_transform` if the choice is what you meant to keep.",
+    );
+    if changed.is_empty() {
+        notice.push_str(
+            " Every value you wrote is the one the slot already carried, so nothing moved.",
+        );
+    }
+    if !no_pixels.is_empty() {
+        notice.push_str(&format!(
+            " Of what this call wrote, these have no reader: {}.{} Doc 04 § Materials, lighting, sky \
+             leaves the shading model to OQ-10, so `base_color` is the only field a shader reads: the \
+             names above change no pixel and no preview key while the registry holds them anyway.",
+            quoted(&no_pixels),
+            if pixels.is_empty() {
+                String::new()
+            } else {
+                format!(" These do reach a pixel: {}.", quoted(&pixels))
+            }
+        ));
+    }
+
+    Ok(json!({
+        "slot": slot,
+        "before": material_json(&before),
+        "material": material_json(&next),
+        "changed": changed,
+        "changed_a_pixel": pixels,
+        "changed_no_pixel": no_pixels,
+        "renderer_reads": read,
+        "dirty": state.dirty,
+        "preview_signature": state.preview_signature(),
+        "notice": notice,
+    }))
+}
+
+/// The numbers a caller handed over for one numeric material field, as exactly the lanes the table says
+/// it has. A bare number is one lane; an array is read for its length rather than truncated, so a
+/// two-lane colour is refused instead of becoming a colour with a zero nobody authored.
+fn material_lanes(value: &Value, field: &params::MaterialField) -> Result<Vec<f32>, String> {
+    let lanes: Vec<f32> = match value {
+        Value::Number(one) => {
+            let lane = one
+                .as_f64()
+                .ok_or_else(|| format!("\"{}\" must be a number", field.name))?;
+            vec![lane as f32]
+        }
+        Value::Array(items) => items
+            .iter()
+            .map(|item| {
+                item.as_f64().map(|lane| lane as f32).ok_or_else(|| {
+                    format!("\"{}\" must be numbers only, and {item} is not", field.name)
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+        other => {
+            return Err(format!(
+                "\"{}\" must be {} — it is {other}",
+                field.name,
+                field.limit_text()
+            ))
+        }
+    };
+    if lanes.len() != field.lanes as usize {
+        return Err(format!(
+            "\"{}\" takes {} lane{}; this call hands {}",
+            field.name,
+            field.lanes,
+            if field.lanes == 1 { "" } else { "s" },
+            lanes.len()
+        ));
+    }
+    Ok(lanes)
+}
+
+/// Refuse a lane the field's own contract does not admit, quoting the limit as the table states it.
+fn check_material_lanes(field: &params::MaterialField, lanes: &[f32]) -> Result<(), String> {
+    for (index, lane) in lanes.iter().enumerate() {
+        if !lane.is_finite() {
+            return Err(format!(
+                "\"{}\" lanes must be finite; lane {index} is {lane}",
+                field.name
+            ));
+        }
+        if field.whole && *lane != lane.trunc() {
+            return Err(format!("\"{}\" is a whole choice, got {lane}", field.name));
+        }
+        let below = if field.lo_open {
+            *lane <= field.lo
+        } else {
+            *lane < field.lo
+        };
+        let above = field.hi.is_some_and(|hi| *lane > hi);
+        if below || above {
+            return Err(format!(
+                "\"{}\" must be {}; lane {index} is {lane}",
+                field.name,
+                field.limit_text()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The route the panel prints for a node (`root.b.kept`) turned into the `Step` path it edits.
@@ -1246,7 +1498,14 @@ fn render_view(state: &EditorState, arguments: &Value) -> Result<Value, String> 
     let signature = state.preview_signature();
     let dir = dump_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let path = dir.join(format!("{name}-{signature:016x}.png"));
+    // The name carries the frame, not just the state: two renders of one state at two sizes, or with the
+    // stage on and off, are two different pictures, and a reader handed one path for both cannot tell which
+    // frame it is holding. `preview_signature` alone also let two callers writing concurrently truncate each
+    // other's file, which is how the collision was found.
+    let path = dir.join(format!(
+        "{name}-{width}x{height}-{}-{signature:016x}.png",
+        if use_stage { "stage" } else { "bare" }
+    ));
     image::save_buffer_with_format(
         &path,
         &frame.pixels,
@@ -1292,6 +1551,9 @@ fn render_view(state: &EditorState, arguments: &Value) -> Result<Value, String> 
 /// authored material fields, only `base_color` reaches a pixel.
 fn state_json(state: &EditorState) -> Value {
     let def = &state.entity_def;
+    // The two lists are the table's `shaded` column, not a second sentence about it: `set_material`
+    // refuses with the same table, so a published claim and a refusal cannot name different fields.
+    let (state_json_read, state_json_unread) = params::material_names_by_shading();
     let outline = shape_path::outline(&def.shape);
     let parts: Vec<Value> = outline
         .iter()
@@ -1333,8 +1595,8 @@ fn state_json(state: &EditorState) -> Value {
         "material_slot_occupied": state.materials.is_occupied(def.material_id),
         "node_count": outline.len(),
         "parts": parts,
-        "renderer_reads": ["base_color"],
-        "authored_but_not_shaded": ["roughness", "emissive", "index_ior", "noise", "noise_frequency"],
+        "renderer_reads": state_json_read,
+        "authored_but_not_shaded": state_json_unread,
     })
 }
 
@@ -1365,6 +1627,39 @@ fn material_json(material: &Material) -> Value {
         },
         "noise_frequency": material.noise_frequency,
     })
+}
+
+/// `set_material`'s published schema for one field, read off the table it also refuses with.
+///
+/// A schema written by hand beside a table written by hand is two statements of the same limit, and the
+/// one that is wrong is the one the caller read first.
+fn material_field_schema(field: &params::MaterialField) -> Value {
+    if let Some(choices) = field.choices {
+        return json!({
+            "type": "string",
+            "enum": choices.to_vec(),
+        });
+    }
+    if field.lanes == 3 {
+        return json!({
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": field.lanes,
+            "maxItems": field.lanes,
+        });
+    }
+    let mut schema = serde_json::Map::new();
+    schema.insert("type".to_string(), json!("number"));
+    // `exclusiveMinimum` rather than a nudged `minimum`, so the schema says what the check does.
+    if field.lo_open {
+        schema.insert("exclusiveMinimum".to_string(), json!(field.lo));
+    } else {
+        schema.insert("minimum".to_string(), json!(field.lo));
+    }
+    if let Some(hi) = field.hi {
+        schema.insert("maximum".to_string(), json!(hi));
+    }
+    Value::Object(schema)
 }
 
 fn string_arg(arguments: &Value, key: &str) -> Result<String, String> {
@@ -1435,6 +1730,14 @@ fn error(id: Value, code: i64, message: &str) -> String {
 
 /// `tools/list`'s payload, written out beside the names so a new tool without a schema is caught.
 pub fn tool_specs() -> Value {
+    let mut material_properties = serde_json::Map::new();
+    material_properties.insert(
+        "slot".to_string(),
+        json!({ "type": "integer", "minimum": 0, "maximum": 255 }),
+    );
+    for field in params::MATERIAL_FIELDS {
+        material_properties.insert(field.name.to_string(), material_field_schema(&field));
+    }
     json!([
         {
             "name": "editor_state",
@@ -1445,6 +1748,16 @@ pub fn tool_specs() -> Value {
             "name": "list_materials",
             "description": "Every occupied material slot with all six authored fields, including the five the renderer does not yet read.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "set_material",
+            "description": "Patch one occupied material slot. `slot` is required and must be a slot `list_materials` reports as occupied — filling an empty one needs every field at once, which is `register` in code and not what a patch means. Each field is limited by the range `entity::Material` states for it, and a value outside it is refused quoting that range. Only `base_color` reaches a pixel: the reply's `changed_a_pixel` and `changed_no_pixel` say which of what you wrote the renderer can see, and the other five wait on OQ-10, the shading model doc 04 § Materials, lighting, sky leaves open. The registry is not part of the entity file, so `save_entity` carries none of what you write here and a reload restores the preset this slot was registered with; `before` is what you overwrote.",
+            "inputSchema": {
+                "type": "object",
+                "properties": material_properties,
+                "required": ["slot"],
+                "additionalProperties": false
+            }
         },
         {
             "name": "load_entity",

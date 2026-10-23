@@ -3706,3 +3706,607 @@ fn unwrapping_a_repeat_out_of_a_mirror_loses_the_tiles_it_drew() {
         alone_surface,
     );
 }
+
+/// A dumped frame decoded back to pixels. The alternative is a test that trusts the counter printed by
+/// the same call that wrote the file, which is a number agreeing with itself.
+fn decoded_rgb(reply: &Value) -> image::RgbImage {
+    let path = PathBuf::from(
+        reply["path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no path in {reply}")),
+    );
+    image::open(&path)
+        .unwrap_or_else(|e| panic!("{} is not a readable PNG: {e}", path.display()))
+        .to_rgb8()
+}
+
+/// The bytes of a dumped frame, for a row that has to say two pictures are the one picture.
+fn read_png(reply: &Value) -> Vec<u8> {
+    let path = PathBuf::from(
+        reply["path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no path in {reply}")),
+    );
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{} was not written: {e}", path.display()))
+}
+
+/// How many pixels of a decoded frame are exactly one colour.
+fn count_colour(frame: &image::RgbImage, colour: [u8; 3]) -> usize {
+    frame
+        .as_raw()
+        .chunks_exact(3)
+        .filter(|pixel| *pixel == colour)
+        .count()
+}
+
+/// A number out of a reply.
+fn number_at(value: &Value, label: &str) -> f64 {
+    value
+        .as_f64()
+        .unwrap_or_else(|| panic!("{label} is not a number: {value}"))
+}
+
+/// A material lane, checked against the `f32` the registry holds. An `f32` printed through `f64` spells
+/// `0.7` as `0.699999988079071`, so a `json!` equality on a colour would refuse a correct reply.
+fn near(got: f64, want: f32, label: &str) {
+    assert!(
+        (got - want as f64).abs() < 1e-5,
+        "{label} reads {got}, expected {want}"
+    );
+}
+
+/// The first candidate a slot does not already carry. The candidates are exactly representable `f32`s, so
+/// the reply's copy of the number compares to the one that was sent without a tolerance, and reading the
+/// current value is what stops a row passing on a write of the value that was already there.
+fn a_different_number(current: &Value, candidates: &[f32]) -> f64 {
+    let now = number_at(current, "a material field");
+    let chosen = *candidates
+        .iter()
+        .find(|want| (now - **want as f64).abs() > 1e-6)
+        .unwrap_or_else(|| panic!("the slot carries every candidate in {candidates:?}: {now}"));
+    chosen as f64
+}
+
+#[test]
+fn one_state_rendered_at_two_sizes_or_stages_writes_two_files() {
+    // The name used to carry the state alone, so these three calls — one state, three pictures — all wrote
+    // `front-<signature>.png`. The collision was found by two tests in this file rendering that path at
+    // once and one of them decoding a half-written file, which is the same thing a client would hit.
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let bare = call(
+        &mut state,
+        "render_view",
+        json!({ "view": "front", "width": 32, "height": 24, "stage": false }),
+    );
+    let staged = call(
+        &mut state,
+        "render_view",
+        json!({ "view": "front", "width": 32, "height": 24 }),
+    );
+    let larger = call(
+        &mut state,
+        "render_view",
+        json!({ "view": "front", "width": 48, "height": 36, "stage": false }),
+    );
+    assert_eq!(
+        bare["preview_signature"], staged["preview_signature"],
+        "three renders of one state must agree on the key, or the paths below differ for the wrong reason"
+    );
+    for other in [&staged, &larger] {
+        assert_ne!(
+            other["path"], bare["path"],
+            "two different pictures were written to one path, so a reader cannot tell which frame it holds"
+        );
+    }
+    // And each file holds the frame its own call asked for, which is what a reader opens it to see.
+    assert_eq!(decoded_rgb(&staged).as_raw().len() / 3, 32 * 24);
+    assert_eq!(decoded_rgb(&larger).as_raw().len() / 3, 48 * 36);
+}
+
+#[test]
+fn set_material_paints_base_color_into_exactly_the_pixels_the_march_reports() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    // No stage: the floor is drawn without the tint, so every pixel of the frame is surface or the literal
+    // sky, and the two counts have to add up to the whole image.
+    let view = json!({ "view": "front", "width": 64, "height": 48, "stage": false });
+    let pink = call(&mut state, "render_view", view.clone());
+    assert_eq!(
+        count_colour(&decoded_rgb(&pink), [0, 0, 0]),
+        0,
+        "the pig's registered skin already draws black somewhere, so a black count would not pick out the \
+         tinted pixels"
+    );
+
+    let written = call(
+        &mut state,
+        "set_material",
+        json!({ "slot": 0, "base_color": [0.0, 0.0, 0.0] }),
+    );
+    assert_eq!(written["slot"], json!(0));
+    assert_eq!(written["changed"], json!(["base_color"]));
+    assert_eq!(written["changed_a_pixel"], json!(["base_color"]));
+    assert_eq!(written["changed_no_pixel"], json!([]));
+    assert_eq!(
+        written["dirty"],
+        json!(false),
+        "the registry is not in the entity file, so a recolour cannot be something a save carries"
+    );
+    // What was overwritten comes back as the preset's own numbers, because `before` is only a way to undo
+    // a mistake if it is the value that was really there.
+    let before = written["before"]["base_color"]
+        .as_array()
+        .expect("the material the slot held");
+    for (lane, want) in before.iter().zip([1.0f32, 0.7, 0.75]) {
+        near(
+            number_at(lane, "the registered skin colour"),
+            want,
+            "the slot's red/green/blue before the write",
+        );
+    }
+    assert_eq!(
+        written["material"]["base_color"],
+        json!([0.0, 0.0, 0.0]),
+        "the reply shows what the slot holds, and it is not what was asked for"
+    );
+
+    let black = call(&mut state, "render_view", view);
+    assert_ne!(
+        black["preview_signature"], pink["preview_signature"],
+        "a recolour left the preview key alone, so the viewport would keep showing the pink pig"
+    );
+    assert_ne!(black["path"], pink["path"]);
+    assert_eq!(
+        black["surface_pixels"],
+        pink["surface_pixels"],
+        "a colour changed which pixels are surface: the two frames marched the same tree from the same \
+         camera, so only the tint may differ"
+    );
+
+    let surface = black["surface_pixels"].as_u64().expect("a count") as usize;
+    let total = black["total_pixels"].as_u64().expect("a count") as usize;
+    assert!(
+        surface > 0 && surface < total,
+        "the front view of a pig covers {} of {} pixels, so neither count proves anything",
+        surface,
+        total
+    );
+    let frame = decoded_rgb(&black);
+    assert_eq!(
+        frame.as_raw().len() / 3,
+        total,
+        "the file is not the size the reply said it marched"
+    );
+    // The invariant: a black tint reaches exactly the pixels the march reports as surface, and the rest of
+    // the frame is the sky this renderer writes for a miss. The two counts partition the file.
+    assert_eq!(
+        count_colour(&frame, [0, 0, 0]),
+        surface,
+        "the black pixels of the recoloured frame are not the surface the march reported"
+    );
+    assert_eq!(
+        count_colour(&frame, [30, 30, 35]),
+        total - surface,
+        "the untinted pixels are not the sky, which means the tint leaked past the entity or the entity \
+         does not cover what the depth says it does"
+    );
+}
+
+#[test]
+fn the_five_material_fields_no_shader_reads_move_the_registry_and_neither_pixel_nor_key() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let view = json!({ "view": "side", "width": 64, "height": 48, "stage": false });
+    let baseline = call(&mut state, "render_view", view.clone());
+    let key = baseline["preview_signature"].clone();
+    assert!(
+        baseline["surface_pixels"].as_u64().expect("a count") > 0,
+        "an empty frame would make the byte comparison below true for any edit at all"
+    );
+
+    let current = call(&mut state, "editor_state", json!({}))
+        .as_object()
+        .expect("a state")
+        .get("material")
+        .cloned()
+        .expect("the state carries the assigned material");
+    let roughness = a_different_number(&current["roughness"], &[0.25, 0.75]);
+    let emissive = a_different_number(&current["emissive"], &[0.25, 0.5]);
+    let index_ior = a_different_number(&current["index_ior"], &[2.0, 3.0]);
+    let frequency = a_different_number(&current["noise_frequency"], &[4.0, 8.0]);
+    let now_noise = current["noise"]
+        .as_str()
+        .expect("the registry spells its noise kind")
+        .to_string();
+    let noise = ["Voronoi", "Value", "Perlin", "None"]
+        .into_iter()
+        .find(|kind| *kind != now_noise)
+        .expect("four kinds, so one of them differs from the slot's own");
+
+    let cases: [(&str, Value); 5] = [
+        ("roughness", json!(roughness)),
+        ("emissive", json!(emissive)),
+        ("index_ior", json!(index_ior)),
+        ("noise", json!(noise)),
+        ("noise_frequency", json!(frequency)),
+    ];
+    for (name, value) in cases {
+        let mut arguments = json!({ "slot": 0 });
+        arguments
+            .as_object_mut()
+            .expect("a call is an object")
+            .insert(name.to_string(), value.clone());
+        let written = call(&mut state, "set_material", arguments);
+        assert_eq!(
+            written["changed"],
+            json!([name]),
+            "the write of {name} as {value} reported no change, so this row measured nothing"
+        );
+        assert_eq!(
+            written["changed_a_pixel"],
+            json!([]),
+            "{name} claimed a reader it does not have"
+        );
+        assert_eq!(written["changed_no_pixel"], json!([name]));
+        assert_eq!(
+            written["material"][name], value,
+            "the registry does not hold the {name} this call wrote"
+        );
+        assert_eq!(
+            written["preview_signature"],
+            key,
+            "the preview key moved for {name}, which no shader reads: an author would pay a march to \
+             redraw the same picture"
+        );
+        assert_eq!(written["dirty"], json!(false));
+        let notice = written["notice"].as_str().expect("a notice");
+        assert!(
+            notice.contains(name),
+            "the notice did not name {name} among the fields with no reader: {notice}"
+        );
+        assert!(
+            !notice.contains("Every value you wrote"),
+            "a real write answered with the no-op sentence: {notice}"
+        );
+    }
+
+    // Five writes, one picture: the frame is the bytes it was before any of them.
+    let after = call(&mut state, "render_view", view.clone());
+    assert_eq!(after["preview_signature"], key);
+    assert_eq!(after["surface_pixels"], baseline["surface_pixels"]);
+    assert_eq!(
+        read_png(&after),
+        read_png(&baseline),
+        "the five fields no shader reads changed the dumped picture"
+    );
+
+    // The control that makes the equality above mean something: the same instrument does move when the one
+    // tinted field is written, so identical bytes say the other fields reached nothing.
+    call(
+        &mut state,
+        "set_material",
+        json!({ "slot": 0, "base_color": [0.0, 0.0, 1.0] }),
+    );
+    let painted = call(&mut state, "render_view", view);
+    assert_ne!(
+        read_png(&painted),
+        read_png(&baseline),
+        "no write of any material field changes the picture, which means this row was never measuring \
+         pixels"
+    );
+}
+
+#[test]
+fn set_material_refuses_by_naming_what_it_will_take_and_writes_nothing() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let registry = call(&mut state, "list_materials", json!({}));
+    let key = call(&mut state, "editor_state", json!({}))["preview_signature"]
+        .as_u64()
+        .expect("a key");
+
+    let cases: Vec<(&str, Value, Vec<&str>)> = vec![
+        (
+            "a slot nobody registered",
+            json!({ "slot": 7, "roughness": 0.5 }),
+            vec!["slot 7 is empty", "0, 1, 2"],
+        ),
+        (
+            "a field a material does not have",
+            json!({ "slot": 0, "colour": [1.0, 0.0, 0.0] }),
+            vec![
+                "no field \"colour\"",
+                "\"base_color\"",
+                "\"roughness\"",
+                "\"emissive\"",
+                "\"index_ior\"",
+                "\"noise\"",
+                "\"noise_frequency\"",
+            ],
+        ),
+        (
+            "a slot never handed over",
+            json!({ "roughness": 0.5 }),
+            vec!["slot is required and must be a number"],
+        ),
+        (
+            "a slot that is not a number",
+            json!({ "slot": "0", "roughness": 0.5 }),
+            vec!["slot must be a number"],
+        ),
+        (
+            "a fractional slot",
+            json!({ "slot": 0.5, "roughness": 0.5 }),
+            vec!["whole slot 0-255"],
+        ),
+        (
+            "a slot past the registry",
+            json!({ "slot": 256, "roughness": 0.5 }),
+            vec!["whole slot 0-255"],
+        ),
+        (
+            "a colour with two lanes",
+            json!({ "slot": 0, "base_color": [1.0, 0.0] }),
+            vec!["takes 3 lanes", "hands 2"],
+        ),
+        (
+            "a colour that is not numbers",
+            json!({ "slot": 0, "base_color": [1.0, "pink", 0.0] }),
+            vec!["must be numbers only"],
+        ),
+        (
+            "a roughness past its contract",
+            json!({ "slot": 0, "roughness": 1.5 }),
+            vec!["\"roughness\" must be >= 0 and <= 1", "lane 0 is 1.5"],
+        ),
+        (
+            "a negative colour lane",
+            json!({ "slot": 0, "base_color": [-0.5, 0.0, 0.0] }),
+            vec!["\"base_color\" must be >= 0 and <= 1", "lane 0 is -0.5"],
+        ),
+        (
+            "a frequency of zero",
+            json!({ "slot": 0, "noise_frequency": 0.0 }),
+            vec!["\"noise_frequency\" must be > 0", "lane 0 is 0"],
+        ),
+        (
+            "an index of refraction below air",
+            json!({ "slot": 0, "index_ior": 0.5 }),
+            vec!["\"index_ior\" must be >= 1"],
+        ),
+        (
+            "a noise kind spelled as a number",
+            json!({ "slot": 0, "noise": 2 }),
+            vec![
+                "\"noise\" must be one of \"Voronoi\", \"Value\", \"Perlin\", \"None\"",
+                "got 2",
+            ],
+        ),
+        (
+            "a noise kind that is not one of them",
+            json!({ "slot": 0, "noise": "perlin" }),
+            vec!["no noise kind \"perlin\"", "\"Perlin\""],
+        ),
+        (
+            "a call with slot and nothing to write",
+            json!({ "slot": 0 }),
+            vec!["no field to write", "\"base_color\""],
+        ),
+    ];
+
+    for (label, arguments, needles) in cases {
+        let (message, refused) = try_call(&mut state, "set_material", arguments);
+        assert!(refused, "{label} was accepted: {message}");
+        for needle in needles {
+            assert!(
+                message.contains(needle),
+                "{label} refused without saying {needle:?}: {message}"
+            );
+        }
+        // A refusal that half-wrote a preset would leave an author with a material they never asked for,
+        // and the only way to see it is to read the registry back.
+        assert_eq!(
+            call(&mut state, "list_materials", json!({})),
+            registry,
+            "{label} changed a material it refused"
+        );
+        let state_block = call(&mut state, "editor_state", json!({}));
+        assert_eq!(
+            state_block["dirty"],
+            json!(false),
+            "{label} marked the entity dirty"
+        );
+        assert_eq!(
+            state_block["preview_signature"].as_u64().expect("a key"),
+            key,
+            "{label} moved the preview key while refusing"
+        );
+    }
+
+    // And the call that writes what is already there is a no-op that says so, rather than a change. The
+    // value is read out of the slot first, so the call cannot pass on writing a number that differs.
+    let already = number_at(
+        &call(&mut state, "editor_state", json!({}))["material"]["roughness"],
+        "the slot's own roughness",
+    );
+    let carried = call(
+        &mut state,
+        "set_material",
+        json!({ "slot": 0, "roughness": already }),
+    );
+    assert_eq!(carried["changed"], json!([]));
+    assert!(
+        carried["notice"]
+            .as_str()
+            .expect("a notice")
+            .contains("Every value you wrote"),
+        "a no-op answered without saying nothing moved: {}",
+        carried["notice"]
+    );
+    assert_eq!(
+        call(&mut state, "list_materials", json!({})),
+        registry,
+        "the no-op wrote anyway"
+    );
+}
+
+#[test]
+fn a_recolour_is_session_only_while_the_slot_choice_is_the_half_that_persists() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let assigned = call(&mut state, "editor_state", json!({}))["transform"]["material_id"]
+        .as_u64()
+        .expect("the pig's slot");
+
+    call(
+        &mut state,
+        "set_material",
+        json!({ "slot": 0, "base_color": [0.0, 0.0, 0.0] }),
+    );
+    assert_eq!(
+        call(&mut state, "editor_state", json!({}))["dirty"],
+        json!(false),
+        "a recolour marked the entity dirty, so a save would be offered for a change the file cannot hold"
+    );
+
+    let out = temp_path("recoloured_entity.ron");
+    let saved = call(
+        &mut state,
+        "save_entity",
+        json!({ "path": out.to_string_lossy() }),
+    );
+    assert!(saved["bytes"].as_u64().expect("a size") > 100);
+
+    let reloaded = call(
+        &mut fresh(),
+        "load_entity",
+        json!({ "path": out.to_string_lossy() }),
+    );
+    assert_eq!(
+        reloaded["state"]["transform"]["material_id"].as_u64(),
+        Some(assigned),
+        "the assignment is in the entity file, and this file lost it"
+    );
+    let skin = reloaded["state"]["material"]["base_color"]
+        .as_array()
+        .expect("a colour");
+    for (lane, want) in skin.iter().zip([1.0f32, 0.7, 0.75]) {
+        near(
+            number_at(lane, "the reloaded skin colour"),
+            want,
+            "loading the file must restore the preset this slot was registered with",
+        );
+    }
+    assert_eq!(
+        reloaded["state"]["material_slot_occupied"],
+        json!(true),
+        "the reloaded state has nothing in the slot the entity points at"
+    );
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn set_materials_published_schema_is_the_table_the_refusals_quote() {
+    let mut state = fresh();
+    let listing: Value = serde_json::from_str(&ask(
+        &mut state,
+        &json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}).to_string(),
+    ))
+    .expect("tools/list is JSON");
+    let spec = listing["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .find(|tool| tool["name"] == json!("set_material"))
+        .expect("set_material is listed")
+        .clone();
+
+    let schema = &spec["inputSchema"];
+    assert_eq!(schema["required"], json!(["slot"]));
+    assert_eq!(schema["additionalProperties"], json!(false));
+    let properties = schema["properties"].as_object().expect("properties");
+    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "base_color",
+            "emissive",
+            "index_ior",
+            "noise",
+            "noise_frequency",
+            "roughness",
+            "slot"
+        ],
+        "the published fields are not the six a material carries plus a slot"
+    );
+
+    // Written as literals rather than read back out of `params`, so a table that changes an limit has to be
+    // changed here too — which is the point: the schema and the refusal are one statement, and this row is
+    // the third.
+    assert_eq!(
+        properties["base_color"],
+        json!({"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3})
+    );
+    assert_eq!(
+        properties["roughness"],
+        json!({"type":"number","minimum":0.0,"maximum":1.0})
+    );
+    assert_eq!(
+        properties["emissive"],
+        json!({"type":"number","minimum":0.0}),
+        "the contract states no ceiling for emissive, so the schema may not invent one"
+    );
+    assert_eq!(
+        properties["index_ior"],
+        json!({"type":"number","minimum":1.0}),
+        "1.0 is air: an ior below it has no material to mean"
+    );
+    assert_eq!(
+        properties["noise"],
+        json!({"type":"string","enum":["Voronoi","Value","Perlin","None"]}),
+        "the choices are spelled in `entity::NoiseKind`'s declaration order, which is what makes them \
+         indices a caller never has to guess"
+    );
+    assert_eq!(
+        properties["noise_frequency"],
+        json!({"type":"number","exclusiveMinimum":0.0}),
+        "a frequency of zero is a pattern that never varies, so the schema must not admit it"
+    );
+
+    // The same column the refusals are built from: exactly one field reaches a pixel, and the list of the
+    // others is in declaration order.
+    let state_block = call(&mut state, "editor_state", json!({}));
+    assert_eq!(state_block["renderer_reads"], json!(["base_color"]));
+    assert_eq!(
+        state_block["authored_but_not_shaded"],
+        json!([
+            "roughness",
+            "emissive",
+            "index_ior",
+            "noise",
+            "noise_frequency"
+        ])
+    );
+}

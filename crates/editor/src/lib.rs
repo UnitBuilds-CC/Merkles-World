@@ -129,12 +129,14 @@ impl EditorState {
         self.dirty = true;
     }
 
-    /// What a preview of this entity would be made from: every authored value that reaches a pixel.
+    /// What a preview of this entity would be made from: every value that reaches a pixel.
     ///
     /// `flags` and `quantity` are absent on purpose — they travel into the file but not into the image,
     /// so ticking "Alive" must not cost a march. `position`, `rotation`, `scale` and `material_id` are
     /// present because the viewport now reads all four: a key that left them out would keep showing the
-    /// old frame while the inspector believed it had moved or recoloured the animal.
+    /// old frame while the inspector believed it had moved or recoloured the animal. So is the assigned
+    /// slot's `base_color`, which is the one material field a shader reads — it lives in the registry
+    /// rather than the entity, so it is the one part of the key that is not a field of `entity_def`.
     ///
     /// Floats go in as bits, so `-0.0` and `0.0` are not conflated and a NaN edit is seen as a change.
     /// Nothing hashed reads this: the editor is a tool, and the value only decides whether to re-march.
@@ -149,6 +151,15 @@ impl EditorState {
         }
         def.scale.to_bits().hash(&mut hasher);
         def.material_id.hash(&mut hasher);
+        // The viewport multiplies the entity's pixels by the assigned slot's `base_color`, so a slot that
+        // has been recoloured draws a different frame under the same `material_id`. Without these lanes
+        // the key could not see a recolour at all — and until the MCP pipe could write a registry slot,
+        // nothing could, so the gap was unreachable rather than harmless.
+        if let Some(material) = self.materials.get(def.material_id) {
+            for lane in material.base_color {
+                lane.to_bits().hash(&mut hasher);
+            }
+        }
         hasher.finish()
     }
 }
@@ -162,6 +173,7 @@ impl Default for EditorState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use entity::{Material, NoiseKind};
 
     #[test]
     fn the_preview_signature_reads_exactly_what_the_viewport_reads() {
@@ -204,6 +216,41 @@ mod tests {
         assert_eq!(state.preview_signature(), base, "flags are metadata");
         state.entity_def.quantity = 3;
         assert_eq!(state.preview_signature(), base, "quantity is metadata");
+
+        // The registry is read by the same frame, so the column that matters is `shaded`, not "is this
+        // field inside `entity_def`". A recoloured slot is a different picture under an unchanged
+        // `material_id`; the other five fields are authored and read by nothing.
+        let mut slot = state
+            .materials
+            .get(0)
+            .copied()
+            .expect("slot 0 is registered");
+        slot.base_color = [0.0, 0.0, 0.0];
+        state.materials.set(0, slot);
+        assert_ne!(
+            state.preview_signature(),
+            base,
+            "the viewport tints the entity with the assigned slot's base_color, so a recolour must \
+             cost a march"
+        );
+        state.materials.set(0, Material::pig_skin());
+
+        let mut slot = state
+            .materials
+            .get(0)
+            .copied()
+            .expect("slot 0 is registered");
+        slot.roughness = 0.0;
+        slot.emissive = 4.0;
+        slot.index_ior = 2.4;
+        slot.noise = NoiseKind::Perlin;
+        slot.noise_frequency = 40.0;
+        state.materials.set(0, slot);
+        assert_eq!(
+            state.preview_signature(),
+            base,
+            "five fields have no reader yet, so they must not each cost a march"
+        );
     }
 
     #[test]

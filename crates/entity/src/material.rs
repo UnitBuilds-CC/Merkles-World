@@ -121,6 +121,21 @@ impl MaterialRegistry {
         self.materials[slot as usize].is_some()
     }
 
+    /// Write a material into an **occupied** slot, answering the value it replaced.
+    ///
+    /// An empty slot stays empty and answers `None`: [`Self::register`] is the only way to occupy one, so
+    /// a caller holding the wrong index cannot grow the registry by omission. The replaced value comes
+    /// back because overwriting a preset is something an author may legitimately want to do, and it is
+    /// only legitimate while they can see and put back what they overwrote.
+    pub fn set(&mut self, slot: u8, material: Material) -> Option<Material> {
+        let existing = self.materials.get_mut(usize::from(slot))?;
+        // `Option::replace` would write into an empty slot, which is the one thing this must not do, so
+        // the slot is taken first and only put back once it is known something was there.
+        let previous = existing.take()?;
+        *existing = Some(material);
+        Some(previous)
+    }
+
     /// Count of registered materials
     pub fn len(&self) -> usize {
         self.materials.iter().filter(|m| m.is_some()).count()
@@ -211,5 +226,47 @@ mod tests {
         let stone = Material::stone();
         assert_eq!(stone.base_color, [0.5, 0.5, 0.55]);
         assert_eq!(stone.noise, NoiseKind::Perlin);
+    }
+
+    /// [`MaterialRegistry::set`] writes an occupied slot and hands back what it replaced, because a
+    /// recoloured preset is only an edit while the author can see and put back the value they overwrote.
+    #[test]
+    fn a_set_writes_an_occupied_slot_and_never_occupies_an_empty_one() {
+        let mut registry = MaterialRegistry::with_defaults();
+        let wood = Material {
+            base_color: [0.0, 0.0, 0.0],
+            ..Material::wood()
+        };
+
+        let replaced = registry
+            .set(1, wood)
+            .expect("slot 1 is occupied, so the write lands");
+        assert_eq!(
+            replaced,
+            Material::wood(),
+            "the overwritten value comes back"
+        );
+        assert_eq!(
+            registry.get(1).expect("still occupied").base_color,
+            [0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            registry.get(1).expect("still occupied").roughness,
+            Material::wood().roughness,
+            "the write replaced the whole material, not one field of it"
+        );
+
+        // An empty slot stays empty, and nothing about the registry moved.
+        assert_eq!(registry.set(7, Material::default()), None);
+        assert!(!registry.is_occupied(7));
+        assert_eq!(
+            registry.len(),
+            3,
+            "a refused write cannot grow the registry"
+        );
+
+        // The other two slots are untouched: `set` is per slot, not a rebuild.
+        assert_eq!(registry.get(0), Some(&Material::pig_skin()));
+        assert_eq!(registry.get(2), Some(&Material::stone()));
     }
 }
