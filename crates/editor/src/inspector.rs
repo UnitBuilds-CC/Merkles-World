@@ -203,17 +203,17 @@ fn parts_list(ui: &mut egui::Ui, state: &mut EditorState) {
     let entries = shape_path::outline(&state.entity_def.shape);
     let mut selected = state.selected.clone();
     ui.label(format!("{} nodes", entries.len()));
+    // Routes past ~40 characters no longer fit the panel's default width, and a label that is silently
+    // truncated is a part the author cannot find by reading. Wrapping turns a deep row into a tall one
+    // instead, which the scroll area can show all of.
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
     for entry in entries {
         ui.horizontal(|ui| {
-            // Indentation by a monospace spacer rather than `Ui::indent`, which lays out relative to
-            // the row's own height and drifts once the rows carry different text.
-            if entry.depth > 0 {
-                ui.label(
-                    egui::RichText::new("    ".repeat(entry.depth))
-                        .monospace()
-                        .weak(),
-                );
-            }
+            // Indentation in pixels, not a spacer of spaces: at the fourth pass's depth of 14 the old
+            // four-spaces-per-level label was 56 characters of blank text, which wrapped on its own and
+            // left under 20 px for the route. `Ui::indent` is still wrong here, because it lays out
+            // relative to the row's own height and drifts once the rows carry different text.
+            ui.add_space(entry.depth as f32 * 6.0);
             let mut label = format!("{} [{}]", entry.name, entry.kind);
             if !entry.summary.is_empty() {
                 label.push_str(&format!(" · {}", entry.summary));
@@ -369,15 +369,16 @@ mod tests {
     /// under test here.
     ///
     /// The rect is taller than any window this editor opens on, because egui culls the rows below the
-    /// fold of a scroll area — a test that asked for all 32 of the pig's nodes had to give the probe
-    /// room to paint them. What is at the fold in the real window is the author's to scroll to; what
-    /// this probe can say is whether the panel produces the row at all.
+    /// fold of a scroll area — a test that asked for all of the pig's 74 nodes has to give the probe
+    /// room to paint them, and the fourth-pass ears pushed the list past 2048. What is at the fold in
+    /// the real window is the author's to scroll to; what this probe can say is whether the panel
+    /// produces the row at all.
     fn painted(state: &mut EditorState) -> Vec<String> {
         let ctx = egui::Context::default();
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1280.0, 2048.0),
+                egui::vec2(1280.0, 4096.0),
             )),
             ..Default::default()
         };

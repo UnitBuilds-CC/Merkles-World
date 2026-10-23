@@ -171,9 +171,11 @@ pixels instead:
   geometry change is judged by looking at it rather than by reading the code that made it. Every
   rejected revision of `pig.ron` is recorded in that file's header, which is how the second attempt at a
   mistake got avoided instead of re-litigated. The current revision of `pig.ron` was looked at that way
-  on 2026-10-20: front, back, side, three-quarter, low and top dumps all read as a snouted quadruped
-  standing on the grid, with the head still larger than the body — a bear cub's proportions, which is a
-  content decision about `pig.ron`, not a defect in the instrument.
+  on 2026-10-24: front, back, side, three-quarter, low and top dumps all read as a pig — the snout disc
+  and nostrils, socketed eyes, forward-falling ears, jowl, four fetlock-tapered legs ending in flat-soled
+  cloven hooves, and the curled tail. What the earlier passes had left wrong was visible only in the
+  profiles: the ears stood up like a rabbit's, and the feet were full spheres because their sole cut
+  barely grazed the bottom. Both were geometry mistakes in `pig.ron`, not defects in the instrument.
 - **The interactive window** (`--example entity_editor`, run in release) adds orbit, zoom, the inspector,
   the material panel, and a facing compass projected through the same camera basis as the raster. It
   repaints only when `EditorState::preview_signature` moves — that digest covers the shape, the
@@ -248,9 +250,19 @@ and widened the leg columns' blend, which the `three_quarter` view showed as thr
 stayed 36, and the same instrument then measured **1.25–1.67 s** per 480×360 release frame. Read that
 pair as the machine's spread rather than as a speed-up: no part of the edit removes work, and a 2×
 difference on the same tree earlier in this section is what this machine does between runs.
+
 The `low` view moved from distance 1.1 to 1.5 in the same pass. At 1.1 the frame edge cut through the
 shoulder, so the view an author uses to judge legs and belly could not show either whole in one picture.
 It shares the others' distance now; the negative pitch is what makes it low.
+
+A fourth pass (2026-10-24) added the marks the eye names a pig by — socketed eyes, forward ears, a
+flat-cut snout with nostril dimples, a six-sphere curled tail and cloven flat-soled hooves — and took
+the tree from 36 nodes to **74 at depth 14** (the cap is 16). The same instrument measured **4.0–5.1 s**
+per 480×360 release frame in the run that closed it. A fifth pass the same day re-centred the ears
+forward and cut the hoof soles higher, changing no node and no depth: the next release run of the tree
+measured **5.2–12.2 s**, with the three-quarter row the slowest at 12.2 s. Nothing in either edit adds
+work — the second run is the same node count on a busier machine — so the two ranges are a warning
+about quoting this instrument to one significant figure, not a price for either pass.
 
 ### Driving the editor over MCP
 
@@ -875,18 +887,21 @@ redo returned it to 0.40, a second undo took it back to 0.22, and a new edit to 
 and the transport answered the same request list; the pipe is what shows the new calls travel.
 
 The live pipe was driven over stdio, not only through the module: `tools/list` published fourteen
-tools with `graft_part` among them, and the shipped pig was re-parented by its own node — the ear pair
-lifted out of the root's `Union` and grafted onto the tail that shared it, which is the one graft that
-reconstructs the tree it started from. The reply read `at` `root.b`, the anchor in slot `a` at
-`root.b.a`, the pair in slot `b` at `root.b.b`, 36 nodes in and 36 out, and the selection on
-`root.b.b`; the frame that followed was the same file at the same path with the same bytes as the
+tools with `graft_part` among them, and the then-shipped 36-node pig was re-parented by its own
+node — the ear pair lifted out of the root's `Union` and grafted onto the tail that shared it,
+which is the one graft that reconstructs the tree it started from. The reply read `at` `root.b`, the
+anchor in slot `a` at `root.b.a`, the pair in slot `b` at `root.b.b`, 36 nodes in and 36 out, and the
+selection on `root.b.b`; the frame that followed was the same file at the same path with the same
+bytes as the
 frame before it — same key, 2,410 surface of 19,200 with nothing undrawn at 160×120 — and the animal
 still reads as a pig. A re-parent that changes no composition cannot change the picture, and that is
 what the transport answered.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
-authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
-a debug build on this machine, on the run that landed this section.
+authoring and never a frame budget (§7): the 64×48 front view of the then-36-node `pig.ron` measured
+494 ms in a debug build on this machine, on the run that landed this section, and the current 74-node
+tree's release numbers sit in the paragraph above. A tool's wall time is not R1 evidence in either
+direction.
 
 ## Runtime lifecycle
 

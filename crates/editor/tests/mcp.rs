@@ -3281,19 +3281,23 @@ fn grafting_a_finished_subtree_under_another_node_moves_it_and_keeps_the_count()
     );
     let before = call(&mut state, "editor_state", json!({}));
     let was = before["parts"].as_array().expect("a list").clone();
-    // The ear pair is a two-child `Union`, not a wrapper, so lifting it collapses a real combinator and the
-    // tail sharing that combinator has to stand in its place. A wrapper would have been unwrapped instead,
-    // which is the one case this fixture is chosen not to measure.
-    let from = "root.b.b";
-    let under = "root.a.a.b";
+    // The eye pair is a two-child `Union` — the socketed `Subtract` and the eyeball `Mirror` — held by the
+    // jowl-and-head `SmoothUnion`. Lifting it collapses that combinator, and the jowl sphere sharing it has
+    // to stand in its place. A wrapper would have been unwrapped instead, which is the one case this
+    // fixture is chosen not to measure.
+    let from = "root.a.a.b.b.b";
+    let under = "root.a.b.child.a";
     assert_eq!(part_at(&was, from)["kind"], json!("Union"));
-    assert_eq!(part_at(&was, &format!("{from}.a"))["kind"], json!("Sphere"));
-    assert_eq!(part_at(&was, &format!("{from}.b"))["kind"], json!("Sphere"));
-    assert_eq!(part_at(&was, "root.b")["kind"], json!("Union"));
+    assert_eq!(
+        part_at(&was, &format!("{from}.a"))["kind"],
+        json!("Subtract")
+    );
+    assert_eq!(part_at(&was, &format!("{from}.b"))["kind"], json!("Mirror"));
+    assert_eq!(part_at(&was, "root.a.a.b.b")["kind"], json!("SmoothUnion"));
     assert_eq!(
         part_at(&was, under)["kind"],
         json!("SmoothUnion"),
-        "the landing node is not the neck-and-head branch"
+        "the landing node is not the front-leg column"
     );
     let mut held = vec![content_of(part_at(&was, from))];
     held.extend(contents_under(&was, from));
@@ -3341,15 +3345,17 @@ fn grafting_a_finished_subtree_under_another_node_moves_it_and_keeps_the_count()
         head,
         "the landing node did not keep its slot intact"
     );
-    // The holder collapsed: the tail is now the node `root.b` names, and nothing is left below it.
+    // The holder collapsed: the jowl is now the node `root.a.a.b.b` names, and nothing is left below it.
     assert_eq!(
-        content_of(part_at(&now, "root.b")),
-        content_of(part_at(&was, "root.b.a")),
-        "the survivor did not take the collapsed Union's place"
+        content_of(part_at(&now, "root.a.a.b.b")),
+        content_of(part_at(&was, "root.a.a.b.b.a")),
+        "the survivor did not take the collapsed SmoothUnion's place"
     );
     assert!(
-        !now.iter().any(|part| route_of(part).starts_with("root.b.")),
-        "a route below the collapsed Union survived, so the ears were copied instead of moved"
+        !now
+            .iter()
+            .any(|part| route_of(part).starts_with("root.a.a.b.b.")),
+        "a route below the collapsed SmoothUnion survived, so the eyes were copied instead of moved"
     );
     assert_ne!(
         grafted["preview_signature"], before["preview_signature"],
@@ -3606,13 +3612,13 @@ fn a_graft_follows_a_landing_route_through_the_operand_the_lift_promoted() {
     );
     let before = call(&mut state, "editor_state", json!({}));
     let was = before["parts"].as_array().expect("a list").clone();
-    // Lifting the whole body branch collapses the root, and the tail-and-ears Union takes the root's place.
-    // Every route below it loses two steps, so the ear the caller named is not at the route it wrote by the
-    // time anything lands: the call has to follow the survivor rather than fail on a route it moved itself.
+    // Lifting the whole body branch collapses the root, and the tail chain takes the root's place. Every
+    // route below it loses two steps, so the tail segment the caller named is not at the route it wrote by
+    // the time anything lands: the call has to follow the survivor rather than fail on a route it moved.
     let from = "root.a";
     let under = "root.b.b.b";
     assert_eq!(part_at(&was, from)["kind"], json!("SmoothUnion"));
-    assert_eq!(part_at(&was, under)["kind"], json!("Sphere"));
+    assert_eq!(part_at(&was, under)["kind"], json!("SmoothUnion"));
     let mut held = vec![content_of(part_at(&was, from))];
     held.extend(contents_under(&was, from));
     held.sort();
@@ -3642,8 +3648,8 @@ fn a_graft_follows_a_landing_route_through_the_operand_the_lift_promoted() {
     carried.sort();
     assert_eq!(carried, held, "the graft did not carry the body branch");
     // The survivor's whole line moved up two steps, and that is the remap this test exists for: the tail
-    // that was `root.b.a` is the entity's `root.a`, and the ear that shared the ear Union with the anchor
-    // is `root.b.a`.
+    // sphere that was `root.b.a` is the entity's `root.a`, and the tail segment that shared the anchor's
+    // parent is `root.b.a`.
     assert_eq!(
         content_of(part_at(&now, "root.a")),
         content_of(part_at(&was, "root.b.a"))

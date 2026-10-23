@@ -3,8 +3,12 @@
 //
 // Proportions are driven by what the viewport shows, not by the numbers: see
 // `cargo run -p editor --example render_png`, which dumps the marched silhouette from six angles.
-// The grammar has no translate node (OQ-55) and no cylinder, so every placed part is a sphere and a
-// leg is a column of them; the only primitive that may sit at the origin is `RoundedBox`.
+// The grammar has no translate node (OQ-55), so every placed part is a sphere and a leg is a column of
+// them; the only primitives that may sit at the origin are `RoundedBox`, `Cylinder` and `Torus`, and the
+// last two are not reachable from RON at all. A flat surface is still expressible: `Intersect(a, Plane)`
+// is bounded by `a` (cull.rs takes an intersect's first-operand enclosure), so a plane may cut a face as
+// long as the plane is the *second* operand. A plane anywhere else makes the scene unbounded, and
+// `Stage::under` then falls back to -0.5 and stands the animal in the air.
 //
 // What the renders rejected, in order:
 // - `RoundedBox(half: (0.22, 0.18, 0.34), r: 0.15)` — a rounded box spans `2 * (half + r)`, so this was
@@ -45,17 +49,47 @@
 //   0.018 at every join. Raising k to 0.12 widens the waist to the sphere's own radius without
 //   lengthening the leg or adding a node, and the column reads smooth from `side` and `low`.
 //
+// - A fourth pass adds the marks the eye actually uses to name a pig, because the animal was a smooth
+//   pink blob that happened to have a snout. Each one is geometry, not a new primitive:
+//   · Eyes: a dish cut into the head with the eyeball unioned back into it. A ball alone is a bump on a
+//     monochrome head; the shadowed socket rim is what reads as an eye.
+//   · Ears: a three-sphere cone leaning up and outward, replacing a ball that sat on the skull like a
+//     second head. The tip clears the topline, which is where a pig's ears live in silhouette.
+//   · Snout: the two-sphere muzzle is cut flat by a plane, giving the disc a pig is named for. The
+//     nostril cutters moved onto that face, so they are dimples in the disc rather than holes in a ball.
+//   · Tail: a six-sphere loop instead of a nub. It curls in the Y-Z plane, so `side` shows the spiral
+//     and `front` shows a thin line — the two views that disagreed about the old tail.
+//   · Hooves: each foot is two spheres hard-unioned (the crease between them is the cloven cleft) with
+//     the sole cut flat by a plane. The column stops above the sole so the widened hoof is what reaches
+//     the floor; a leg that ends in its own bottom sphere reads as standing on a ball.
+//   · The neck thickened to 0.125 and a jowl sphere was added under the head. The side view's deep
+//     shoulder notch was a thin neck with nothing behind it; a pig carries a full throat.
+//
+// - A fifth pass judged the fourth's new marks from the profiles the first four were not read in:
+//   · Ears: `side` showed two upright blades — a rabbit's ears or a pair of horns — because the cone's
+//     tip sat above and *behind* its base, so the profile was a spike on the crown. The tip moved
+//     forward over the eye and down until it sits under the crown, the base dropped with it, and the
+//     flattening slab widened to 0.08 and shifted to cover the leaning cone. The front view keeps its
+//     broad leaf; the side view now reads a triangle falling forward, which is what a pig wears.
+//   · Hooves: the sole cut was 0.017 above the toe spheres' bottoms, so the profile was very nearly a
+//     full sphere and every leg ended in a ball. The cut is 0.04 above now — a walled half-dome with a
+//     flat base — and the hoof is attached to a *narrower* fetlock at a hard crease, which is the ring
+//     that names an ankle. The first attempt at this used toes r 0.09 hard-unioned to the old column:
+//     the foot read as a bell-bottom, because the toes were 70% wider than the leg. The finished foot
+//     is only slightly wider than its own fetlock, and the column's lower blend dropped from k 0.12 to
+//     0.08 so the taper survives instead of being smoothed away.
+//   Both are single-node re-centrings and a cut-plane offset: the node count and depth are unchanged.
+//
 // Hypothesis for docs/04, not a measurement: every blended join is a place the marcher cannot skip,
 // since ADR-024's k-aware skip refuses exactly the large-`k` case, so an authored creature is an R1
 // expense per part. Nothing here controls for that yet — the debug CPU raster's timings swing by more
 // than the effect under machine load, so the claim stays a hypothesis until someone times a hard-union
-// twin of this tree. docs/16 § Visual authoring records what the instrument did print for this tree
-// (36 nodes; 1.25-1.67 s per 480x360 release frame on 2026-10-23, measured after the third pass), and
-// why it is not the price of a blend.
+// twin of this tree. docs/16 § Visual authoring records what the instrument did print for this tree,
+// and why it is not the price of a blend.
 
 EntityDef(
     shape: SmoothUnion(
-        // Tail and ears, blended into the rump and head so they read as growths, not floating balls.
+        // Tail blended into the rump; the only root-level growth left, since the ears moved onto the head.
         k: 0.04,
         a: SmoothUnion(
             // Legs, blended into the body at the shoulder and hip.
@@ -84,48 +118,140 @@ EntityDef(
                     ),
                 ),
                 b: SmoothUnion(
-                    // Neck into head into snout: the neck is thinner than both, and the head's crown
-                    // stays well under the topline. That drop is what makes it a head and not a hump.
-                    // The head is smaller than it looks in the `front` view, because in that view the
-                    // torso is directly behind it; the snout has to win the silhouette on its own.
-                    k: 0.05,
+                    // The neck is now as thick as the throat it hides. At r 0.125 it leaves a dip of
+                    // 0.02 behind the crown instead of the old 0.045 V, and the jowl below it fills the
+                    // underside rather than leaving the head on a stalk.
+                    k: 0.06,
                     a: Sphere(
-                        r: 0.11,
-                        centre: (0.0, 0.29, -0.33),
+                        r: 0.125,
+                        centre: (0.0, 0.30, -0.33),
                     ),
                     b: SmoothUnion(
                         k: 0.05,
                         a: Sphere(
-                            r: 0.14,
-                            centre: (0.0, 0.30, -0.49),
+                            // Jowl: a dewlap under the jaw, hanging 0.065 past both the head and the
+                            // neck on its own. It is what turns the head-neck-chest line into a wedge.
+                            r: 0.11,
+                            centre: (0.0, 0.235, -0.405),
                         ),
-                        b: Subtract(
-                            // Snout: two spheres smoothed sideways, because a single sphere reads as a
-                            // muzzle and a pig's is a disc wider than it is tall. Set low on the face,
-                            // under the head's own centre, which is where a pig carries it.
-                            // The nostrils are shallow dimples in the snout's front face, not holes
-                            // through it: a cutter whose centre sits just inside the snout sphere, with
-                            // a radius under a fifth of the snout's own. Wider than that and the pair
-                            // reads, in `front`, as eye sockets on a bear rather than a pig's nose.
-                            kept: SmoothUnion(
-                                k: 0.035,
-                                a: Sphere(
-                                    r: 0.072,
-                                    centre: (0.048, 0.225, -0.645),
+                        b: Union(
+                            // Eyes are added after the sockets are cut, so the ball sits in the dish
+                            // instead of being shaved by it. A plain `Union`, not a blend: the contact
+                            // edge around an eyeball is supposed to be a crease.
+                            a: Subtract(
+                                kept: SmoothUnion(
+                                    // Head with its ears and its flat-cut snout, in that order: the
+                                    // sockets are cut after both, so a dish can never be re-filled by a
+                                    // later blend.
+                                    k: 0.035,
+                                    a: SmoothUnion(
+                                        k: 0.03,
+                                        a: Sphere(
+                                            r: 0.15,
+                                            centre: (0.0, 0.315, -0.50),
+                                        ),
+                                        b: Mirror(
+                                            // Ear: a cone of three shrinking spheres, then a slab cut
+                                            // that flattens it front-to-back. The cone alone read as a
+                                            // horn — a pig's ear is a *blade*, broad in the front view
+                                            // and thin in the side view, and no union of spheres can be
+                                            // thin. The two cut planes are nested inside the ear's own
+                                            // `Intersect`, whose first operand keeps the enclosure
+                                            // bounded. The base sits inside the skull, so only the leaf
+                                            // grows out of the head; the tip clears the topline.
+                                            axis: 0,
+                                            child: Intersect(
+                                                a: SmoothUnion(
+                                                    k: 0.03,
+                                                    a: Sphere(
+                                                        r: 0.075,
+                                                        centre: (0.1, 0.355, -0.47),
+                                                    ),
+                                                    b: SmoothUnion(
+                                                        k: 0.03,
+                                                        a: Sphere(
+                                                            r: 0.056,
+                                                            centre: (0.127, 0.392, -0.492),
+                                                        ),
+                                                        b: Sphere(
+                                                            r: 0.034,
+                                                            centre: (0.148, 0.418, -0.512),
+                                                        ),
+                                                    ),
+                                                ),
+                                                b: Intersect(
+                                                    // Slab 0.08 thick, turned 40 degrees outward, offset to
+                                                    // cover the cone's whole span now that the tip leans
+                                                    // forward. Wider than it is deep, because a pig's ear is
+                                                    // broad at the base: the earlier, narrower leaf read as
+                                                    // a horn from the side, which is the silhouette the
+                                                    // extra width and the shorter tip are here to break.
+                                                    a: Plane(
+                                                        normal: (0.643, 0.0, -0.766),
+                                                        offset: 0.496,
+                                                    ),
+                                                    b: Plane(
+                                                        normal: (-0.643, 0.0, 0.766),
+                                                        offset: -0.416,
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                    b: Subtract(
+                                        // Snout: two spheres smoothed sideways into the wide muzzle, then
+                                        // cut flat at z = -0.69. The cut is the whole joke — a pig is a
+                                        // disc on a face — and it is legal here only because the plane is
+                                        // the second operand of an `Intersect`, which keeps the sphere
+                                        // pair's enclosure.
+                                        kept: Intersect(
+                                            a: SmoothUnion(
+                                                k: 0.03,
+                                                a: Sphere(
+                                                    r: 0.062,
+                                                    centre: (0.035, 0.225, -0.645),
+                                                ),
+                                                b: Sphere(
+                                                    r: 0.062,
+                                                    centre: (-0.035, 0.225, -0.645),
+                                                ),
+                                            ),
+                                            // Cut only 0.019 behind each sphere's front, where the two
+                                            // cross-sections still overlap by 0.019: a cut nearer the
+                                            // front pinches the disc into a figure eight.
+                                            b: Plane(
+                                                normal: (0.0, 0.0, -1.0),
+                                                offset: 0.688,
+                                            ),
+                                        ),
+                                        // Nostrils: shallow dimples pressed into the flat face, set just
+                                        // in front of it so they remove 7 mm of snout and nothing else.
+                                        cutter: Mirror(
+                                            axis: 0,
+                                            child: Sphere(
+                                                r: 0.014,
+                                                centre: (0.024, 0.225, -0.6955),
+                                            ),
+                                        ),
+                                    ),
                                 ),
-                                b: Sphere(
-                                    r: 0.072,
-                                    centre: (-0.048, 0.225, -0.645),
+                                cutter: Mirror(
+                                    // Socket: centred 0.028 outside the head's surface, so it cuts a
+                                    // dish 0.016 deep with a 0.031 rim — the shadow ring that names it.
+                                    axis: 0,
+                                    child: Sphere(
+                                        r: 0.044,
+                                        centre: (0.1174, 0.3684, -0.6227),
+                                    ),
                                 ),
                             ),
-                            cutter: Union(
-                                a: Sphere(
-                                    r: 0.012,
-                                    centre: (0.032, 0.23, -0.707),
-                                ),
-                                b: Sphere(
-                                    r: 0.012,
-                                    centre: (-0.032, 0.23, -0.707),
+                            b: Mirror(
+                                // Eyeball: smaller than its socket and proud of the rim by 0.012, so it
+                                // catches a highlight without becoming a googly eye.
+                                axis: 0,
+                                child: Sphere(
+                                    r: 0.021,
+                                    centre: (0.091, 0.3564, -0.5951),
                                 ),
                             ),
                         ),
@@ -133,20 +259,18 @@ EntityDef(
                 ),
             ),
             b: Mirror(
-                // Two authored legs — each a thigh, shin and hoof sphere, tapering downward and smoothed
-                // into one continuous column — mirrored about X into four. The authored pair sits at
-                // x = 0.14, outside the body's own half-width, so the front view shows legs at the sides
-                // of the animal rather than four bumps under one belly.
+                // Two authored legs, mirrored about X into four. Each is a three-sphere column that
+                // stops at the ankle, then a hoof. The authored pair sits at x = 0.14, outside the
+                // body's own half-width, so the front view shows legs at the sides of the animal rather
+                // than four bumps under one belly.
                 axis: 0,
                 child: Union(
                     a: SmoothUnion(
-                        // Front leg: the thigh starts inside the chest, and each joint overlaps by more
-                        // than its `k`, so the column is continuous from belly to floor. A hoof that
-                        // only touches the shin reads as a detached ball once `k` is under the gap.
-                        // All three spheres share one radius: a taper shows as a ring at every joint,
-                        // because a blend can hide a change of position but not a change of width. The
-                        // earlier tapered column read as a string of three balls, not as a leg.
-                        k: 0.12,
+                        // Front leg. The two cannon spheres share one radius: a taper shows as a ring
+                        // at every joint, because a blend can hide a change of position but not a
+                        // change of width. The fetlock and hoof are where the width changes, and the
+                        // hard creases there give it an edge to happen on.
+                        k: 0.08,
                         a: SmoothUnion(
                             k: 0.12,
                             a: Sphere(
@@ -158,14 +282,45 @@ EntityDef(
                                 centre: (0.14, 0.0, -0.16),
                             ),
                         ),
-                        b: Sphere(
-                            r: 0.082,
-                            centre: (0.14, -0.145, -0.16),
+                        b: Union(
+                            // The hoof meets the fetlock at a hard crease: a smoothed joint erased the
+                            // ankle line, and a leg that fades into its own foot reads as a ball on
+                            // the floor rather than a hoof. The crease is the ring that names the
+                            // ankle; the smooth union is kept for the column's joints above it.
+                            a: Sphere(
+                                // Ankle: narrower than the cannon above, so the hoof below can flare
+                                // without the whole leg reading as a bell. The taper is the fetlock.
+                                r: 0.07,
+                                centre: (0.14, -0.115, -0.16),
+                            ),
+                            b: Intersect(
+                                // Hoof: two toe spheres, hard-unioned. The crease where they meet is
+                                // the cloven cleft. The sole is cut 0.04 above the spheres' bottoms,
+                                // so the profile is a walled half-dome with a flat base, not a full
+                                // sphere; a cut nearer the bottom left the foot reading as a ball.
+                                // Slightly wider than the ankle in X and Z, no wider than that.
+                                a: Union(
+                                    a: Sphere(
+                                        r: 0.075,
+                                        centre: (0.1, -0.175, -0.16),
+                                    ),
+                                    b: Sphere(
+                                        r: 0.075,
+                                        centre: (0.18, -0.175, -0.16),
+                                    ),
+                                ),
+                                // Flat sole: inside is `y > -0.215`, so the normal points down. The
+                                // plane only touches the hoof, and the column above it stops clear.
+                                b: Plane(
+                                    normal: (0.0, -1.0, 0.0),
+                                    offset: 0.215,
+                                ),
+                            ),
                         ),
                     ),
                     b: SmoothUnion(
                         // Back leg: same column, under the rump, a touch wider to carry the haunch.
-                        k: 0.12,
+                        k: 0.08,
                         a: SmoothUnion(
                             k: 0.12,
                             a: Sphere(
@@ -174,33 +329,75 @@ EntityDef(
                             ),
                             b: Sphere(
                                 r: 0.09,
-                                centre: (0.14, -0.01, 0.28),
+                                centre: (0.14, 0.0, 0.28),
                             ),
                         ),
-                        b: Sphere(
-                            r: 0.09,
-                            centre: (0.14, -0.145, 0.28),
+                        b: Union(
+                            a: Sphere(
+                                // Fetlock, matching the front leg's taper.
+                                r: 0.078,
+                                centre: (0.14, -0.115, 0.28),
+                            ),
+                            b: Intersect(
+                                a: Union(
+                                    a: Sphere(
+                                        r: 0.082,
+                                        centre: (0.095, -0.175, 0.28),
+                                    ),
+                                    b: Sphere(
+                                        r: 0.082,
+                                        centre: (0.185, -0.175, 0.28),
+                                    ),
+                                ),
+                                b: Plane(
+                                    normal: (0.0, -1.0, 0.0),
+                                    offset: 0.215,
+                                ),
+                            ),
                         ),
                     ),
                 ),
             ),
         ),
-        b: Union(
-            // Tail and ears: neither pair touches, so a hard union between them costs nothing, and the
-            // root's `k` is what blends each of them into the body and head. The ears are barely
-            // larger than the head's own surface so they read as tips, not as a second pair of ears.
+        b: SmoothUnion(
+            // Tail: a loop of six shrinking spheres, climbed from the rump and tucked back under. The
+            // earlier nub was a ball the size of an ear; a curl is the silhouette a pig is drawn with.
+            // Overlaps are kept positive so `k` only fillets the joints, never bridges a gap.
+            k: 0.025,
             a: Sphere(
-                r: 0.04,
-                centre: (0.0, 0.34, 0.47),
+                r: 0.03,
+                centre: (0.0, 0.38, 0.465),
             ),
-            b: Union(
+            b: SmoothUnion(
+                k: 0.025,
                 a: Sphere(
-                    r: 0.055,
-                    centre: (0.105, 0.395, -0.45),
+                    r: 0.025,
+                    centre: (0.008, 0.42, 0.5),
                 ),
-                b: Sphere(
-                    r: 0.055,
-                    centre: (-0.105, 0.395, -0.45),
+                b: SmoothUnion(
+                    k: 0.025,
+                    a: Sphere(
+                        r: 0.021,
+                        centre: (0.018, 0.443, 0.536),
+                    ),
+                    b: SmoothUnion(
+                        k: 0.025,
+                        a: Sphere(
+                            r: 0.018,
+                            centre: (0.028, 0.431, 0.568),
+                        ),
+                        b: SmoothUnion(
+                            k: 0.025,
+                            a: Sphere(
+                                r: 0.015,
+                                centre: (0.034, 0.407, 0.583),
+                            ),
+                            b: Sphere(
+                                r: 0.013,
+                                centre: (0.034, 0.385, 0.573),
+                            ),
+                        ),
+                    ),
                 ),
             ),
         ),
