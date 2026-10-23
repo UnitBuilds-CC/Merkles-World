@@ -2383,3 +2383,58 @@ copy per call, so its single-versus-batch ratio now measures a different thing. 
 re-run on buildbox's GTX 1070 before task #77 publishes a dynamic number from either. The paragraph this one
 replaced also referred to "the OQ-63 cache claims"; OQ-63 is the entity-rotation question in docs/13 and carries no
 cache claim. The cache's dynamic claims are gated on task #77, which this unblocks.
+
+## A cached frame is only honest if a moved frame re-marches (2026-10-23, `examples/r1_cached_dynamic_loop`)
+
+Everything measured about the temporal cache so far held the scene still: `r1_descent_arm`'s `reuse` row marches a second
+frame after invalidating nothing, and `r1_temporal_benchmark`'s cached median loops five marches over one bind group with
+no invalidation anywhere. `r1_cached_dynamic_loop` asks
+the question task #77 has to answer before a dynamic number means anything — **after something moves and its pixels are
+invalidated, is the cached frame the picture an honest full march makes?** It answers **no**, and the reason is not
+cost.
+
+The loop marches each frame three ways. Two binds share one shape: the culled entry with its `@group(1)` cache, and the
+shipped, unculled `march_rays_from_camera` on a second frame buffer, which names no group 1 and so cannot consult a
+cache — the reference. `stale` is the cached march with nothing invalidated, which counts the pixels the move actually
+changed and is also the control on the mask (a reuse branch that ignored the mask would re-march and come back equal).
+Then the policy speaks, the dirt the mask holds is read back off the device rather than assumed, and `repaired` is the
+cached march after it. Measured on GeForce MX250 [Vulkan, DiscreteGpu] at 640x360, six frames per policy:
+
+| policy | frame | dirty px read from the mask | stale diffs (surface flips) | repaired diffs (flips) | hits, cached / reference |
+|---|---|---|---|---|---|
+| both paths from an empty cache | 0 | all (cold) | — | **0** | 51,954 / 51,954 |
+| entity slides, camera still, old+new footprints invalidated | 1 | 30,573 | 4,812 (1,360) | **4,764** (1,312) | 52,002 / 53,178 |
+| | 6 | 151,751 | 28,190 (7,470) | **21,424** (704) | 71,530 / 72,046 |
+| camera pans, entity still, `invalidate_all` | 1 | 230,400 | 75,769 (8,234) | **71,530** (3,995) | 75,769 / 71,774 |
+| | 6 | 230,400 | 90,338 (33,362) | **88,095** (31,119) | 90,338 / 59,219 |
+
+Row 0 is the pre-existing agreement restated on this fixture: with nothing cached, the culled and unculled paths are one
+scene, 0 bit-differing depths and the same 51,954 hits, so every disagreement below belongs to the cache and not to a
+second renderer. Row 4 of the camera policy is the finding: the whole grid — all 230,400 pixels — was marked dirty, and
+the frame that came back still disagrees with the uncacheable reference on **71,530** depths, growing to **88,095**. Its
+hit count is another tell: after `invalidate_all`, the cached march reports the *previous* frame's hit total, and its
+disagreement count equals what the stale march had just measured. The cache is answering a moved frame with the frame
+before it.
+
+**The mechanism is a second cache layer inside the dirty branch, and its age test cannot fire.**
+`march_rays_from_camera_culled` checks the mask, and then — for a pixel the mask *did* mark dirty — tests
+`cached_depths[index] > 0.0 && <= max_t` and, if it passes, returns that depth without marching (lines 709-750). The
+only freshness test on that answer is `age = header.stack_depth - cached_frame > max_age_frames`, where `max_age_frames`
+is `u32(cam.grid.w)`. `write_camera` fills `header.stack_depth` with **`STACK_DEPTH`, the walk's stack capacity**, and
+the same word into `cam.grid`'s fourth lane as `64.0f32`; it is not a frame counter and nothing increments it. So
+`cached_frame` always equals `current_frame`, `age` is always 0, `is_stale` is false for every entry forever, and a
+surface pixel that has once been cached never marches again. Only pixels with no cached surface — sky, whose metadata
+flags read 0 — take the march. That is exactly the split the table shows: the entity policy's invalidation repaired
+6,766 pixels of its 28,190 by frame 6 and left the surface pixels stale.
+
+**What it changes about the claims around it.** The static rows stand: R1's 3.26 ms at 1080p is the price of not
+re-marching a frame that has not changed, and it was measured as such. `PHASE1_EXIT_STATUS.md`'s "dynamic scene
+performance" block (5.71 ms at 1 % dirty through 29.72 ms at 50 %) is withdrawn — it was `5.22 ms + dirty% x 49 ms`, an
+arithmetic estimate, and a moved frame is not more expensive, it is wrong. No duration from `r1_dynamic_benchmark` or
+`r1_multi_entity_benchmark` may be quoted until both are re-run on a path that re-marches. This is not a CI step: it
+exits 1 by design until the fix lands, and a step whose expected colour is red is a note, not a gate.
+
+**The fix is one decision, tracked as task #120:** delete the `use_cache` shortcut so a dirty pixel always marches,
+which leaves the dirty mask as the cache's only authority — the design the mask arithmetic and the host mirror were
+built for. The alternative, making the cached surface's validity depend on the ray that would reuse it, costs an SDF
+evaluation per reused pixel and buys nothing the mask does not already decide.

@@ -43,40 +43,44 @@ Reach the project's MVP as defined by docs/11's Phase 1 exit (the pitch demo): a
 - **Gap:** 2.97x over budget (needs 16.67 ms, currently 49.424 ms)
 
 **After delta rendering optimization (2026-10-19, commit 1eda4f6):**
-- **Static scenes:** 5.22ms median (~191 fps) — **MEETS R1 BUDGET** (3.2x under 16.67ms target)
-- **Speedup:** 28.54x from temporal surface caching with atomic dirty mask
-- **Dynamic scene performance** (estimated based on dirty pixel fraction):
-  - 0% dirty (static): 5.22ms (~191 fps) ✅
-  - 1% dirty (small entity): ~5.71ms (~175 fps) ✅
-  - 5% dirty (medium entity): ~7.67ms (~130 fps) ✅
-  - 10% dirty (large entity): ~10.12ms (~99 fps) ✅
-  - 20% dirty (multiple entities): ~15.02ms (~67 fps) ✅
-  - 50% dirty (major scene change): ~29.72ms (~34 fps) ⚠️
-- **Breakdown:**
-  - Base overhead (cache lookup for all pixels): ~5ms
-  - Per-dirty-pixel cost: ~0.024ms per 1% of screen (based on 49ms full march)
-  - Atomic dirty mask operations: thread-safe bit manipulation in WGSL
+- **A static frame, marched twice:** 3.26 ms at 1080p cap 96 on buildbox's GTX 1070 — the second frame costs the
+  mask check and nothing else (`examples/r1_descent_arm.rs`, timed row 6 in `docs/04-rendering.md`).
+- **The "dynamic scene performance" rows this file published (5.71 ms at 1 % dirty … 29.72 ms at 50 %) are
+  withdrawn.** They were never measured — they were `5.22 ms + dirty% × 49 ms`, a cost model — and
+  `examples/r1_cached_dynamic_loop.rs` (2026-10-23) shows the model is wrong in kind rather than in magnitude: a
+  dirtied surface pixel is **not re-marched**, so a moving scene does not cost more than a static one, it shows the
+  frame before it. Measured on GeForce MX250 [Vulkan, DiscreteGpu] at 640×360, after `invalidate_all` dirties all
+  230,400 pixels, the cached frame still disagrees with an uncacheable full march of the same camera on **71,530**
+  depths in the first moved frame and **88,095** in the sixth; the entity-region policy leaves **21,424**.
 
-#### Why R1 is now met for typical use:
-The temporal surface cache eliminates redundant ray marching for unchanged pixels. The dominant cost shifts from marching 2,073,600 rays every frame to checking cached surfaces and only re-marching dirty pixels. For static or moderately dynamic scenes (<20% pixel changes), the budget is comfortably met.
+**Why the invalidation does not repair the frame.** The culled entry has a second cache layer *inside* its dirty
+branch (`interp.wgsl`'s `use_cache`, lines 709-750): a pixel whose `cached_depths` entry lies in `(0, max_t]`
+returns that depth without marching. The entry's only freshness test is an age against `header.stack_depth`, and
+`write_camera` fills that word with the **stack-capacity constant**, not a frame counter — so `age` is always 0, the
+`max_age_frames` bound the host sets (64) is never reached, and no cached surface ever expires. Invalidating the
+mask therefore repairs only the pixels that had no cached surface, i.e. sky.
+
+**What this does and does not change about gate R1.**
+- The measured row that met the budget is a *static* frame, and it stays measured and unchanged: R1's 3.26 ms is the
+  cost of not re-marching, which is exactly what a frame that must show a moved entity cannot afford.
+- **No dynamic number may be quoted from `r1_dynamic_benchmark` or `r1_multi_entity_benchmark`.** Their rows ride the
+  same swallowed invalidation, and `r1_dynamic_benchmark` marches three times per one invalidation, so its median was
+  a fully-cached frame whatever the label said.
+- For a frame in which anything moves, **R1 is not met**: the fast frame is the wrong frame. The fix is one decision
+  — delete `use_cache` so a dirty pixel always marches and the dirty mask becomes the only cache authority — tracked
+  as task #120.
 
 **Limitations:**
-- Performance degrades linearly with dirty pixel fraction
-- Scenes with >30% pixel changes per frame exceed budget
-- First frame after scene change still costs ~49ms (full march to populate cache)
-- Entity invalidation API not yet exposed (dirty mask managed entirely on GPU)
-
-**What would extend R1 coverage:**
-1. Indirect dispatch compaction (attempted but blocked by wgpu bind group layout compatibility)
-2. Hierarchical dirty region tracking (invalidate tiles, not individual pixels)
-3. Multi-resolution caching (lower-res cache for distant/less important regions)
-4. Entity influence sphere calculation on GPU (avoid CPU→GPU sync for invalidation)
+- A cached frame is correct only while nothing in it changes; there is no sound dynamic path yet (task #120).
+- First frame after a scene change is a full march.
+- Indirect dispatch compaction was attempted and blocked by wgpu bind group layout compatibility.
 
 **Evidence:**
-- `crates/gpu/examples/r1_temporal_benchmark.rs` (delta rendering timing + per-frame dirty counts)
-- Buildbox test results (commit 1eda4f6): 5.22ms median on GTX 1070, 28.54x speedup
-- `crates/gpu/src/interp.wgsl`: atomic dirty mask operations (`atomicLoad`, `atomicAnd`)
-- `test_buildbox_delta.sh`: automated benchmark script for regression testing
+- `crates/gpu/examples/r1_cached_dynamic_loop.rs` — the moving-scene loop, its two policies, and the control that
+  must disagree (an un-invalidated move) for the instrument to mean anything.
+- `crates/gpu/examples/r1_descent_arm.rs` / `docs/04-rendering.md` — the static 1080p timings on the admissible
+  instrument.
+- `crates/gpu/src/device.rs`'s `dirty_mask_tests` — the mask's word arithmetic, 8 tests, no adapter needed.
 
 ### ✅ 4. One Hash Across Four Targets (Gate P1.5)
 **Status:** MET AS AMENDED
@@ -158,17 +162,21 @@ These decisions block further optimization work or clarify scope (see "Pending O
 
 1. OQ-49 through OQ-61, wit-bindgen exports, CI presentation leg — all documented, awaiting user input
 
-### Hardware Limitation (Resolved)
+### Hardware Limitation (Open, and of a different kind than this section claimed)
 
-R1's 16.67ms budget at 1080p **is met** for static and moderately dynamic scenes via temporal caching:
-- Static: 5.22ms (3.2x under budget) ✅
-- <20% pixel changes: <16.67ms ✅
-- >30% pixel changes: exceeds budget (graceful degradation) ⚠️
+R1's 16.67 ms budget at 1080p is met for a frame that does not change (3.26 ms, `r1_descent_arm`'s timed row). It is
+**not** met for a frame in which anything moves, and the reason is not cost: the cached path answers a moved frame
+with the previous frame's depths. `examples/r1_cached_dynamic_loop.rs` measures that — 71,530 stale depths at
+640×360 after the whole frame was invalidated — and the withdrawn estimates that used to sit in this section are
+corrected in the R1 block above.
 
-Further improvements for heavily dynamic scenes would require:
-- Entity influence sphere API (not yet implemented)
-- Indirect dispatch compaction (blocked by wgpu bind group layout compatibility)
-- Hierarchical dirty region tracking (future optimization)
+What dynamic coverage needs:
+- a dirty pixel that always marches (task #120 — delete the shader's `use_cache` shortcut, which no age test can
+  expire because `header.stack_depth` is a stack capacity, not a frame counter);
+- then, and only then, a measured dynamic cost (the `r1_dynamic_benchmark` rows must be re-run once one march follows
+  one invalidation rather than three);
+- indirect dispatch compaction (blocked by wgpu bind group layout compatibility) and hierarchical dirty regions stay
+  optimisations, not correctness work.
 
 ## Summary
 
@@ -178,15 +186,23 @@ All four clauses have been built, measured, and documented:
 
 1. ✅ **Booting engine:** Reproducible across x86-64 Linux/Windows, ARM64 macOS, WASI, Chromium, JSC
 2. ✅ **Voxel edit persistence:** Ledger round-trip verified with eviction/re-entry correctness
-3. ✅ **Rendered procedural scene:** 5.22ms at 1080p on GTX 1070 (3.2x under 16.67ms budget for static scenes)
+3. ✅ **Rendered procedural scene:** 3.26 ms at 1080p on GTX 1070 for a frame that does not change (5.1x under the
+   16.67 ms budget); a frame in which something moves is measured stale, not slow, and is open work (task #120).
 4. ✅ **One hash across targets:** Gate P1.5 met as amended (two devices + CI legs)
 
-The R1 performance gap was closed by temporal surface caching with atomic dirty mask delta rendering (commit 1eda4f6), achieving 28.54x speedup over the uncached path. Static and moderately dynamic scenes (<20% pixel changes) comfortably meet the 16.67ms budget; heavily dynamic scenes (>30% changes) exceed it gracefully.
+The R1 performance gap was closed for the static frame by the ray-level cull plus the dirty mask's reuse of pixels
+that did not change (`examples/r1_descent_arm.rs`, timed row 6). The sentence this one replaced claimed that static
+*and moderately dynamic* scenes meet the budget and that heavily dynamic ones degrade gracefully; the dynamic half was
+an arithmetic estimate, and `examples/r1_cached_dynamic_loop.rs` measured that a moved frame keeps the previous
+frame's surfaces instead of paying more to draw them. See the R1 block above for the numbers and the mechanism.
 
 The workspace is clean, all tests pass, clippy is clean, and formatting is correct. Remaining work requires owner decisions on pending open questions (OQ-49, OQ-01, OQ-53, etc.) or extension beyond Phase 1 scope.
 
 ---
 
-**Last updated:** 2026-10-19 (R1 met via delta rendering)
-**Commit:** 1eda4f6 (test: add buildbox delta rendering test script)
-**Status:** Phase 1 exit complete — all four deliverables verified
+**Last updated:** 2026-10-23 (the cache's dynamic rows withdrawn and replaced by a measurement; R1 met for a static
+frame only)
+**Commit:** the change that adds `crates/gpu/examples/r1_cached_dynamic_loop.rs`; resolve it with
+`git log -1 --format=%h -- crates/gpu/examples/r1_cached_dynamic_loop.rs`
+**Status:** Phase 1 exit's four clauses hold for a frame that does not change; a moving frame's correctness is open
+work (task #120)

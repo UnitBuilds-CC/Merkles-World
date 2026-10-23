@@ -105,6 +105,26 @@
         "docs/11-roadmap.md"
       ],
       "first_measured_at": "39129344104"
+    },
+    "cached_frame_stale_after_camera_pan": {
+      "kind": "phrase",
+      "value": "71,530",
+      "what": "Depth pixels the temporal cache's own frame disagreed with an uncacheable full march after the camera panned and EVERY pixel was invalidated - out of 230,400, on a 640x360 grid, in the first moved frame. The number that turned the cache's published dynamic rows from measurements into a claim about a picture that cannot show motion: a dirty pixel can be repaired by re-marching, but here it was repaired by re-reading a cached surface that had nothing to do with the new camera.",
+      "measured_by": "`crates/gpu/examples/r1_cached_dynamic_loop.rs`, camera-policy frame 1, run on this machine's GeForce MX250 at 640x360. It is NOT a CI step: the example exits 1 by design until the second cache layer is fixed (task #120), and a step whose expected colour is red is a note, not a gate. No duration from it is admissible for R1 - that needs the GTX 1070.",
+      "cited_in": [
+        "docs/04-rendering.md",
+        "PHASE1_EXIT_STATUS.md"
+      ]
+    },
+    "cached_frame_stale_after_entity_slide": {
+      "kind": "phrase",
+      "value": "21,424",
+      "what": "The worst repaired-disagreement the entity policy reaches after six frames of the sphere sliding and the union of its old and new footprints being invalidated - 21,424 of the 151,751 pixels the dirty mask actually marked, with 28,190 stale before the invalidation. The old footprint is invalidated as well as the new one on purpose: a pixel the entity vacated shows whatever stands behind it, so leaving it clean is a stale pixel by definition.",
+      "measured_by": "`crates/gpu/examples/r1_cached_dynamic_loop.rs`, entity-policy frame 6, run on this machine's GeForce MX250 at 640x360. Same disclaimer as the row above: not a CI step, exits 1 until task #120 lands, and carries no admissible R1 duration.",
+      "cited_in": [
+        "docs/04-rendering.md",
+        "PHASE1_EXIT_STATUS.md"
+      ]
     }
   },
   "gate_p1_5_targets": [
