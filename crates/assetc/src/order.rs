@@ -28,7 +28,15 @@ use crate::Shape;
 /// Deliberately conservative in the direction that costs work and not geometry: a rounded box reports its
 /// corner including the fillet, a smooth union grows its children by `k`, and anything whose extent cannot
 /// be stated finitely reports `None`, which makes the caller leave the order alone.
-fn extent(shape: &Shape) -> Option<([f32; 3], [f32; 3])> {
+///
+/// Published because a *caller* needs the same guarantee the sort keys lean on: the box **contains** every
+/// surface the lowered asset can draw, and `None` means no finite box may be claimed. That is what makes it
+/// safe to ask "does this wrapper's cell hold the part it wraps" from outside the compiler (`editor`'s MCP
+/// pipe does, in `wrap_part`'s notice). Overstating is sound here and understating is not, which is why a
+/// `Mirror` reports the join of its child and the child's reflection rather than the child alone — the box
+/// the renderer's own `cull` puts around a `NODE_MIRROR` (`crates/render/src/cull.rs`, the `NODE_MIRROR`
+/// arm) is built the same way, from the same axis, with the same clamp.
+pub fn extent(shape: &Shape) -> Option<([f32; 3], [f32; 3])> {
     match shape {
         Shape::Sphere { r, centre } => Some((
             [centre[0] - r, centre[1] - r, centre[2] - r],
@@ -50,9 +58,20 @@ fn extent(shape: &Shape) -> Option<([f32; 3], [f32; 3])> {
         }
         // The kept solid contains the difference, so its extent is the extent of the result.
         Shape::Subtract { kept, .. } => extent(kept),
-        // Tiling repeats forever; mirroring would only double a box that is already stated.
+        // Tiling repeats forever, so there is no finite box to state.
         Shape::Repeat { .. } => None,
-        Shape::Mirror { child, .. } => extent(child),
+        // `Mirror` evaluates its child at `|p[axis]|`, so the drawn set is the child's positive side
+        // together with that side's reflection. Joining the child with its own reflection across the plane
+        // through zero states that; reporting the child alone would claim a surface at x = 0.14 covers
+        // nothing below the plane, when the same asset draws its copy at x = -0.14.
+        Shape::Mirror { axis, child } => {
+            let (low, high) = extent(child)?;
+            let axis = (*axis as usize).min(2);
+            let mut joined = (low, high);
+            joined.0[axis] = low[axis].min(-high[axis]);
+            joined.1[axis] = high[axis].max(-low[axis]);
+            Some(joined)
+        }
     }
 }
 

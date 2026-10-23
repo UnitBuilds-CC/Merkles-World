@@ -659,6 +659,105 @@ fn blend_k(arguments: &Value, combine: &str) -> Result<f32, String> {
     }
 }
 
+/// The three axes, named the way an authored `centre` reads.
+const AXES: [&str; 3] = ["x", "y", "z"];
+
+/// One box, as an author reads it in a sentence: `x -0.5..=0.5 y 0..=0.2 z -1..=1`.
+fn span_text(low: [f32; 3], high: [f32; 3]) -> String {
+    AXES.iter()
+        .zip(low.iter().zip(high.iter()))
+        .map(|(axis, (lo, hi))| format!("{axis} {lo}..={hi}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What the part a wrapper holds actually contributes to the drawn field.
+///
+/// Returns the part's authored box (`Value::Null` when no finite box states it) beside a sentence that is
+/// present only when the wrapper **discards** part of the wrap. A wrapper is an isometry of the *query
+/// point*, not of the child: a `Repeat` consults its child only at the point folded into
+/// `[-period/2, period/2)` on every axis, and a `Mirror` only at `|p[axis]|`. So what survives a wrap is
+/// the child's intersection with the wrapper's own domain — tiled or reflected — and not the child
+/// wherever it happens to sit. When that intersection is empty the call has compiled, lowered, selected and
+/// marked dirty exactly as if it had drawn something: only the frame knows. This is the half the frame
+/// knows, said in the reply instead.
+///
+/// The box comes from `assetc::order::extent`, the same function the compiler's union sort keys are built
+/// from, so the notice and the layout cannot drift into describing two different shapes. It overstates
+/// where it must (`Subtract` reports its kept operand, a `Mirror` its child plus the reflection), which is
+/// the safe direction: an overstated box warns about a part that in fact draws, and never blesses one that
+/// would be dropped.
+fn wrap_notice(wrapper: &Shape, held: &Shape) -> (Value, Option<String>) {
+    let (low, high) = match assetc::order::extent(held) {
+        // A `Plane` or a nested tiling has no finite box, so nothing here can be claimed about the cell.
+        None => {
+            return (
+                Value::Null,
+                Some(
+                    "the part has no finite extent - a Plane, or a tiling inside it - so the pipe cannot \
+                     say whether the wrapper's own domain reaches it. Look at the frame this draws before \
+                     relying on it."
+                        .to_string(),
+                ),
+            );
+        }
+        Some(box_at) => box_at,
+    };
+    let authored = span_text(low, high);
+    let json = json!([[low[0], low[1], low[2]], [high[0], high[1], high[2]]]);
+    let notice = match wrapper {
+        Shape::Repeat { period, .. } => {
+            let half = period * 0.5;
+            // The cell is a product of three equal intervals, so one axis missing it is the whole part
+            // missing it.
+            let outside = (0..3).any(|axis| high[axis] < -half || low[axis] > half);
+            let clipped = (0..3).any(|axis| low[axis] < -half || high[axis] > half);
+            if outside {
+                Some(format!(
+                    "a Repeat consults its child only inside the cell {} about the origin, and the part it \
+                     wraps is {authored}, none of which lies in it: this wrap compiles and draws nothing. \
+                     Widen `period` until the cell reaches the part, or move the part in - the grammar has \
+                     no translate node, so a sphere moves by its own `centre`.",
+                    span_text([-half, -half, -half], [half, half, half])
+                ))
+            } else if clipped {
+                Some(format!(
+                    "a Repeat consults its child only inside the cell {} about the origin, and the part it \
+                     wraps is {authored}, which reaches outside it: only the piece inside the cell is \
+                     tiled, so the wrap silently drops the rest. Widen `period` or move the part in.",
+                    span_text([-half, -half, -half], [half, half, half])
+                ))
+            } else {
+                None
+            }
+        }
+        Shape::Mirror { axis, .. } => {
+            let axis = (*axis as usize).min(2);
+            let plane = AXES[axis];
+            if high[axis] < 0.0 {
+                Some(format!(
+                    "a Mirror consults its child only at {plane} >= 0 - it evaluates the field at \
+                     |{plane}| - and the part it wraps is {authored}, wholly on the negative side: this \
+                     wrap compiles and draws nothing. Move the part to {plane} >= 0, and the Mirror gives \
+                     you the other side for free."
+                ))
+            } else if low[axis] < 0.0 {
+                Some(format!(
+                    "a Mirror consults its child only at {plane} >= 0, and the part it wraps is {authored}, \
+                     which crosses the plane: only its {plane} >= 0 half is evaluated, and the reflection \
+                     takes the place of the authored negative half rather than adding to it.",
+                ))
+            } else {
+                None
+            }
+        }
+        // Every other combinator is a plain set operation on the whole child: nothing it holds can be
+        // discarded by where it sits.
+        _ => None,
+    };
+    (json, notice)
+}
+
 /// Put a rebuilt tree into the state, answering the whole call with the compiler's own refusal if the
 /// tree it would leave cannot compile.
 ///
@@ -787,8 +886,9 @@ fn add_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String>
 /// A `Repeat` folds the *query point* into the cell `[-period/2, period/2)` on every axis before its
 /// child is evaluated (`render::wrap`, transcribed identically in `interp.wgsl`), so the tiles are copies
 /// of whatever the child has inside that cell — not copies of the child wherever it sits. A part authored
-/// wholly outside the cell therefore renders as nothing, and the frame the pipe returns says so. This is
-/// the compiler's meaning, not this call's: `add_part` wraps, and the wrap is visible in the field.
+/// wholly outside the cell therefore renders as nothing, and [`wrap_notice`] is what says so in this
+/// reply rather than only in the frame. This is the compiler's meaning, not this call's: `add_part` wraps,
+/// and the wrap is visible in the field.
 fn wrap_part(
     state: &mut EditorState,
     arguments: &Value,
@@ -850,6 +950,7 @@ fn wrap_part(
     let now = shape_path::resolve(tree, &steps).expect("commit put the wrapper at this route");
     let held = shape_path::resolve(tree, &held_path)
         .expect("a wrapper holds one node at its own child step");
+    let (extent, notice) = wrap_notice(now, held);
     Ok(json!({
         "at": at,
         "into": combine,
@@ -863,6 +964,8 @@ fn wrap_part(
             "route": route_name(tree, &held_path),
             "kind": shape_path::kind(held),
             "summary": shape_path::summary(held),
+            "extent": extent,
+            "notice": notice,
         },
         "selected": at,
         "nodes_before": before,
@@ -1390,7 +1493,7 @@ pub fn tool_specs() -> Value {
         },
         {
             "name": "add_part",
-            "description": "Grow the tree. With combine Union, Subtract, Intersect or SmoothUnion: wrap the node a route names (or the selected one) in that combinator, joining it to a freshly authored Sphere, RoundedBox or Plane. Every field of the new leaf is required, in the ranges set_part offers; k is required for a SmoothUnion and refused for the rest. keep names which slot the existing node stays in (a/b, or kept/cutter for a Subtract) and defaults to the first. With combine Mirror or Repeat: wrap that node in the one-child wrapper instead — no shape, no keep, and its own field (axis, period) required beside combine in the ranges set_part offers. A Repeat tiles the fold cell [-period/2, period/2) about the origin, so it repeats what lies inside that cell and renders a part authored wholly outside it as nothing; a Mirror folds about its own plane and doubles whatever sits off it. Either call refuses, leaving the tree untouched, if the tree it would leave cannot be compiled.",
+            "description": "Grow the tree. With combine Union, Subtract, Intersect or SmoothUnion: wrap the node a route names (or the selected one) in that combinator, joining it to a freshly authored Sphere, RoundedBox or Plane. Every field of the new leaf is required, in the ranges set_part offers; k is required for a SmoothUnion and refused for the rest. keep names which slot the existing node stays in (a/b, or kept/cutter for a Subtract) and defaults to the first. With combine Mirror or Repeat: wrap that node in the one-child wrapper instead — no shape, no keep, and its own field (axis, period) required beside combine in the ranges set_part offers. A Repeat tiles the fold cell [-period/2, period/2) about the origin, so it repeats what lies inside that cell and renders a part authored wholly outside it as nothing; a Mirror folds about its own plane and doubles whatever sits off it. A wrapper that discards part of what it wraps is not an error — it is legal grammar that draws less than it holds — so the wrap lands and answers with wrapped.extent, the box it measured, and wrapped.notice, which names the cell or plane and what the wrap leaves of it; both are null when the wrapper's domain reaches the whole part. Either call refuses, leaving the tree untouched, if the tree it would leave cannot be compiled.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

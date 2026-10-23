@@ -61,7 +61,17 @@ minimum of those spheres computed in the test, at 288 sample points. The scope i
 `Subtract`'s operand order is its meaning, a `SmoothUnion`'s children are not free to move past its blend,
 and a `Plane` or `Repeat` has no finite extent to sort on, so those forests are left as authored rather
 than given an invented coordinate. The reason to do this at all is measured in doc 04: tree shape is worth
-2.6× to 3.0× of the renderer's per-node culling, and an author should not have to know that. The tests in `crates/assetc/tests/lowering.rs` check the lowered tree against
+2.6× to 3.0× of the renderer's per-node culling, and an author should not have to know that.
+`order::extent` — the AABB that transform sorts on — is published rather than private, because the editor's
+MCP pipe measures a wrapped part against it before it says anything about what the wrap leaves. Its contract
+is then stated out loud: the box **contains** every surface the lowered asset can draw, and `None` means no
+finite box may be claimed. Overstating is sound and understating is the bug, and the `Mirror` arm understated:
+it reported its child's own box, which is harmless for a sort key and wrong for a claim, because a `Mirror`
+evaluates its child at `|p[axis]|` and so draws the reflection of the side it keeps. The arm now joins the
+child with its own reflection across the plane through zero — which is the enclosure `crates/render/src/cull.rs`
+independently builds for a `NODE_MIRROR`, from the same axis and with the same clamp. Making that arm honest
+moves no byte of anything this repo ships: `tools/check_boot_digest.sh` on the repaired `extent` measures
+`db71f8a0bf5818d6…`, the published whole-output digest, unchanged. The tests in `crates/assetc/tests/lowering.rs` check the lowered tree against
 `crates/render`'s hand-built scene, so a compiled tree answers the same distance questions as the
 tree an author would have written by hand. `crates/assetc::writer::to_bytes` serialises that into real `ShapeAsset` bytes.
 `crates/assetc::reader::from_bytes` is the load side doc 09 has always asked for: walk the root

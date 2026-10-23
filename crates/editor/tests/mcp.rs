@@ -2038,6 +2038,246 @@ fn a_wrapper_takes_its_own_field_from_the_same_table_and_refuses_the_two_operand
     assert_eq!(after["dirty"], json!(false));
 }
 
+/// A `Repeat` folds the *query point* into its cell, so what tiles is the child's intersection with that
+/// cell — not the child. A part authored away from the origin therefore survives the wrap in the tree, in
+/// the compiled bytes and in `node_count`, while contributing no pixel at all. `wrap_part` reports the box
+/// it measured and says which of the three cases it is in, and the cell it quotes is the one the `period`
+/// this call was handed actually opens.
+#[test]
+fn a_repeat_that_drops_the_part_it_wraps_outside_its_cell_says_so() {
+    // One part, three cells: wholly outside, straddling, wholly inside. The box is the same all three
+    // times, so what moves is only the notice - and the numbers in it.
+    for (period, expected) in [
+        (1.0f32, Some("none of which lies in it")),
+        (4.0, Some("only the piece inside the cell is tiled")),
+        (5.0, None),
+    ] {
+        let mut state = fresh();
+        call(
+            &mut state,
+            "set_part",
+            json!({ "parameter": "r", "value": 0.25 }),
+        );
+        call(
+            &mut state,
+            "set_part",
+            json!({ "parameter": "centre", "value": [2.0, 0.0, 0.0] }),
+        );
+        let wrapped = call(
+            &mut state,
+            "add_part",
+            json!({ "combine": "Repeat", "period": period }),
+        );
+        // The part's own box, derived from the two fields just set rather than typed here beside them.
+        assert_eq!(
+            wrapped["wrapped"]["extent"],
+            json!([[1.75, -0.25, -0.25], [2.25, 0.25, 0.25]]),
+            "the reply reports a box that is not the sphere this call wrapped"
+        );
+        let half = period * 0.5;
+        let cell = format!("x {}..={}", -half, half);
+        match expected {
+            Some(phrase) => {
+                let notice = wrapped["wrapped"]["notice"].as_str().unwrap_or_else(|| {
+                    panic!("a {period} cell drops part of the part and says nothing")
+                });
+                assert!(
+                    notice.contains(phrase),
+                    "the notice for a {period} cell says {notice:?}, which does not mention {phrase:?}"
+                );
+                assert!(
+                    notice.contains(&cell) && notice.contains("1.75..=2.25"),
+                    "the notice for a {period} cell quotes neither the cell it opens ({cell}) nor the \
+                     box it dropped: {notice:?}"
+                );
+            }
+            None => assert_eq!(
+                wrapped["wrapped"]["notice"],
+                json!(null),
+                "a cell wide enough to hold the whole part still warned: {}",
+                wrapped["wrapped"]["notice"]
+            ),
+        }
+    }
+
+    // A part with no finite box is neither clean nor dropped: the pipe says it cannot tell.
+    let mut state = fresh();
+    call(
+        &mut state,
+        "add_part",
+        json!({
+            "combine": "Union",
+            "shape": { "kind": "Plane", "normal": [0.0, 1.0, 0.0], "offset": 0.0 },
+        }),
+    );
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Repeat", "period": 1.0, "route": "root.b" }),
+    );
+    assert_eq!(wrapped["wrapped"]["kind"], json!("Plane"));
+    assert_eq!(
+        wrapped["wrapped"]["extent"],
+        json!(null),
+        "a half-space was given a finite box"
+    );
+    assert!(
+        wrapped["wrapped"]["notice"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no finite extent"),
+        "the wrap of a plane reported neither a box nor that it cannot state one: {}",
+        wrapped["wrapped"]["notice"]
+    );
+}
+
+/// The same hazard on the other wrapper: a `Mirror` evaluates its child at `|p[axis]|`, so a part sitting
+/// wholly on the negative side of the plane is consulted nowhere and draws nothing, and a part crossing the
+/// plane loses its authored negative half to the reflection. Both name the axis the call was handed.
+#[test]
+fn a_mirror_that_throws_its_child_to_the_wrong_side_of_its_plane_says_so() {
+    let cases = [
+        (0u8, [2.0, 0.0, 0.0], None),
+        (0, [-2.0, 0.0, 0.0], Some("wholly on the negative side")),
+        (1, [0.0, -2.0, 0.0], Some("wholly on the negative side")),
+        (2, [0.0, 0.0, -2.0], Some("wholly on the negative side")),
+    ];
+    for (axis, centre, expected) in cases {
+        let mut state = fresh();
+        call(
+            &mut state,
+            "set_part",
+            json!({ "parameter": "centre", "value": centre }),
+        );
+        let wrapped = call(
+            &mut state,
+            "add_part",
+            json!({ "combine": "Mirror", "axis": axis }),
+        );
+        let plane = ["x", "y", "z"][axis as usize];
+        let notice = wrapped["wrapped"]["notice"].clone();
+        match expected {
+            Some(phrase) => {
+                let text = notice.as_str().unwrap_or_else(|| {
+                    panic!("a part at {centre:?} mirrored about {plane} says nothing")
+                });
+                assert!(
+                    text.contains(phrase) && text.contains(&format!("{plane} >= 0")),
+                    "the notice for a {plane} mirror of {centre:?} says {text:?}: it names neither \
+                     {phrase:?} nor the side a Mirror consults"
+                );
+            }
+            None => assert_eq!(
+                notice,
+                json!(null),
+                "a part already on the side a {plane} mirror reads still warned: {notice}"
+            ),
+        }
+    }
+
+    // A sphere straddling the plane: the authored half below it is not mirrored in addition, it is
+    // replaced by the reflection of the half above.
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "parameter": "r", "value": 2.5 }),
+    );
+    call(
+        &mut state,
+        "set_part",
+        json!({ "parameter": "centre", "value": [-1.0, 0.0, 0.0] }),
+    );
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Mirror", "axis": 0 }),
+    );
+    assert_eq!(
+        wrapped["wrapped"]["extent"],
+        json!([[-3.5, -2.5, -2.5], [1.5, 2.5, 2.5]])
+    );
+    assert!(
+        wrapped["wrapped"]["notice"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("crosses the plane"),
+        "a Mirror of a part that straddles its plane did not say the authored far half is replaced: {}",
+        wrapped["wrapped"]["notice"]
+    );
+}
+
+/// The notice is a claim about pixels, so it is checked against the march rather than only against the
+/// arithmetic: the same part, one call apart, with and without the wrapper that discards it. `stage: false`
+/// because the preview floor is geometry the notice is not talking about.
+#[test]
+fn what_a_wrapper_discards_is_exactly_what_the_marched_frame_loses() {
+    let frame = json!({ "view": "front", "width": 64, "height": 48, "stage": false });
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "parameter": "r", "value": 0.4 }),
+    );
+    call(
+        &mut state,
+        "set_part",
+        json!({ "parameter": "centre", "value": [0.0, -0.6, 0.0] }),
+    );
+    let plain = call(&mut state, "render_view", frame.clone());
+    assert!(
+        plain["surface_pixels"].as_u64().expect("a count") > 0,
+        "the part draws nothing even before it is wrapped, so this compares a wrap with nothing at all: \
+         {plain}"
+    );
+
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Mirror", "axis": 1 }),
+    );
+    assert!(
+        wrapped["wrapped"]["notice"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("draws nothing"),
+        "the notice for a part below the mirror's plane says: {}",
+        wrapped["wrapped"]["notice"]
+    );
+    let mirrored = call(&mut state, "render_view", frame.clone());
+    assert_eq!(
+        mirrored["surface_pixels"],
+        json!(0),
+        "the notice promised this wrap draws nothing and the march found {} pixels of it",
+        mirrored["surface_pixels"]
+    );
+
+    // The same part on the side a Mirror reads: no notice, and the frame is back.
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "parameter": "r", "value": 0.4 }),
+    );
+    call(
+        &mut state,
+        "set_part",
+        json!({ "parameter": "centre", "value": [0.0, 0.6, 0.0] }),
+    );
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Mirror", "axis": 1 }),
+    );
+    assert_eq!(wrapped["wrapped"]["notice"], json!(null));
+    let mirrored = call(&mut state, "render_view", frame);
+    assert!(
+        mirrored["surface_pixels"].as_u64().expect("a count") > 0,
+        "a wrap the notice called clean drew nothing, so the two halves of this pair say opposite things \
+         about the same tree: {mirrored}"
+    );
+}
+
 /// Every wrapper the server advertises is built here, with its field named and its value written out in
 /// this test rather than read back from `params` — so a kind added to the list without a row here, or one
 /// that stopped carrying the field this call needs, fails instead of going unexercised.

@@ -263,7 +263,7 @@ Eleven tools:
 | `set_transform` | `position`, `rotation`, `scale`, `material_id` — every field validated before any field is applied |
 | `select_part` | a route as `editor_state` prints it (`root`, `root.b`, `root.b.kept`) in, the node's kind, summary and parameter list out. Selecting is not editing: it marks nothing dirty and leaves `preview_signature` alone |
 | `set_part` | one authored field of one node — a `Sphere`'s `r` or `centre`, a `RoundedBox`'s `half` or `r`, a `Plane`'s `normal` or `offset`, a `SmoothUnion`'s `k`, a `Repeat`'s `period`, a `Mirror`'s `axis` — with the route optional: without one it writes the node the editor already holds selected |
-| `add_part` | grows the tree one of two ways. `Union`, `Subtract`, `Intersect` or `SmoothUnion` wraps the node a route names in that combinator, joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `Mirror` or `Repeat` wraps it alone — no `shape`, no `keep`, and the wrapper's own `axis` or `period` beside `combine`, from the same table `set_part` writes. `route` optional: without one it wraps the selected node |
+| `add_part` | grows the tree one of two ways. `Union`, `Subtract`, `Intersect` or `SmoothUnion` wraps the node a route names in that combinator, joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `Mirror` or `Repeat` wraps it alone — no `shape`, no `keep`, and the wrapper's own `axis` or `period` beside `combine`, from the same table `set_part` writes. `route` optional: without one it wraps the selected node. A wrapper that discards part of what it wraps is not an error — it is legal grammar that draws less than it holds — so the wrap lands and answers with `wrapped.extent`, the box it measured, and `wrapped.notice`, which names the cell or the plane and what the wrap leaves of it; both are null when the wrapper's domain reaches the whole part |
 | `delete_part` | a route in, the node out. A one-child wrapper goes by **unwrapping**, at any depth: the node it held takes the wrapper's place, the subtree below it comes along, and the selection stays on the route the wrapper held because that route still names a node — the promoted one. A two-operand combinator cannot hold one operand, so there its surviving operand takes the combinator's place, the tree loses two nodes, and the selection goes back to `root`, because every path under a collapse now means something else. Deleting the sole child of a wrapper is refused, and the refusal names the route that wrapper actually holds as the call that works |
 | `move_part` | two routes in, both ends out. It is an **exchange**, not a reparent: the node at `from` and the node at `to` trade places, every other route keeps resolving to the same node it did, and `node_count` is unchanged. Refused: a pair on one line from the root (one holds the other, so one write would land inside the other and a subtree would be lost rather than moved), `root` as either end for the same reason, the same route twice, and two routes holding identical content — an exchange of equals moves nothing |
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts. `view` names one of the six angles; only leaving it off steers by `yaw`, `pitch` and `distance`, and the file is then named `custom`. A `view` of any other type — a number, a boolean, an array, an object, `null` — is refused rather than read as "no view" |
@@ -335,14 +335,24 @@ Ten of those decisions are about honesty rather than features:
   `delete_part` taking a one-child wrapper out by unwrapping it, wherever it sits: without it, wrapping a
   node would be the one edit in this pipe an author cannot take back, and the only way out of a `Repeat`
   under a `Mirror` was deleting the `Mirror` over it and everything else it held.
-- **A `Repeat` tiles its fold cell, not the part.** The compiler folds the *query point* into
-  `[-period/2, period/2)` on every axis before the child is evaluated (`render::wrap`, transcribed
-  identically in `interp.wgsl`), so the copies are of whatever the child has inside that cell — not of the
-  child wherever it sits. A part authored wholly outside the cell renders as nothing: the wrap succeeds,
-  the tree gains its node, and the frame loses the part. That is the grammar's meaning and not this pipe's,
-  so `add_part` does not refuse it; the tool description says it in those words, and the suite pins both
-  sides of the line, because a caller reading only `node_count` would take a blank frame for a broken
-  editor.
+- **A wrapper is an isometry of the *query point*, not of the part it holds.** The compiler folds the point
+  into `[-period/2, period/2)` on every axis before the child is evaluated (`render::wrap`, transcribed
+  identically in `interp.wgsl`), so a `Repeat`'s copies are of whatever the child has inside that cell — not
+  of the child wherever it sits. A `Mirror` evaluates the field at `|p[axis]|`, so it consults its child only
+  at `axis >= 0`, and the reflection *takes the place of* the authored negative half rather than adding to it.
+  A part authored wholly outside the cell, or wholly below the plane, renders as nothing: the wrap compiles,
+  lowers, lands, selects and marks dirty exactly as one that draws would, and only the frame knows. That is the
+  grammar's meaning and not this pipe's, so `add_part` does not refuse it — but since increment 9 it does not
+  stay silent either. `wrap_part` measures the held part's box with `assetc::order::extent`, the same function
+  the union sort keys are built from, so the notice and the layout cannot drift into describing two different
+  shapes; it overstates where it must (`Subtract` reports its kept operand, a `Mirror` its child plus the
+  reflection), which is the safe direction — an overstated box warns about a part that in fact draws, and never
+  blesses one that would be dropped. The wrap then answers with `wrapped.extent` and `wrapped.notice`: the box,
+  and a sentence naming the cell or the plane, the part's authored coordinates, and which of "draws nothing",
+  "drops the piece outside it" or "loses its negative half to the reflection" applies. A part with no finite
+  box — a `Plane`, or a tiling nested inside it — gets the honesty that fits: the notice says the pipe cannot
+  tell, and to look at the frame. `order::extent`'s `Mirror` arm was the understating kind of wrong before
+  this call existed (doc 09), which is the one place an increment in the editor's pipe repaired the compiler.
 - **`render_view` names the state in the filename** (`{view}-{preview_signature:016x}.png`), so two
   renders of two states cannot collide into one path and a reader told "this is the pig after the scale
   edit" can check that against the signature the same call returns.
@@ -399,7 +409,7 @@ Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
 setting them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 46 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 49 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -505,6 +515,34 @@ because the pipe reads it that way for `route` and `keep` and the schema types `
 spelling that does mean "steer myself" is required to still work: the call with the key left out renders the
 custom camera, reports `view == "custom"` with zero undrawn pixels, and its file is required to carry the
 `custom-` prefix — the name being the half of the old defect that made the reply self-consistent.
+Increment 9 adds three rows on the pipe's side and one on the compiler's. `a_repeat_that_drops_the_part_it_wraps_outside_its_cell_says_so`
+walks one authored sphere — `r` 0.25 at `x = 2.0`, so its box is `1.75..=2.25` on x — through three periods and
+requires a different answer from each: 1.0 opens a cell at `-0.5..=0.5`, wholly clear of the part, and the notice has
+to say *none of which lies in it*; 4.0 reaches the part but not past it, and the notice has to say only the piece
+inside the cell is tiled; 5.0 holds it entire, and the notice comes back null because there is nothing to report.
+`wrapped.extent` is pinned to the part's authored box in all three, so the reply states which of the two boxes it
+measured, and each period's own cell bounds are recomputed in the test from the period and required to appear in the
+message — a notice quoting some other cell cannot pass. The row then wraps a `Plane`: no finite box means no claim,
+so `extent` is null and the notice says the pipe cannot tell and sends the author to the frame.
+`a_mirror_that_throws_its_child_to_the_wrong_side_of_its_plane_says_so` runs the same shape of check over the three
+axes — a sphere at `x = -2.0` mirrored on `axis 0`, at `y = -2.0` on `axis 1`, at `z = -2.0` on `axis 2` each warns
+*wholly on the negative side* and names that axis's `>= 0`, and the same part at positive x is required to report
+nothing — and then the straddling case: a `r` 2.5 sphere at `x = -1.0` under `axis 0` has the authored box
+`[-3.5, -2.5, -2.5]..=[1.5, 2.5, 2.5]`, which the reply is required to print, and the notice has to say the plane is
+crossed and that the reflection replaces the authored negative half rather than adding to it.
+`what_a_wrapper_discards_is_exactly_what_the_marched_frame_loses` is the row that stops the other two from being a
+description of a claim instead of a check: it asks the same question of the march. A part at `y = -0.6`, `r` 0.4,
+draws surface unwrapped; the `axis 1` mirror over it warns *draws nothing* and the very next `render_view` is
+required to answer `surface_pixels == 0`; the same part moved to `y = +0.6` gets a null notice and draws again. The
+stage has to be switched off for that — `render_view` draws the preview stage by default, and the first live run of
+this increment reported 3,501 surface pixels for a wrap that had just been told draws nothing, which was the
+instrument disagreeing rather than the notice. On the compiler's side,
+`an_authored_extent_contains_every_point_the_lowered_asset_draws` states the containment invariant the notice leans
+on and cannot see: over the 288-point lattice the suite already uses, every sample the *lowered* tree reports as
+inside (`sdf_eval` at or below zero) is required to lie within the box `extent` claims for the *authored* shape — for
+a mirror of an off-plane pair, a mirror below a union, a blend, a difference and a rounded box. It pins the mirrored
+pair's box as `[-2.0, -0.5, -0.5]..=[2.0, 0.5, 0.5]`, which is the child's `0.5..=2.0` joined with its own
+reflection, and it pins `None` for a `Plane` and for a `Repeat` rather than a guessed reach.
 
 Each of those checks was run against a planted defect in the clause it is meant to police, on this machine,
 and each plant is recorded with the one test it named: dropping `assetc::lower` from `commit` named the
@@ -569,6 +607,21 @@ same row from its `null` entry with the same picture in the panic. No frame asse
 can see either: the picture a fallthrough draws, its path and its pixel counts are exactly what the same
 camera produces when it is asked for legitimately, so the only observable is whether the call answers with a
 result or with a refusal. Both reverted and the suite re-run green afterwards.
+Increment 9's three plants each named the row that polices the clause they broke, and the third is the reason
+the increment has a compiler test in it. Hard-coding the cell half to `0.5` instead of reading it from the
+`period` the call was handed — a notice that quotes a cell the wrap does not open — named
+`a_repeat_that_drops_the_part_it_wraps_outside_its_cell_says_so` alone, 48 green. Reading every `Mirror` as
+`axis 0` — the wrapper consulted on the wrong side, so a `y` or `z` mirror of a negative part says nothing and an
+`axis 1` mirror of a part below it claims the plane is crossed — named **two**: the prose row and
+`what_a_wrapper_discards_is_exactly_what_the_marched_frame_loses`, whose `surface_pixels == 0` assertion is the
+march's own answer to the same question; that is the honest report, not one row per plant. The third plant was in
+the compiler rather than the pipe: reverting `order::extent`'s `Mirror` arm to the child alone — the understating
+box this increment found and fixed — named the assetc row and nothing else, at
+`a mirror of an off-plane pair draws the solid point [-2.0, 0.0, 0.0], outside the box [0.5, -0.5, -0.5]..=[2.0,
+0.5, 0.5] it claims`, while all 49 editor rows stayed green beside it. An understated box is invisible to the
+notice that is built from it: the warning still fires, still quotes a box, and is simply wrong about the geometry,
+which is why the containment invariant had to be stated where the box is. All three reverted, files compared
+byte-for-byte against the pre-plant copies, and both suites re-run green afterwards.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
@@ -720,7 +773,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a render follows the state and refuses a `view` it cannot name, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 46 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 49 tests |
 
 ## Migration from current code
 

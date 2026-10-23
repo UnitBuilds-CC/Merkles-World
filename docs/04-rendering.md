@@ -636,7 +636,7 @@ now bounds an out-of-range child as unbounded-and-unlicenced, and
 pins it on all three CI architectures (the example only reproduces it on a device runner, which is why the test
 exists). The test found its own boundary: walking that fixture with `sdf_eval_bnb` still panics, in
 `lower_bound`, and that is left as the correct behaviour — the contract that refuses malformed assets is
-`validate`, not the hot branch of a walk that is already invalid. Suite size is **298 tests in 36 suites**.
+`validate`, not the hot branch of a walk that is already invalid. Suite size is **302 tests in 36 suites**.
 
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 

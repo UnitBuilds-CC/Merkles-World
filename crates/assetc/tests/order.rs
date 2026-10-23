@@ -5,7 +5,7 @@
 //! change what the shape means, so every test here is stated as an equality - of bytes, of depths, or of
 //! the distance a point evaluates to - rather than as a percentage.
 
-use assetc::order::rebalance;
+use assetc::order::{extent, rebalance};
 use assetc::{lower, Shape};
 use render::{sdf_eval, Tree, ROOT};
 
@@ -158,4 +158,91 @@ fn a_union_of_a_smooth_union_and_a_sphere_is_flattened_only_to_its_own_level() {
     assert_eq!(*k, 0.8);
     assert_eq!(**left, sphere(1.0, -8.0));
     assert_eq!(**right, sphere(1.0, -5.0));
+}
+
+/// `extent` is published because a caller outside the compiler asks it a question the sort keys never had
+/// to answer honestly: *does the box contain what the asset draws?* A sort key may be wrong and only
+/// reorder badly; a box handed to an author that leaves a surface outside it is a lie about the picture.
+///
+/// So the claim is tested against the evaluator rather than against the box's own arithmetic: every lattice
+/// point the lowered asset reports as inside the solid must sit inside the claimed box. The cases are the
+/// arms where a box is cheapest to get wrong - a `Mirror` whose child sits off its plane (the reflection
+/// draws where the child does not), a blend that bulges past both children by `k`, a difference, and a
+/// rounded corner - and the two kinds that must answer `None` rather than invent a coordinate.
+#[test]
+fn an_authored_extent_contains_every_point_the_lowered_asset_draws() {
+    let mirrored_pair = Shape::Mirror {
+        axis: 0,
+        child: Box::new(union(sphere(0.5, 1.5), sphere(0.25, 0.75))),
+    };
+    for (name, shape) in [
+        ("a mirror of an off-plane pair", mirrored_pair.clone()),
+        (
+            "a mirror below a union",
+            union(mirrored_pair.clone(), sphere(0.3, -4.0)),
+        ),
+        (
+            "a blend of two spheres",
+            Shape::SmoothUnion {
+                a: Box::new(sphere(0.6, -2.0)),
+                b: Box::new(sphere(0.6, 0.0)),
+                k: 0.7,
+            },
+        ),
+        (
+            "a difference",
+            Shape::Subtract {
+                kept: Box::new(sphere(2.0, 0.0)),
+                cutter: Box::new(sphere(0.5, 1.5)),
+            },
+        ),
+        (
+            "a rounded box",
+            Shape::RoundedBox {
+                half: [1.0, 0.5, 0.25],
+                r: 0.2,
+            },
+        ),
+    ] {
+        let (low, high) =
+            extent(&shape).unwrap_or_else(|| panic!("{name} has a finite box to state"));
+        let tree = lower(&shape)
+            .unwrap_or_else(|e| panic!("{name} does not lower: {e}"))
+            .tree;
+        for p in sample_points() {
+            if eval_at(&tree, p) <= 0.0 {
+                assert!(
+                    (0..3).all(|axis| low[axis] <= p[axis] && p[axis] <= high[axis]),
+                    "{name} draws the solid point {p:?}, outside the box {low:?}..={high:?} it claims"
+                );
+            }
+        }
+    }
+
+    // The arithmetic, pinned beside the invariant that only catches a box that is too small somewhere:
+    // the mirrored pair spans x 0.5..=2.0 as authored, and its reflection is what a viewer actually sees
+    // at x = -1.5, so the box is the join of the two and not the child alone.
+    assert_eq!(
+        extent(&mirrored_pair),
+        Some(([-2.0, -0.5, -0.5], [2.0, 0.5, 0.5])),
+        "a Mirror's box is its child joined with the child's reflection across the plane through zero"
+    );
+
+    // And the two kinds that tile or extend forever state that instead of guessing a reach.
+    assert_eq!(
+        extent(&Shape::Plane {
+            normal: [0.0, 0.0, 1.0],
+            offset: 0.0,
+        }),
+        None,
+        "a half-space has no finite box"
+    );
+    assert_eq!(
+        extent(&Shape::Repeat {
+            period: 2.0,
+            child: Box::new(sphere(0.3, 0.5)),
+        }),
+        None,
+        "a tiling repeats forever, so no box holds it"
+    );
 }
