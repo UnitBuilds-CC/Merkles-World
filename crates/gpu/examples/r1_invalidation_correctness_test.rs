@@ -53,6 +53,50 @@ fn scene() -> Tree {
     }
 }
 
+/// The pixels the listed regions are meant to cover, one boolean per pixel, built without any word arithmetic.
+///
+/// This is the half of the test the batch-versus-single comparison could never fail: both masks agreeing with
+/// each other says nothing about whether they marked the whole frame instead of the ten boxes.
+fn intended(width: u32, height: u32, regions: &[(u32, u32, u32, u32)]) -> Vec<bool> {
+    let mut covered = vec![false; (width * height) as usize];
+    for &(x, y, w, h) in regions {
+        for py in y..(y + h).min(height) {
+            for px in x..(x + w).min(width) {
+                covered[(py * width + px) as usize] = true;
+            }
+        }
+    }
+    covered
+}
+
+/// The same set read off the mask words that came back from the device.
+fn actual(words: &[u32], width: u32, height: u32) -> Vec<bool> {
+    (0..width * height)
+        .map(|pixel| (words[(pixel / 32) as usize] >> (pixel % 32)) & 1 != 0)
+        .collect()
+}
+
+/// Refuse unless the device's mask covers exactly the intended pixels.
+fn assert_covers(
+    mask: &[u32],
+    width: u32,
+    height: u32,
+    regions: &[(u32, u32, u32, u32)],
+    label: &str,
+) {
+    let want = intended(width, height, regions);
+    let got = actual(mask, width, height);
+    let extra = want.iter().zip(&got).filter(|(w, g)| **g && !**w).count();
+    let missing = want.iter().zip(&got).filter(|(w, g)| **w && !**g).count();
+    let pixels = want.iter().filter(|&&w| w).count();
+    println!(
+        "  {label}: {pixels} pixels intended, {extra} dirtied outside the regions, {missing} regions pixels left clean"
+    );
+    if extra != 0 || missing != 0 {
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let interpreter = match try_open_with_gpu_preference() {
         Ok(i) => i,
@@ -61,7 +105,6 @@ fn main() {
             return;
         }
     };
-
     println!("Invalidation Correctness Test");
     println!("==============================\n");
 
@@ -94,6 +137,7 @@ fn main() {
         println!("SKIP: temporal cache requires real GPU hardware");
         return;
     }
+    println!("Adapter: {adapter_name}\nGrid: {width}x{height}\n");
 
     let cull_variant = interpreter.camera_cull_variant().expect("culled variant");
 
@@ -137,6 +181,7 @@ fn main() {
         .read_dirty_mask(interpreter.device(), interpreter.queue())
         .expect("failed to read dirty mask");
     println!("  Dirty mask: {} words", dirty_mask_1.len());
+    assert_covers(&dirty_mask_1, width, height, &regions, "individual calls");
 
     // Clear dirty mask for method 2
     println!("\nClearing dirty mask for method 2...");
@@ -155,6 +200,7 @@ fn main() {
         .read_dirty_mask(interpreter.device(), interpreter.queue())
         .expect("failed to read dirty mask");
     println!("  Dirty mask: {} words", dirty_mask_2.len());
+    assert_covers(&dirty_mask_2, width, height, &regions, "one batch call");
 
     // Compare dirty masks
     println!("\nComparing dirty masks...");

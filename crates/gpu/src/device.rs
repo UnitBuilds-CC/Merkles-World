@@ -18,6 +18,8 @@
 //! [`Interpreter::open`] distinguishes "no adapter" from "adapter that would not open" and the caller
 //! prints a skip rather than a failure.
 
+use core::cell::RefCell;
+use core::ops::Range;
 use render::{sdf_eval, Ray, Tree, Vec3, ROOT};
 use wgpu::util::DeviceExt;
 
@@ -191,6 +193,14 @@ pub struct Bind {
     cache_bind: Option<wgpu::BindGroup>,
     /// Dirty mask buffer for delta rendering - allows CPU-side invalidation of cached pixels.
     dirty_mask_buf: Option<wgpu::Buffer>,
+    /// The host's copy of the dirty mask, word for word.
+    ///
+    /// `write_buffer` replaces, it cannot OR, so without a mirror of what the device already holds a second
+    /// region landing in a word the first one touched would clear that word's earlier bits. The mirror can
+    /// only ever *over*-report dirt, and the shader clears every bit it reads (`interp.wgsl`'s culled camera
+    /// entry), so a submitted cached frame leaves the device mask empty and this is reset with it. A miss of
+    /// that reset costs a re-march, never a stale pixel.
+    dirty_shadow: RefCell<Vec<u32>>,
     /// Cache statistics buffer [cache_hits, total_dirty_checked, reserved, reserved].
     cache_stats_buf: Option<wgpu::Buffer>,
     /// Width and height for calculating pixel indices from rectangles.
@@ -1130,6 +1140,7 @@ impl Interpreter {
             }),
             cache_bind: None, // Regular frames don't use temporal cache
             dirty_mask_buf: None,
+            dirty_shadow: RefCell::new(Vec::new()),
             cache_stats_buf: None,
             width: 0,
             height: 0,
@@ -1354,6 +1365,7 @@ impl Interpreter {
             }),
             cache_bind: None,
             dirty_mask_buf: None,
+            dirty_shadow: RefCell::new(Vec::new()),
             cache_stats_buf: None,
             width: frame.width,
             height: frame.height,
@@ -1399,6 +1411,7 @@ impl Interpreter {
                 bind,
                 cache_bind: None,
                 dirty_mask_buf: None,
+                dirty_shadow: RefCell::new(Vec::new()),
                 cache_stats_buf: None,
                 width: frame.width,
                 height: frame.height,
@@ -1502,6 +1515,7 @@ impl Interpreter {
             bind,
             cache_bind: Some(cache_bind),
             dirty_mask_buf: Some(dirty_mask_buf),
+            dirty_shadow: RefCell::new(vec![0xFFFF_FFFF; dirty_words]),
             cache_stats_buf: Some(cache_stats_buf),
             width: frame.width,
             height: frame.height,
@@ -1509,16 +1523,71 @@ impl Interpreter {
     }
 }
 
+/// Mark one pixel rectangle dirty in a host-side copy of the dirty mask, and return the run of mask words it
+/// touched.
+///
+/// The rectangle is frame-clamped, so an out-of-bounds or empty region marks nothing and returns `None`. The mask
+/// is built at `u64` width because a run can end exactly on a word boundary and ask for `1 << 32`; the arithmetic
+/// this replaces branched around that case, and the branch is what left it deriving the last word from the
+/// exclusive end and indexing an inverted slice range.
+fn mark_region(
+    shadow: &mut [u32],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Option<Range<usize>> {
+    if shadow.is_empty() || width == 0 || height == 0 {
+        return None;
+    }
+    let x_start = x.min(width);
+    let y_start = y.min(height);
+    let x_end = x.saturating_add(w).min(width);
+    let y_end = y.saturating_add(h).min(height);
+    if x_start >= x_end || y_start >= y_end {
+        return None;
+    }
+
+    let mut first_word = usize::MAX;
+    let mut last_word = 0usize;
+    for row in y_start..y_end {
+        let pixel_start = row * width + x_start;
+        let pixel_end = row * width + x_end;
+        let row_first = (pixel_start / 32) as usize;
+        // `pixel_end` is exclusive, so the last word the region occupies is one before its boundary when the
+        // boundary lands on a word edge. Deriving it from `pixel_end - 1` makes that case fall out of the
+        // division instead of needing a branch — the branch is what inverted the range here.
+        let row_last = ((pixel_end - 1) / 32) as usize;
+        for (offset, slot) in shadow[row_first..=row_last].iter_mut().enumerate() {
+            let base = ((row_first + offset) as u32) * 32;
+            let lo = pixel_start.max(base) - base;
+            let hi = pixel_end.min(base + 32) - base;
+            *slot |= ((1u64 << hi) - (1u64 << lo)) as u32;
+        }
+        first_word = first_word.min(row_first);
+        last_word = last_word.max(row_last);
+    }
+    Some(first_word..last_word + 1)
+}
+
+/// Copy a run of host mask words to the device at the byte offset those words live at.
+fn write_words(queue: &wgpu::Queue, mask: &wgpu::Buffer, shadow: &[u32], span: Range<usize>) {
+    let mut bytes = Vec::with_capacity(span.len() * 4);
+    for &word in &shadow[span.clone()] {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    queue.write_buffer(mask, (span.start * 4) as u64, &bytes);
+}
+
 impl Bind {
     /// Invalidate a rectangular region of the dirty mask, forcing those pixels to be re-marched.
     ///
-    /// This simulates entity movement by marking pixels within a bounding box as dirty.
-    /// The region is specified in pixel coordinates (x, y, width, height).
-    ///
-    /// Optimized for minimal allocations and direct GPU writes:
-    /// - Only allocates bytes for the affected word range, not the entire mask
-    /// - Uses u32 bulk operations where possible (32 pixels at once)
-    /// - Minimizes GPU transfer by computing exact byte range needed
+    /// This simulates entity movement by marking pixels within a bounding box as dirty. The region is
+    /// specified in pixel coordinates (x, y, width, height) and clamped to the frame; nothing outside it is
+    /// touched, which is the entire point of the delta path — the mask words that span crosses are the only
+    /// bytes written, and at 1080p the mask as a whole is 259,200 of them.
     ///
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
@@ -1529,99 +1598,48 @@ impl Bind {
             return; // No dirty mask buffer, nothing to invalidate
         };
 
-        let width = self.width;
-        if width == 0 || self.height == 0 {
+        let mut shadow = self.dirty_shadow.borrow_mut();
+        let Some(span) = mark_region(&mut shadow, self.width, self.height, x, y, w, h) else {
             return;
-        }
-
-        // Calculate pixel range with clamping
-        let x_start = x.min(width);
-        let y_start = y.min(self.height);
-        let x_end = (x + w).min(width);
-        let y_end = (y + h).min(self.height);
-
-        if x_start >= x_end || y_start >= y_end {
-            return; // Empty region
-        }
-
-        // Allocate the full dirty mask to ensure we don't lose data from previous invalidations
-        let total_words = (width * self.height).div_ceil(32) as usize;
-        let mut dirty_words = vec![0xFFFFFFFFu32; total_words]; // Start with all bits set (matching initial GPU state)
-
-        // Set dirty bits for this region
-        for py in y_start..y_end {
-            let row_start = py * width + x_start;
-            let row_end = py * width + x_end;
-
-            let first_word_idx = (row_start / 32) as usize;
-            let last_word_idx = (row_end / 32) as usize;
-
-            // Handle partial first word
-            if !row_start.is_multiple_of(32) {
-                let bit_start = row_start % 32;
-                let bits_in_first_word = 32 - bit_start;
-                let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
-                let shift = end_bit - bit_start;
-                let mask = if shift == 32 {
-                    0xFFFFFFFFu32 << bit_start
-                } else {
-                    ((1u32 << shift) - 1) << bit_start
-                };
-                dirty_words[first_word_idx] |= mask;
-            }
-
-            // Fill complete middle words (32 pixels at once)
-            let middle_start = if !row_start.is_multiple_of(32) {
-                first_word_idx + 1
-            } else {
-                first_word_idx
-            };
-            let middle_end = if !row_end.is_multiple_of(32) {
-                last_word_idx
-            } else {
-                last_word_idx + 1
-            };
-
-            dirty_words[middle_start..middle_end].fill(0xFFFFFFFF); // All 32 pixels dirty
-
-            // Handle partial last word
-            if !row_end.is_multiple_of(32) && last_word_idx > first_word_idx {
-                let bit_end = row_end % 32;
-                let mask = (1u32 << bit_end) - 1;
-                dirty_words[last_word_idx] |= mask;
-            }
-        }
-
-        // Write the entire dirty mask to GPU using extend_from_slice (more efficient than flat_map)
-        let mut bytes = Vec::with_capacity(dirty_words.len() * 4);
-        for &word in &dirty_words {
-            bytes.extend_from_slice(&word.to_le_bytes());
-        }
-
-        queue.write_buffer(dirty_mask_buf, 0, &bytes);
+        };
+        write_words(queue, dirty_mask_buf, &shadow, span);
     }
 
     /// Invalidate all pixels (force full re-march on next frame)
     pub fn invalidate_all(&self, queue: &wgpu::Queue) {
-        let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
-            return;
-        };
-
-        let total_words = (self.width * self.height).div_ceil(32) as usize;
-        let all_dirty: Vec<u8> = vec![0xFF; total_words * 4];
-        queue.write_buffer(dirty_mask_buf, 0, &all_dirty);
+        self.write_full_mask(queue, 0xFFFF_FFFF);
     }
 
     /// Clear all dirty bits (mark all pixels as clean/cached).
     /// Useful for resetting between test runs.
     pub fn clear_dirty_mask(&self, queue: &wgpu::Queue) {
+        self.write_full_mask(queue, 0);
+    }
+
+    /// Set every mask word to one value on the device and in the host mirror, together.
+    fn write_full_mask(&self, queue: &wgpu::Queue, word: u32) {
         let Some(ref dirty_mask_buf) = self.dirty_mask_buf else {
             return;
         };
+        let mut shadow = self.dirty_shadow.borrow_mut();
+        shadow.fill(word);
+        let len = shadow.len();
+        write_words(queue, dirty_mask_buf, &shadow, 0..len);
+    }
 
-        let total_words = (self.width * self.height).div_ceil(32) as usize;
-        let all_clean: Vec<u8> = vec![0x00; total_words * 4];
-        queue.write_buffer(dirty_mask_buf, 0, &all_clean);
+    /// Empty the host mirror after submitting a frame that marched the whole grid through the cache.
+    ///
+    /// `march_rays_from_camera_culled` clears a pixel's dirty bit on every path out of it - hit, sky, and
+    /// marched - and its only early return is for `index >= header.point_count`, which a camera frame sets to
+    /// its own pixel count, so a submitted frame leaves the device mask all zeros. The mirror has to agree or
+    /// the dirt of every frame since the last invalidation accumulates in it and gets re-pushed one region at a
+    /// time: the delta path would be marching the union of all past regions while believing it was caching. A
+    /// frame that marched only part of the grid would make this call wrong, and would need the mirror emptied
+    /// by the pixels that were read rather than by the whole frame.
+    fn take_consumed_mask(&self) {
+        if self.cache_bind.is_some() {
+            self.dirty_shadow.borrow_mut().fill(0);
+        }
     }
 
     /// Read back the dirty mask from GPU memory.
@@ -1665,6 +1683,10 @@ impl Bind {
         drop(view);
         staging.unmap();
 
+        // The device is the authority on which bits survive a march, so what came back becomes the mirror
+        // rather than being compared with it. `write_buffer` cannot OR, so every later partial write is built
+        // from this copy and has to match the device word for word outside the span it touches.
+        *self.dirty_shadow.borrow_mut() = words.clone();
         Some(words)
     }
 
@@ -1714,7 +1736,8 @@ impl Bind {
     /// Invalidate multiple rectangular regions in a single GPU write.
     ///
     /// More efficient than calling invalidate_region() multiple times when you have
-    /// several entities to invalidate, as it batches all writes into one transfer.
+    /// several entities to invalidate, as it batches all writes into one transfer: the words between
+    /// distant regions are rewritten from the mirror unchanged, so one copy covers them all.
     ///
     /// # Arguments
     /// * `queue` - The wgpu queue to submit the write to
@@ -1724,81 +1747,22 @@ impl Bind {
             return;
         };
 
-        if regions.is_empty() {
-            return;
-        }
-
-        let width = self.width;
-        if width == 0 || self.height == 0 {
-            return;
-        }
-
-        // Allocate the full dirty mask to ensure we don't lose data from previous invalidations
-        let total_words = (width * self.height).div_ceil(32) as usize;
-        let mut dirty_words = vec![0xFFFFFFFFu32; total_words]; // Start with all bits set (matching initial GPU state)
-
-        // Second pass: set dirty bits for all regions
+        let mut shadow = self.dirty_shadow.borrow_mut();
+        let mut span: Option<Range<usize>> = None;
         for &(x, y, w, h) in regions {
-            let x_start = x.min(width);
-            let y_start = y.min(self.height);
-            let x_end = (x + w).min(width);
-            let y_end = (y + h).min(self.height);
-
-            if x_start >= x_end || y_start >= y_end {
+            let Some(touched) = mark_region(&mut shadow, self.width, self.height, x, y, w, h)
+            else {
                 continue;
-            }
-
-            for py in y_start..y_end {
-                let row_start = py * width + x_start;
-                let row_end = py * width + x_end;
-
-                let first_word_idx = (row_start / 32) as usize;
-                let last_word_idx = (row_end / 32) as usize;
-
-                // Handle partial first word
-                if !row_start.is_multiple_of(32) {
-                    let bit_start = row_start % 32;
-                    let bits_in_first_word = 32 - bit_start;
-                    let end_bit = bit_start + (row_end - row_start).min(bits_in_first_word);
-                    let shift = end_bit - bit_start;
-                    let mask = if shift == 32 {
-                        0xFFFFFFFFu32 << bit_start
-                    } else {
-                        ((1u32 << shift) - 1) << bit_start
-                    };
-                    dirty_words[first_word_idx] |= mask;
-                }
-
-                // Fill complete middle words
-                let middle_start = if !row_start.is_multiple_of(32) {
-                    first_word_idx + 1
-                } else {
-                    first_word_idx
-                };
-                let middle_end = if !row_end.is_multiple_of(32) {
-                    last_word_idx
-                } else {
-                    last_word_idx + 1
-                };
-
-                dirty_words[middle_start..middle_end].fill(0xFFFFFFFF);
-
-                // Handle partial last word
-                if !row_end.is_multiple_of(32) && last_word_idx > first_word_idx {
-                    let bit_end = row_end % 32;
-                    let mask = (1u32 << bit_end) - 1;
-                    dirty_words[last_word_idx] |= mask;
-                }
-            }
+            };
+            span = Some(match span {
+                Some(existing) => existing.start.min(touched.start)..existing.end.max(touched.end),
+                None => touched,
+            });
         }
 
-        // Write the entire dirty mask to GPU using extend_from_slice (more efficient than flat_map)
-        let mut bytes = Vec::with_capacity(dirty_words.len() * 4);
-        for &word in &dirty_words {
-            bytes.extend_from_slice(&word.to_le_bytes());
+        if let Some(span) = span {
+            write_words(queue, dirty_mask_buf, &shadow, span);
         }
-
-        queue.write_buffer(dirty_mask_buf, 0, &bytes);
     }
 
     /// Invalidate an entity's screen-space bounding box.
@@ -2046,6 +2010,7 @@ impl Interpreter {
         }
         encoder.copy_buffer_to_buffer(&frame.traced, 0, &frame.staging, 0, size);
         self.queue.submit([encoder.finish()]);
+        bind.take_consumed_mask();
         let ms_submit_only = start.elapsed().as_secs_f64() * 1000.0;
         let raw = self.read(&frame.staging, size)?;
         let ms_frame_with_read = start.elapsed().as_secs_f64() * 1000.0;
@@ -2133,6 +2098,7 @@ impl Interpreter {
             pass.dispatch_workgroups(frame.pixels.div_ceil(64) as u32, 1, 1);
         }
         self.queue.submit([encoder.finish()]);
+        bind.take_consumed_mask();
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|error| format!("poll: {error}"))?;
@@ -2494,4 +2460,163 @@ pub fn sample_grid() -> Vec<Vec3> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod dirty_mask_tests {
+    use super::*;
+
+    /// The mask a set of rectangles should produce, built one pixel at a time with no word arithmetic at all.
+    ///
+    /// `mark_region`'s job is to set the same bits this naive loop does while only touching the words that
+    /// change, so the reference is deliberately the slow, obvious kind: a bug shared between the two would
+    /// have to be a bug in the pixel rectangle itself.
+    fn naive(width: u32, height: u32, regions: &[(u32, u32, u32, u32)]) -> Vec<u32> {
+        let mut words = vec![0u32; (width * height).div_ceil(32) as usize];
+        for &(x, y, w, h) in regions {
+            for py in y..(y + h).min(height) {
+                for px in x..(x + w).min(width) {
+                    let pixel = py * width + px;
+                    words[(pixel / 32) as usize] |= 1 << (pixel % 32);
+                }
+            }
+        }
+        words
+    }
+
+    /// The smallest run of words covering every non-zero word in `words`.
+    fn run(words: &[u32]) -> Range<usize> {
+        match (
+            words.iter().position(|&word| word != 0),
+            words.iter().rposition(|&word| word != 0),
+        ) {
+            (Some(first), Some(last)) => first..last + 1,
+            _ => 0..0,
+        }
+    }
+
+    fn set_pixels(words: &[u32]) -> u32 {
+        words.iter().map(|word| word.count_ones()).sum()
+    }
+
+    #[test]
+    fn every_rectangle_in_a_small_frame_marks_exactly_its_pixels() {
+        for width in [7u32, 32, 33, 64] {
+            let height = 4;
+            for y in 0..height {
+                for x in 0..width {
+                    for h in 1..=(height - y) {
+                        for w in 1..=(width - x) {
+                            let mut shadow = vec![0u32; (width * height).div_ceil(32) as usize];
+                            let expected = naive(width, height, &[(x, y, w, h)]);
+                            let touched = mark_region(&mut shadow, width, height, x, y, w, h)
+                                .expect("a rectangle inside the frame marks something");
+                            assert_eq!(shadow, expected, "width {width} region {x},{y} {w}x{h}");
+                            assert_eq!(touched, run(&expected), "span for {x},{y} {w}x{h}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The shape that panicked: a row segment inside one 32-pixel word, aligned at neither end.
+    #[test]
+    fn a_region_that_fits_inside_one_word_marks_its_own_bits() {
+        let (width, height) = (64u32, 4u32);
+        let mut shadow = vec![0u32; (width * height).div_ceil(32) as usize];
+        // Row 1, x 5..13 is pixels 69..77: one word, neither end on a boundary.
+        let touched = mark_region(&mut shadow, width, height, 5, 1, 8, 1).unwrap();
+        assert_eq!(touched, 2..3);
+        assert_eq!(
+            shadow,
+            vec![0, 0, 0x1FE0, 0, 0, 0, 0, 0],
+            "pixels 69..=76 are bits 5..=12 of word 2"
+        );
+    }
+
+    /// The delta path's whole purpose, stated as an assertion: after a frame has emptied the mask, invalidating
+    /// one entity's box dirties that box and nothing else.
+    #[test]
+    fn one_region_does_not_dirty_the_frame_around_it() {
+        let (width, height) = (128u32, 64u32);
+        let mut shadow = vec![0u32; (width * height).div_ceil(32) as usize];
+        mark_region(&mut shadow, width, height, 40, 20, 16, 16).unwrap();
+        assert_eq!(set_pixels(&shadow), 16 * 16);
+        assert_eq!(shadow, naive(width, height, &[(40, 20, 16, 16)]));
+    }
+
+    /// A run that ends exactly on a word edge asks for `1 << 32`, which is the shift that overflowed when the
+    /// mask was built at `u32` width.
+    #[test]
+    fn a_run_ending_on_a_word_boundary_keeps_its_shift() {
+        let mut shadow = vec![0u32; 8];
+        mark_region(&mut shadow, 64, 1, 20, 0, 12, 1).unwrap();
+        assert_eq!(shadow[0], 0xFFF0_0000);
+        assert_eq!(shadow[1], 0);
+    }
+
+    #[test]
+    fn a_region_outside_the_frame_marks_nothing() {
+        let (width, height) = (64u32, 4u32);
+        let mut shadow = vec![0u32; (width * height).div_ceil(32) as usize];
+        for region in [(70, 0, 8, 1), (0, 4, 8, 8), (0, 0, 0, 4), (0, 0, 4, 0)] {
+            assert_eq!(
+                mark_region(
+                    &mut shadow,
+                    width,
+                    height,
+                    region.0,
+                    region.1,
+                    region.2,
+                    region.3
+                ),
+                None,
+                "{region:?} is not a region this frame has pixels for"
+            );
+        }
+        assert!(shadow.iter().all(|&word| word == 0));
+    }
+
+    /// A region wider than the frame clamps instead of wrapping: the pixels it claims are the ones inside.
+    #[test]
+    fn a_region_bigger_than_the_frame_is_clamped_not_wrapped() {
+        let mut shadow = vec![0u32; 2];
+        let touched = mark_region(&mut shadow, 32, 2, 8, 0, u32::MAX, u32::MAX).unwrap();
+        assert_eq!(shadow, naive(32, 2, &[(8, 0, 24, 2)]));
+        assert_eq!(touched, 0..2);
+    }
+
+    /// One batch write has to reach every word any of its regions changed, which is the union of their runs.
+    #[test]
+    fn batching_regions_covers_every_word_the_separate_calls_do() {
+        let (width, height) = (100u32, 30u32);
+        let words = (width * height).div_ceil(32) as usize;
+        let regions = [(3, 2, 9, 7), (33, 5, 40, 4), (70, 21, 25, 6)];
+
+        let mut batched = vec![0u32; words];
+        let mut batch_span: Option<Range<usize>> = None;
+        let mut separate = vec![0u32; words];
+        for &(x, y, w, h) in &regions {
+            let touched = mark_region(&mut batched, width, height, x, y, w, h).unwrap();
+            batch_span = Some(match batch_span {
+                Some(existing) => existing.start.min(touched.start)..existing.end.max(touched.end),
+                None => touched,
+            });
+            mark_region(&mut separate, width, height, x, y, w, h).unwrap();
+        }
+        assert_eq!(batched, separate);
+        assert_eq!(batch_span.unwrap(), run(&separate));
+        assert_eq!(set_pixels(&batched), 9 * 7 + 40 * 4 + 25 * 6);
+    }
+
+    /// A fresh bind hands the mask over as all-dirty, because the first frame has no cache to reuse: the
+    /// mirror starts matching the device, or the first invalidation would clear dirt the device still holds.
+    #[test]
+    fn a_dirty_mirror_stays_dirty_when_a_region_is_added_to_it() {
+        let (width, height) = (64u32, 4u32);
+        let mut shadow = vec![0xFFFF_FFFFu32; (width * height).div_ceil(32) as usize];
+        mark_region(&mut shadow, width, height, 5, 1, 8, 1).unwrap();
+        assert!(shadow.iter().all(|&word| word == 0xFFFF_FFFF));
+    }
 }

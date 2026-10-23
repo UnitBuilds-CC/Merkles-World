@@ -636,7 +636,7 @@ now bounds an out-of-range child as unbounded-and-unlicenced, and
 pins it on all three CI architectures (the example only reproduces it on a device runner, which is why the test
 exists). The test found its own boundary: walking that fixture with `sdf_eval_bnb` still panics, in
 `lower_bound`, and that is left as the correct behaviour — the contract that refuses malformed assets is
-`validate`, not the hot branch of a walk that is already invalid. Suite size is **242 tests in 34 suites**.
+`validate`, not the hot branch of a walk that is already invalid. Suite size is **250 tests in 35 suites**.
 
 ### The split at 1080p, and the sentence above that this run retracts (2026-10-16)
 
@@ -2328,11 +2328,58 @@ Durations from these three runs are quoted nowhere: the MX250 is not R1's named 
 640x360 here ran 1080p-scale times on a laptop GPU. What this unit establishes is that the instruments work again, so
 the next buildbox session can re-run them on the gate's own hardware.
 
-**One defect found and left standing.** While checking the cache half of the same path on a device,
-`examples/r1_invalidation_correctness_test` panicked in `Bind::invalidate_region` (`device.rs:1585`): a region whose
-row segment fits inside one 32-pixel word and is aligned at neither end produces `middle_start = first_word_idx + 1`
-above `middle_end = last_word_idx`, and the slice range is inverted. The same function also starts its mask at
-`0xFFFFFFFF` for every word before setting the region's bits, so an invalidation marks the whole frame dirty rather
-than the region — which is the opposite of what the delta path is for. That example is not a CI step, so neither
-symptom gates trunk today; both need fixing before the temporal cache can be integrated (task #77), and the OQ-63
-cache claims in this repository stay unmeasured on a device until they do.
+**The defect that paragraph left standing is fixed.** Both faults were in the host's mask arithmetic, not in the
+shader. A region whose row segment fits inside one 32-pixel word and is aligned at neither end produced
+`middle_start = first_word_idx + 1` above `middle_end = last_word_idx` and panicked on the inverted slice range; and
+the mask was built with `0xFFFFFFFF` in *every* word before the region's bits were set, so an invalidation dirtied
+the whole frame instead of the box — the opposite of what a delta path exists to do.
+
+**The word arithmetic now lives in one function.** `mark_region` walks the region's rows, derives its last word from
+`pixel_end - 1` (an exclusive end needs no branch, and the branch is what inverted), shifts at `u64` width (a run
+ending exactly on a word boundary asks for `1 << 32`), OR-es the bits into a host-side mirror of the mask, and
+returns the run of words it touched. Only that run crosses the bus. The mirror exists because `write_buffer`
+replaces rather than ORs: without it, a second region sharing a word with the first silently clears the first's
+bits. The old code's baseline was not a conservative version of the same idea — at 1080p the mask is 259,200 bytes,
+and every call allocated and copied all of it per entity per frame, which is the kind of frame-path churn AS4 and
+§3 exist to prevent.
+
+**The mirror is emptied when a frame consumes it.** `march_rays_from_camera_culled` clears a pixel's dirty bit on
+every path out of it — hit, sky, and marched — and its only early return is for a ray index past
+`header.point_count`, which a camera frame sets to its own pixel count. So a submitted cached frame leaves the
+device mask all zeros, and `Bind::take_consumed_mask` drops the mirror to zero with it; both camera march paths
+call it after the submit. Without that reset the mirror would accumulate every region invalidated since the bind
+was made and re-push the lot: the same whole-frame re-march, wearing a delta's clothes. A mirror can only ever
+over-report, and over-reporting costs a re-march rather than a stale pixel; `read_dirty_mask` also re-seeds it from
+whatever the device actually holds.
+
+**Eight unit tests in `device.rs`'s `dirty_mask_tests` hold the arithmetic, and they need no adapter.** The centre
+of them sweeps *every* non-empty axis-aligned rectangle inside a four-row frame at widths 7, 32, 33 and 64 — 31,970
+rectangles — and compares both the resulting mask and the returned word run against a reference that sets one bit
+per pixel with no word arithmetic at all. The rest name the two faults directly (a region inside one word marks its
+own bits; one region does not dirty the frame around it), and cover the `1 << 32` run, clamping, an oversized
+region, batch-versus-separate equality, and the fresh-bind all-dirty mirror. Three plants falsified the set: deriving
+the last word from `pixel_end / 32` fails 2 tests (the sweep reports `span for 0,0 32x1`, and the clamped case walks
+off the end of the mask); shifting at `u32` width fails 4; assigning instead of OR-ing fails 3.
+
+**The device instrument catches what those tests cannot.** `examples/r1_invalidation_correctness_test` compared two
+invalidation paths with each other, which is a check the whole-frame baseline passed trivially — two all-dirty masks
+agree word for word. It now also asserts the mask the device holds covers exactly the pixels its ten boxes are meant
+to cover. On GeForce MX250 [Vulkan, DiscreteGpu] at 640x360, both paths report **8896 pixels intended, 0 dirtied
+outside the regions, 0 region pixels left clean**, and 0 of 7,200 words differ between them. Before this fix the same
+run died part-way through Method 1: `thread 'main' panicked at crates/gpu/src/device.rs:1585:24: slice index starts at
+1215 but ends at 1214` — word 1214 is the 20x20 box at (450,60), whose 20-pixel row fits inside one word and is
+aligned at neither end. Re-planting the all-dirty baseline in
+`invalidate_region` — a fault no unit test can see, since they call `mark_region` — makes the example report 142,528
+pixels dirtied outside the regions and exit 1, while all 8 unit tests still pass.
+
+**What that changes about the two dynamic benchmarks, and what it does not change about R1.** No duration published
+in this document came from `r1_dynamic_benchmark` or `r1_multi_entity_benchmark`, so no published number moves —
+including R1's 3.26 ms, whose reuse row marches a second frame with nothing invalidated. Their rows do need
+re-reading. With the whole-frame baseline, one invalidation dirtied every pixel, the next march consumed all of it,
+and the two marches after that were fully cached, so `r1_dynamic_benchmark`'s median-of-three was a *cached* frame
+in every row and its "1 % … 50 % dirty" labels described pixels the device never saw.
+`r1_multi_entity_benchmark` times the invalidation calls alone, where this fix removes a 259,200-byte allocation and
+copy per call, so its single-versus-batch ratio now measures a different thing. Neither is a CI step. Both should be
+re-run on buildbox's GTX 1070 before task #77 publishes a dynamic number from either. The paragraph this one
+replaced also referred to "the OQ-63 cache claims"; OQ-63 is the entity-rotation question in docs/13 and carries no
+cache claim. The cache's dynamic claims are gated on task #77, which this unblocks.
