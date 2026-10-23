@@ -268,3 +268,59 @@ fn a_placement_refusal_names_the_clause_that_moved() {
     let refusal = compile_entity(&nan).expect_err("NaN in a lane is refused");
     assert_eq!(refusal.error, LowerError::NonFiniteParameter);
 }
+
+#[test]
+fn the_placement_gate_refuses_a_non_finite_position_and_not_a_far_one() {
+    // `rotation` and `scale` have had a finiteness clause here since the day the entity gate was
+    // written; `position` did not, so an authored `[NaN, 0, 0]` compiled, and the only thing between
+    // that file and a frame was the editor's own panel check — which is documented as being the
+    // compiler's tolerance, not a stricter one of its own.
+    let placed = |position: [f32; 3]| EntityDef {
+        shape: Shape::Sphere {
+            r: 1.0,
+            centre: [0.0, 0.0, 0.0],
+        },
+        position,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: 1.0,
+        material_id: 0,
+        flags: 0x03,
+        quantity: 0,
+    };
+
+    for (label, position) in [
+        ("NaN", [f32::NAN, 0.0, 0.0]),
+        ("+inf", [0.0, f32::INFINITY, 0.0]),
+        ("-inf", [0.0, 0.0, f32::NEG_INFINITY]),
+        ("lone NaN lane", [1.0, 2.0, f32::NAN]),
+    ] {
+        let refusal = match compile_entity(&placed(position)) {
+            Ok(_) => panic!("{label} position compiled: {position:?}"),
+            Err(refusal) => refusal,
+        };
+        assert_eq!(
+            refusal.error,
+            LowerError::NonFiniteParameter,
+            "{label} position refused by the wrong clause"
+        );
+        assert_eq!(
+            refusal.location(),
+            "position",
+            "{label} position refused without naming the field an author can edit"
+        );
+    }
+
+    // The control, and the reason this clause is about finiteness rather than range: the largest
+    // float a lane can hold is a real distance. Placed that far the subject is outside every march
+    // horizon and the frame is sky, which is what doc 04's unbounded regions and OQ-58's still-open
+    // range question are about — neither is answered by a refusal here.
+    for position in [
+        [f32::MAX, 0.0, 0.0],
+        [0.0, -f32::MAX, 0.0],
+        [1.0e30, 2.0, -3.0],
+    ] {
+        compile_entity(&placed(position)).unwrap_or_else(|refusal| {
+            panic!("a finite placement of {position:?} is a distance, not a defect: {refusal}")
+        });
+    }
+}

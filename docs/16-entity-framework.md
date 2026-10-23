@@ -145,8 +145,8 @@ pixels instead:
   `Placement::to_shape`/`to_world` are asserted as an exact round trip, the `[x, y, z, w]` quaternion
   order is pinned by the quarter-turn-it-takes-+X-to-Z test (read the tuple as `[w, x, y, z]` and every
   rotated entity faces a different way from the one the file describes), and an impossible placement —
-  zero scale, non-unit quaternion — is refused into `NOT_DRAWN` by the same `compile_entity` the shipped
-  compiler uses, rather than marched with a guess.
+  zero scale, non-unit quaternion, a non-finite `position` — is refused into `NOT_DRAWN` by the same
+  `assetc::compile_entity` the shipped compiler uses, rather than marched with a guess.
 - **The stage is marched, not painted.** `Stage::under` puts the grid floor at the lowest surface the
   entity actually reaches, found by tracing one ray straight up per column of a grid over the enclosure.
   Deriving it from the authored parameters instead was tried and is wrong twice over: the enclosure is a
@@ -186,7 +186,8 @@ pixels instead:
   the `[x, y, z, w]` quaternion `EntityDef.rotation` already carries. **OQ-63 is not settled by this**: the
   question of which representation the *file* uses stays open, and the panel only composes the field that
   exists. What makes the widget more than four sliders is that it normalises, because the quaternion comes
-  out of it unit by construction and `gpu_renderer::compile_entity` refuses a non-unit one into
+  out of it unit by construction and the `assetc::compile_entity` the viewport routes through refuses a
+  non-unit one into
   `NOT_DRAWN` — a widget that wrote a raw four-tuple could hand the viewport a shape it will not march, and
   an authored non-unit quaternion is therefore named in red under the readout rather than silently fixed or
   silently dropped. The four numbers the file will carry are printed under the sliders so the author can see
@@ -267,14 +268,29 @@ Ten tools:
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
-Eight of those decisions are about honesty rather than features:
+Nine of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
-  1e-4 of 1; scale finite and positive), and validates the whole call before writing any of it. A
+  1e-4 of 1; scale finite and positive; every `position` lane finite), and validates the whole call before
+  writing any of it. A
   half-applied edit leaves the panel holding a state the compiler will not take, and the caller's next
   render would show an animal that cannot exist. Assigning an *empty* material slot is refused for the
   same reason: the viewport paints an empty slot unlit white and prints a warning nobody reading a pipe
   would see.
+- **A file can carry what the pipe cannot be handed, and the compiler is the gate behind that door.**
+  A NaN has no JSON spelling and `set_transform` already refused an infinite lane, so the only way a
+  broken placement reaches the state is `load_entity` — which takes the file exactly as it is, on
+  purpose, so an author can open a bad `.ron` and repair it rather than being locked out of it. Behind
+  that door sits `assetc::compile_entity`, and it checked `rotation` and `scale` and not `position`: an
+  authored `position: (inf, 0.0, 0.0)` compiled. The viewport routes its march through that same call, so
+  a refusal there is the only complaint an author would ever get — and with no clause for `position`,
+  nothing refused: the march ran and answered **sky** (0 hits, 0 undrawn), which an author reads as
+  *nothing in the scene today* and not as *your file is broken*. The clause is about finiteness, not
+  magnitude: `f32::MAX` is a real
+  distance, stays accepted, and draws an empty scene honestly, because how far a placement may sit from
+  world zero is OQ-58 and still open. A refused placement now comes back as the same `NOT_DRAWN` frame
+  a non-unit rotation already produced, named by `✗ preview refused by assetc: position carries a
+  non-finite parameter (NaN or infinite)` on stderr and by `undrawn_pixels` in `render_view`'s reply.
 - **`set_part`'s range is the panel's slider range, because it is the same number read from the same
   place.** `crates/editor/src/params.rs` holds one table — each authored field's name, label, lane count
   and limits, and whether the file carries it as an integer — and `inspector.rs` draws its sliders from it
@@ -345,7 +361,7 @@ new parent. Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
 setting them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 30 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 31 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -390,6 +406,13 @@ is the same silhouette and the assertion would pass on a wrapper that did nothin
 itself, where a `Repeat` of period 0.4 over a sphere spanning 0.5 to 2.5 draws a frame of zero surface
 against zero undrawn — the march drew the emptiness rather than refusing it — and the same tree at period 4
 draws the sphere, so the blank frame is the cell's doing and not a wrapper the marcher ignores.
+Increment 5 adds one more, on the compiler's side of the same door: `assetc/tests/lowering.rs` refuses a
+NaN, a `+inf`, a `-inf` and a single NaN-in-the-third-lane `position` — each naming `position` as the
+route — and accepts `f32::MAX`, `-f32::MAX` and `1e30` in the same test, so the clause cannot quietly
+turn into a magnitude cap; and `tests/mcp.rs` loads a hand-authored `position: (inf, 0.0, 0.0)` and
+follows it all the way through: the state holds it, the compiler refuses it naming the field, the preview
+comes back as the whole frame undrawn rather than as sky, and one legal `set_transform` plus a save and a
+reload makes the identical frame draw.
 
 Each of those checks was run against a planted defect in the clause it is meant to police, on this machine,
 and each plant is recorded with the one test it named: dropping `assetc::lower` from `commit` named the
@@ -408,7 +431,13 @@ a wrap that reports success and changes nothing — named the frame test, the re
 and the every-wrapper test. The fold-cell test was planted in the renderer rather than in the pipe: making
 `render::wrap` return its input named it with 474 surface pixels in a frame that should hold none, and
 making the `NODE_REPEAT` arm answer `f32::MAX` — a tiling that never draws — named it from the other side,
-on the widened period-4 assertion. Every plant was reverted and the suite re-run green afterwards.
+on the widened period-4 assertion.
+Increment 5's three plants sat on the clause itself: renaming its route to `centre` named both new rows at
+their `location()` line; widening it to `lane.abs() < 1e6` — a magnitude cap the compiler must not become,
+because OQ-58 owns the range question — was then planted alone and named only the `lowering` row's control
+half, which is exactly the check the editor's row cannot express; and deleting the clause named both again,
+one at its `{label} position compiled` panic and one where it asks for the refusal. Every plant was
+reverted and the suite re-run green afterwards.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
@@ -560,7 +589,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped and removed only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 30 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped and removed only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 31 tests |
 
 ## Migration from current code
 

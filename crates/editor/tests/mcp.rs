@@ -2213,3 +2213,88 @@ fn a_repeat_tiles_its_fold_cell_so_a_part_authored_outside_it_renders_as_nothing
         "a period-4 cell spans -2 to 2 and holds the sphere, so the tiling should draw it"
     );
 }
+
+/// A non-finite position has no JSON spelling, so `set_transform` cannot be handed one — but a
+/// hand-authored `.ron` can, and `load_entity` takes the file as it is so an author can open a broken
+/// one and fix it. The gate behind that door is `compile_entity`, which the viewport also routes its
+/// march through, and until this unit it checked `rotation` and `scale` and not `position`.
+#[test]
+fn a_loaded_non_finite_position_is_refused_by_the_compiler_instead_of_marching_into_an_empty_scene()
+{
+    let broken = temp_path("non_finite_position.ron");
+    std::fs::write(
+        &broken,
+        "EntityDef(\n    shape: Sphere(r: 1.0, centre: (0.0, 0.0, 0.0)),\n    position: (inf, 0.0, \
+         0.0),\n    rotation: (0.0, 0.0, 0.0, 1.0),\n    scale: 1.0,\n)\n",
+    )
+    .expect("the fixture is writable");
+
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": broken.to_string_lossy() }),
+    );
+    assert_eq!(
+        state.entity_def.position,
+        [f32::INFINITY, 0.0, 0.0],
+        "load took the file as it is, or this test is not about the gate behind it"
+    );
+
+    let refusal = assetc::compile_entity(&state.entity_def)
+        .expect_err("an infinite lane is not a distance an entity can be placed at");
+    assert_eq!(refusal.error, assetc::LowerError::NonFiniteParameter);
+    assert_eq!(
+        refusal.location(),
+        "position",
+        "the refusal has to name the field an author can edit: {refusal}"
+    );
+
+    // The same gate feeds the preview, and the refusal is the point: an infinity placed through the
+    // old clause marched to a frame of sky, which an author reads as "nothing in the scene today"
+    // rather than "your file is broken". An undrawn frame says which.
+    let frame = call(
+        &mut state,
+        "render_view",
+        json!({ "view": "front", "width": 32, "height": 24 }),
+    );
+    assert_eq!(
+        frame["undrawn_pixels"],
+        json!(32 * 24),
+        "the placement was marched instead of refused"
+    );
+    assert_eq!(frame["surface_pixels"], json!(0));
+
+    // Repaired through a legal call, the file round-trips and the identical frame draws.
+    let saved = temp_path("position_repaired.ron");
+    call(
+        &mut state,
+        "set_transform",
+        json!({ "position": [0.75, 0.0, 0.0] }),
+    );
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": saved.to_string_lossy() }),
+    );
+    let mut reread = fresh();
+    call(
+        &mut reread,
+        "load_entity",
+        json!({ "path": saved.to_string_lossy() }),
+    );
+    assetc::compile_entity(&reread.entity_def).expect("the repaired file compiles");
+    let placed = call(
+        &mut reread,
+        "render_view",
+        json!({ "view": "front", "width": 32, "height": 24 }),
+    );
+    assert_eq!(placed["undrawn_pixels"], json!(0));
+    assert!(
+        placed["surface_pixels"].as_u64().expect("a count") > 0,
+        "the repaired file placed the subject and the frame still holds nothing"
+    );
+
+    let _ = std::fs::remove_file(broken);
+    let _ = std::fs::remove_file(saved);
+}

@@ -459,6 +459,14 @@ pub fn compile_entity(def: &EntityDef) -> Result<CompiledEntity, Refusal> {
         return Err(Refusal::at(&["scale"], LowerError::NonPositiveScale));
     }
 
+    // Finiteness, not magnitude: a placement of 1e30 is a real distance and renders as sky, which is
+    // how doc 04's unbounded regions and OQ-58's range question are still open. A NaN or an infinity
+    // is neither — it is a lane no distance can be computed from, and the march answers it with a
+    // frame of sky and its step budget spent.
+    if !def.position.iter().all(|lane| lane.is_finite()) {
+        return Err(Refusal::at(&["position"], LowerError::NonFiniteParameter));
+    }
+
     Ok(CompiledEntity {
         asset,
         position: def.position,
