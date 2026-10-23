@@ -252,7 +252,7 @@ anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handl
 it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
 same module rather than a mock of it.
 
-Eight tools:
+Ten tools:
 
 | Tool | Answers |
 |------|---------|
@@ -262,10 +262,12 @@ Eight tools:
 | `set_transform` | `position`, `rotation`, `scale`, `material_id` — every field validated before any field is applied |
 | `select_part` | a route as `editor_state` prints it (`root`, `root.b`, `root.b.kept`) in, the node's kind, summary and parameter list out. Selecting is not editing: it marks nothing dirty and leaves `preview_signature` alone |
 | `set_part` | one authored field of one node — a `Sphere`'s `r` or `centre`, a `RoundedBox`'s `half` or `r`, a `Plane`'s `normal` or `offset`, a `SmoothUnion`'s `k`, a `Repeat`'s `period`, a `Mirror`'s `axis` — with the route optional: without one it writes the node the editor already holds selected |
+| `add_part` | wraps the node a route names in a new combinator — `Union`, `Subtract`, `Intersect` or `SmoothUnion` — joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `route` optional: without one it wraps the selected node |
+| `delete_part` | a route in, the node out. A two-operand combinator cannot hold one operand, so its surviving operand takes the combinator's place and the tree loses two nodes; the selection goes back to `root`, because every path under a collapse now means something else |
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
-Four of those decisions are about honesty rather than features:
+Six of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
   1e-4 of 1; scale finite and positive), and validates the whole call before writing any of it. A
@@ -279,6 +281,18 @@ Four of those decisions are about honesty rather than features:
   while `mcp.rs` validates against it. Two written-down ranges would drift into an edit an agent can make
   that the window cannot, which is the disagreement this gate exists to catch. The field names are the
   ones `.ron` files and `assetc`'s refusals use, so a caller can paste either.
+- **A structural edit is compiled before it lands.** `add_part` and `delete_part` build their result on a
+  clone and pass it through `assetc::lower` — the same pass the shipped `.bin` comes out of — so the depth
+  cap, a non-unit `Mirror` axis and a NaN length are refused with the compiler's own words and the held
+  tree never moves. An editor that wrote a tree the compiler refuses would hand an author a file that
+  cannot become an asset and say nothing until the boot fails.
+- **Adding is wrapping, and deleting is collapsing.** Every combinator in this grammar is full the moment
+  it exists — a `Union` with one operand is not a shape — so there is no free slot to fill, and the only
+  honest *add* is a new wrapper around the node the route names. The reply then reads both slots back out
+  of the tree it left (`kept` and `added`, each with its route, kind and summary), so `Subtract.kept`
+  versus `Subtract.cutter` — a hole and an animal — is stated, not implied. `delete_part` answers with the
+  node it removed *and* the combinator that held it, and resets the selection to `root`: a path kept across
+  a collapse would edit some unrelated node.
 - **`render_view` names the state in the filename** (`{view}-{preview_signature:016x}.png`), so two
   renders of two states cannot collide into one path and a reader told "this is the pig after the scale
   edit" can check that against the signature the same call returns.
@@ -294,7 +308,11 @@ children it does carry (`root.b has no child "kept"; it names "a", "b"`), and a 
 with the leaf's own fields and their limits. `set_part` with a field the kind does not have is refused with
 the ones it has, and a combinator — which owns no field, only operands — is refused back to its routes. A
 value outside its range is refused with that range quoted, and nothing in the tree moved: the checks all
-run before the write, so `changed: false` and a clean `dirty` flag are the same fact.
+run before the write, so `changed: false` and a clean `dirty` flag are the same fact. The structural tools
+refuse in the same voice: `add_part` with `keep: "hole"` answers `Subtract has no slot "hole"; it names
+"kept", "cutter"`, a shape field spelled `radious` is refused with the two a `Sphere` does take, a half
+`Sphere` missing `centre` is refused by name, and `delete_part` on a `Mirror`'s child says which wrapper
+would be left holding nothing and names the node to delete instead.
 
 The six angles come from `mcp::VIEWS`, one table of `(name, yaw, pitch, distance)` that
 `examples/render_png` now reads as well; two lists of the same six would drift, and a reader handed "the
@@ -302,13 +320,14 @@ front view" would be looking at a different picture from the one the dump was de
 capped at 768 on a side, because this is a CPU march and a 4096² request is a way to wedge a tool that is
 supposed to answer.
 
-What the pipe still does **not** do: it cannot add, delete or re-parent a node, so the tree's *shape*
-stays as authored — `select_part` and `set_part` reach every node that exists and move the fields on it,
-and nothing changes which nodes there are. Material fields other than `base_color` are read by no shader
+What the pipe still does **not** do: it cannot wrap a node in a `Mirror` or a `Repeat` — the two
+one-operand wrappers carry a parameter each, so authoring one needs its `axis` or `period` before its
+child exists and no caller should guess — and it cannot move a node from one route to another, so a part
+can be added and removed but not re-parented. Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
 setting them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 17 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 24 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -323,7 +342,32 @@ re-writing the value a node already holds reports no change — which is the onl
 publishes and a writer silently skips; and one test walks all nine authored kinds against names, lane
 counts and limits written down *in the test* rather than read back from `params`, counting the nine fields
 and the ten named child routes it covered so a kind or a field that stopped being exercised moves the
-number. The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
+number. Increment 3 adds seven: `add_part` wrapping a node the parts list names, with the reply's `kept`
+and `added` checked against that list rather than against values written into the test, and the tree it
+reported reading back identically after `save_entity` and a fresh `load_entity`; `keep` naming which slot
+the existing node stays in, and an invented slot refused with the two that exist; nine malformed leaves
+refused one by one (no `shape`, a `kind` that needs operands, a missing field, a misspelled one, a radius
+past the range, two lanes where three are asked for, a NaN, an infinite, a non-`SmoothUnion` carrying a
+`k`); a chain of wraps until `assetc`'s own depth cap speaks, which requires a `Subtract` rather than a
+`Union` because `lower` flattens a union chain and rebalances it before measuring, so a `Union` nest cannot
+reach the cap however deep the file goes; `delete_part` taking a leaf and its parent and leaving every
+other route's kind and summary where they were, round-tripping through the file; the five states a delete
+refuses (the root, no route, a blank route, a child the tree does not have, a one-child wrapper's child);
+and the frame that follows a structural edit — the render's own `preview_signature` equal to the add's, a
+different PNG path, `undrawn_pixels` zero, and the surface count strictly larger against a `total_pixels`
+the test first requires to be un-saturated, since a view whose picture is already all surface cannot show a
+gain.
+
+Each of those checks was run against a planted defect in the clause it is meant to police, on this machine,
+and each plant is recorded with the one test it named: dropping `assetc::lower` from `commit` named the
+depth-cap test; letting an unknown shape field through named the nine-refusal test; defaulting an unknown
+`keep` to the first slot named the `keep` test; promoting the deleted node instead of its sibling named the
+collapse test's summary line; keeping the pre-delete selection named the same test's `selected` line;
+disabling the one-child guard named the refusal test; and pointing `render_view` at an unrelated entity
+named the frame test (and the two older render tests, which is what a shared instrument should do). Every
+plant was reverted and the suite re-run green afterwards.
+
+The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
 a debug build on this machine, on the run that landed this section.
 
@@ -473,7 +517,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 17 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added and removed only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 24 tests |
 
 ## Migration from current code
 

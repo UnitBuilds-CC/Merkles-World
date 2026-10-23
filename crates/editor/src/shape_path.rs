@@ -23,16 +23,25 @@ pub enum Step {
 /// The children of a node, with the name the authored file gives each. Leaves return an empty slice, so
 /// walking off one is a `None` from [`resolve`] rather than a silent stop at the leaf.
 pub fn children(shape: &Shape) -> &'static [(&'static str, Step)] {
+    child_names(kind(shape))
+}
+
+/// The same table read by the kind's name, for a caller building a node that does not exist yet —
+/// `add_part` has to know a `Subtract`'s slots are `kept` and `cutter` before it has a `Subtract`.
+pub fn child_names(kind: &str) -> &'static [(&'static str, Step)] {
     const TWO_AB: &[(&str, Step)] = &[("a", Step::First), ("b", Step::Second)];
     const KEPT_CUTTER: &[(&str, Step)] = &[("kept", Step::First), ("cutter", Step::Second)];
     const ONE_CHILD: &[(&str, Step)] = &[("child", Step::Sole)];
     const NONE: &[(&str, Step)] = &[];
 
-    match shape {
-        Shape::Union { .. } | Shape::SmoothUnion { .. } | Shape::Intersect { .. } => TWO_AB,
-        Shape::Subtract { .. } => KEPT_CUTTER,
-        Shape::Repeat { .. } | Shape::Mirror { .. } => ONE_CHILD,
-        Shape::Sphere { .. } | Shape::RoundedBox { .. } | Shape::Plane { .. } => NONE,
+    match kind {
+        "Union" | "SmoothUnion" | "Intersect" => TWO_AB,
+        "Subtract" => KEPT_CUTTER,
+        "Repeat" | "Mirror" => ONE_CHILD,
+        "Sphere" | "RoundedBox" | "Plane" => NONE,
+        // A name this file does not spell has no operands, so a caller asking for a slot of it is refused
+        // by the empty list rather than by a guess.
+        _ => NONE,
     }
 }
 

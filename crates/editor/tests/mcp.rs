@@ -1265,3 +1265,554 @@ fn temp_path(name: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).expect("the fixture dir is writable");
     dir.join(name)
 }
+
+/// Every part of a parts list as one comparable string, so a test can say "nothing else in the tree
+/// moved" without naming the thirty-odd nodes the pig happens to hold.
+fn fingerprints(parts: &Value) -> Vec<String> {
+    let field = |value: &Value| {
+        value
+            .as_str()
+            .unwrap_or_else(|| panic!("a part field is not a string: {value}"))
+            .to_string()
+    };
+    parts
+        .as_array()
+        .expect("a parts array")
+        .iter()
+        .map(|part| {
+            format!(
+                "{}|{}|{}",
+                field(&part["route"]),
+                field(&part["kind"]),
+                field(&part["summary"])
+            )
+        })
+        .collect()
+}
+
+/// The kinds the authored grammar ends in, and `add_part` can author from nothing.
+const LEAF_KINDS: &[&str] = &["Sphere", "RoundedBox", "Plane"];
+
+fn route_of(part: &Value) -> &str {
+    part["route"].as_str().expect("every part prints a route")
+}
+
+/// The route of a leaf whose parent holds two leaves, so deleting it collapses the parent without
+/// renaming any subtree: the pig's own `SmoothUnion` pairs are exactly that.
+fn sibling_leaf_pair(parts: &[Value]) -> (String, String, String) {
+    let is_leaf = |part: &Value| {
+        part["kind"]
+            .as_str()
+            .is_some_and(|kind| LEAF_KINDS.contains(&kind))
+    };
+    for part in parts {
+        let route = route_of(part);
+        if !route.contains('.') || !is_leaf(part) {
+            continue;
+        }
+        let parent = route.rsplit_once('.').expect("a dotted route").0;
+        let mut others: Vec<&Value> = parts
+            .iter()
+            // A sibling sits exactly one step below the parent; a deeper descendant of it does not.
+            .filter(|other| {
+                route_of(other) != route
+                    && route_of(other)
+                        .rsplit_once('.')
+                        .is_some_and(|(her_parent, _)| her_parent == parent)
+            })
+            .filter(|other| is_leaf(other))
+            .collect();
+        if others.len() == 1 {
+            let sibling = others.pop().expect("one sibling");
+            return (
+                route.to_string(),
+                parent.to_string(),
+                sibling["route"]
+                    .as_str()
+                    .expect("a sibling route")
+                    .to_string(),
+            );
+        }
+    }
+    panic!(
+        "no leaf in the tree has a leaf beside it, so collapsing a parent is not being exercised"
+    );
+}
+
+#[test]
+fn add_part_wraps_the_node_a_route_names_and_the_saved_file_reads_the_new_tree() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let route = before["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .find(|part| part["kind"] == json!("Sphere") && part["depth"].as_u64() == Some(2))
+        .expect("the pig has a sphere two levels down")["route"]
+        .as_str()
+        .expect("a route")
+        .to_string();
+
+    let added = call(
+        &mut state,
+        "add_part",
+        json!({
+            "route": route,
+            "combine": "Union",
+            "shape": { "kind": "Sphere", "r": 0.4, "centre": [0.9, -0.2, 0.0] },
+        }),
+    );
+    let leaf_route = format!("{route}.b");
+    assert_eq!(
+        added["at"],
+        json!(route),
+        "the wrapper is not where the route was"
+    );
+    assert_eq!(added["into"], json!("Union"));
+    assert_eq!(
+        added["kept"]["slot"],
+        json!("a"),
+        "with no keep passed, the node already in the tree should hold the first slot"
+    );
+    assert_eq!(added["added"]["route"], json!(leaf_route));
+    assert_eq!(added["added"]["kind"], json!("Sphere"));
+    assert_eq!(
+        added["added"]["summary"],
+        json!("r 0.40 at [0.90, -0.20, 0.00]")
+    );
+    assert_eq!(
+        added["node_count"].as_u64().expect("a count"),
+        before["node_count"].as_u64().expect("a count") + 2,
+        "an add is one new leaf and one new combinator over the node it wrapped"
+    );
+    assert_eq!(
+        added["selected"],
+        json!(route),
+        "the editor should be left pointing at the combinator just built, so a k is one call away"
+    );
+    assert_eq!(added["state"]["dirty"], json!(true));
+    assert_ne!(
+        added["preview_signature"], before["preview_signature"],
+        "a new node left the preview key alone, so the viewport keeps showing the frame from before it"
+    );
+
+    let parts = added["state"]["parts"].as_array().expect("parts");
+    let wrapper = parts
+        .iter()
+        .find(|part| part["route"] == json!(route))
+        .expect("the wrapper the answer names is not in the parts list");
+    assert_eq!(wrapper["kind"], json!("Union"));
+    assert!(
+        wrapper["parameters"]
+            .as_array()
+            .expect("a Union publishes its (empty) fields")
+            .is_empty(),
+        "a Union claims a parameter of its own, which is a set_part call away from nowhere"
+    );
+    assert!(parts.iter().any(|part| part["route"] == json!(leaf_route)));
+
+    // And the file an author compiles from reads back as the tree the tool said it built.
+    let path = temp_path("add_part_round_trip.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let again = call(&mut reloaded, "editor_state", json!({}));
+    assert_eq!(again["node_count"], added["node_count"]);
+    assert_eq!(
+        fingerprints(&again["parts"]),
+        fingerprints(&added["state"]["parts"]),
+        "the saved file reads back as a different tree than the one add_part reported"
+    );
+}
+
+#[test]
+fn keep_names_which_slot_the_existing_node_stays_in_and_a_subtract_cares_which_it_is() {
+    // No route at all: the add lands on the node the editor holds, which on a fresh state is the root.
+    let mut state = fresh();
+    let before = call(&mut state, "editor_state", json!({}));
+    let root_line = before["parts"]
+        .as_array()
+        .expect("a fresh state lists its root")
+        .iter()
+        .find(|part| part["route"] == json!("root"))
+        .expect("the root is listed")
+        .clone();
+    let added = call(
+        &mut state,
+        "add_part",
+        json!({
+            "combine": "Subtract",
+            "keep": "cutter",
+            "shape": { "kind": "RoundedBox", "half": [1.5, 1.5, 1.5], "r": 0.0 },
+        }),
+    );
+    assert_eq!(added["at"], json!("root"));
+    assert_eq!(added["kept"]["slot"], json!("cutter"));
+    assert_eq!(added["kept"]["route"], json!("root.cutter"));
+    assert_eq!(
+        added["kept"]["kind"], root_line["kind"],
+        "the kept report names a different node than the one the route list held"
+    );
+    assert_eq!(
+        added["kept"]["summary"], root_line["summary"],
+        "the node that was the whole entity should be reported unchanged, in the slot `keep` names"
+    );
+    assert_eq!(added["added"]["slot"], json!("kept"));
+    assert_eq!(added["added"]["route"], json!("root.kept"));
+    assert_eq!(added["added"]["kind"], json!("RoundedBox"));
+
+    let (message, refused) = try_call(
+        &mut state,
+        "add_part",
+        json!({
+            "combine": "Subtract",
+            "keep": "hole",
+            "shape": { "kind": "RoundedBox", "half": [1.0, 1.0, 1.0], "r": 0.0 },
+        }),
+    );
+    assert!(
+        refused,
+        "a slot a Subtract does not have was accepted: {message}"
+    );
+    assert!(
+        message.contains("\"kept\"") && message.contains("\"cutter\""),
+        "the refusal for keep:\"hole\" does not name the two slots that exist: {message}"
+    );
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&added["state"]["parts"]),
+        "a refused add changed the tree"
+    );
+}
+
+#[test]
+fn a_leaf_authored_from_nothing_is_refused_until_it_is_complete_and_in_range() {
+    let mut state = fresh();
+    let before = call(&mut state, "editor_state", json!({}));
+    let sphere = json!({ "kind": "Sphere", "r": 0.5, "centre": [0.0, 0.0, 0.0] });
+
+    let cases: Vec<(&str, Value, &str)> = vec![
+        (
+            "no leaf to add",
+            json!({ "combine": "Union" }),
+            "needs the node",
+        ),
+        (
+            "a kind that needs operands first",
+            json!({ "combine": "Union", "shape": { "kind": "Union" } }),
+            "cannot be authored from nothing",
+        ),
+        (
+            "a field the kind takes but the caller omitted",
+            json!({ "combine": "Union", "shape": { "kind": "Sphere", "r": 0.5 } }),
+            "\"centre\" is missing",
+        ),
+        (
+            "a field nobody asked for",
+            json!({ "combine": "Union", "shape": { "kind": "Sphere", "r": 0.5, "centre": [0.0, 0.0, 0.0], "radious": 0.5 } }),
+            "radious",
+        ),
+        (
+            "a radius past the range the slider offers",
+            json!({ "combine": "Union", "shape": { "kind": "Sphere", "r": 9.0, "centre": [0.0, 0.0, 0.0] } }),
+            "0.01..=5",
+        ),
+        (
+            "a vector with two lanes",
+            json!({ "combine": "Union", "shape": { "kind": "Sphere", "r": 0.5, "centre": [0.0, 0.0] } }),
+            "3 numbers",
+        ),
+        (
+            "a blend with no blend width",
+            json!({ "combine": "SmoothUnion", "shape": sphere }),
+            "needs k",
+        ),
+        (
+            "a blend width on a combinator that has none",
+            json!({ "combine": "Union", "k": 0.4, "shape": sphere }),
+            "carries no k",
+        ),
+        (
+            "a wrapper this tool does not build",
+            json!({ "combine": "Mirror", "shape": sphere }),
+            "add_part joins with",
+        ),
+    ];
+    for (what, arguments, expected) in cases {
+        let (message, refused) = try_call(&mut state, "add_part", arguments);
+        assert!(refused, "{what} was accepted: {message}");
+        assert!(
+            message.contains(expected),
+            "the refusal for {what} says {message:?}, which does not mention {expected:?}"
+        );
+    }
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(after["node_count"], before["node_count"]);
+    assert_eq!(
+        after["preview_signature"], before["preview_signature"],
+        "nine refused adds moved the preview key"
+    );
+    assert_eq!(after["dirty"], json!(false));
+}
+
+#[test]
+fn a_tree_the_compiler_would_refuse_is_refused_before_it_lands() {
+    let mut state = fresh();
+    let mut grown = 0;
+    let mut refusal = String::new();
+    for _ in 0..64 {
+        let before = call(&mut state, "editor_state", json!({}));
+        // Not a `Union`: `assetc::lower` flattens a union chain and rebuilds it balanced before it
+        // measures depth, so nesting one cannot reach the cap however deep the file goes. A `Subtract`'s
+        // operand order is its meaning, so what the author wrote is what the compiler counts.
+        let (message, refused) = try_call(
+            &mut state,
+            "add_part",
+            json!({
+                "route": "root",
+                "combine": "Subtract",
+                "keep": "kept",
+                "shape": { "kind": "Sphere", "r": 0.05, "centre": [5.0, 5.0, 5.0] },
+            }),
+        );
+        if !refused {
+            grown += 1;
+            continue;
+        }
+        refusal = message;
+        let after = call(&mut state, "editor_state", json!({}));
+        assert_eq!(
+            fingerprints(&after["parts"]),
+            fingerprints(&before["parts"]),
+            "the add that hit the depth cap still rewrote the tree"
+        );
+        assert_eq!(after["preview_signature"], before["preview_signature"]);
+        break;
+    }
+    assert!(
+        grown > 1,
+        "the tree never grew, so this test cannot see the cap: {refusal}"
+    );
+    assert!(
+        !refusal.is_empty(),
+        "wrapping the root {grown} times never hit the grammar's depth cap, so the compiler's own \
+         refusal is not being exercised"
+    );
+    assert!(
+        refusal.contains("cannot be compiled"),
+        "the refusal does not say the tree cannot be compiled: {refusal}"
+    );
+    assert!(
+        refusal.contains("levels deep") && refusal.contains("cap"),
+        "the refusal does not quote the compiler's depth words: {refusal}"
+    );
+}
+
+#[test]
+fn delete_part_takes_the_node_and_the_combinator_that_held_it() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let parts = before["parts"].as_array().expect("parts").clone();
+    let (victim, parent, sibling) = sibling_leaf_pair(&parts);
+    let listed = |route: &str| -> Value {
+        parts
+            .iter()
+            .find(|part| part["route"] == json!(route))
+            .unwrap_or_else(|| panic!("{route} is not in the parts list the pair came from"))
+            .clone()
+    };
+    let (victim_line, sibling_line) = (listed(&victim), listed(&sibling));
+
+    let deleted = call(&mut state, "delete_part", json!({ "route": victim }));
+    assert_eq!(deleted["deleted"]["route"], json!(victim));
+    assert_eq!(deleted["deleted"]["kind"], victim_line["kind"]);
+    assert_eq!(deleted["deleted"]["summary"], victim_line["summary"]);
+    assert_eq!(
+        deleted["node_count"].as_u64().expect("a count"),
+        before["node_count"].as_u64().expect("a count") - 2,
+        "deleting a leaf takes the leaf and the combinator that held it, and nothing else"
+    );
+    assert_eq!(deleted["its_parent"]["route"], json!(parent));
+    assert_eq!(deleted["its_parent"]["replaced_by"], sibling_line["kind"]);
+    assert_eq!(
+        deleted["its_parent"]["summary"], sibling_line["summary"],
+        "the operand beside the deleted one should have taken its parent's place unchanged"
+    );
+    assert_eq!(
+        deleted["selected"],
+        json!("root"),
+        "every path below a collapse means something else now, so the selection has to go back"
+    );
+    assert_eq!(deleted["state"]["dirty"], json!(true));
+    assert_ne!(
+        deleted["preview_signature"], before["preview_signature"],
+        "a node was removed and the preview key did not move"
+    );
+
+    // Everything above and around the collapse is still the node it was, route for route.
+    let mut kept_before = fingerprints(&before["parts"]);
+    kept_before.retain(|line| {
+        let route = line.split('|').next().expect("the route prefix");
+        route != victim && route != parent && route != sibling
+    });
+    let mut kept_after = fingerprints(&deleted["state"]["parts"]);
+    kept_after.retain(|line| line.split('|').next().expect("the route prefix") != parent);
+    kept_before.sort();
+    kept_after.sort();
+    assert_eq!(
+        kept_after, kept_before,
+        "deleting {victim} moved parts of the tree the call never named"
+    );
+
+    let path = temp_path("delete_part_round_trip.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let again = call(&mut reloaded, "editor_state", json!({}));
+    assert_eq!(again["node_count"], deleted["node_count"]);
+    assert_eq!(
+        fingerprints(&again["parts"]),
+        fingerprints(&deleted["state"]["parts"]),
+        "the saved file reads back as a different tree than the one delete_part reported"
+    );
+}
+
+#[test]
+fn a_node_that_cannot_be_deleted_says_why_and_leaves_the_tree_alone() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let mirror_child = before["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .find(|part| part["kind"] == json!("Mirror"))
+        .map(|part| format!("{}.child", part["route"].as_str().expect("a route")))
+        .expect("the shipped pig is symmetric, so a Mirror is in the list");
+
+    let cases: Vec<(&str, Value, &str)> = vec![
+        ("root", json!({ "route": "root" }), "the whole entity"),
+        ("no route", json!({}), "route is required"),
+        (
+            "a blank route",
+            json!({ "route": "  " }),
+            "route is required",
+        ),
+        (
+            "a child the tree does not have",
+            json!({ "route": "root.nope" }),
+            "has no child",
+        ),
+        (
+            "a one-child wrapper's only child",
+            json!({ "route": mirror_child }),
+            "only child",
+        ),
+    ];
+    for (what, arguments, expected) in cases {
+        let (message, refused) = try_call(&mut state, "delete_part", arguments);
+        assert!(refused, "{what} was deleted: {message}");
+        assert!(
+            message.contains(expected),
+            "the refusal for {what} says {message:?}, which does not mention {expected:?}"
+        );
+    }
+    let refusal = try_call(&mut state, "delete_part", json!({ "route": mirror_child })).0;
+    assert!(
+        refusal.contains("Mirror"),
+        "the refusal names the wrapper's child but not the wrapper: {refusal}"
+    );
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&before["parts"]),
+        "five refused deletes changed the tree"
+    );
+    assert_eq!(after["preview_signature"], before["preview_signature"]);
+    assert_eq!(after["dirty"], json!(false));
+    assert_eq!(after["selected"], before["selected"]);
+}
+
+#[test]
+fn a_part_added_is_in_the_frame_render_view_draws() {
+    let mut state = fresh();
+    // Two instrument choices, both so the count means what it says. The named views sit close enough to
+    // the default sphere that its silhouette is the whole frame, and the stage is an infinite plane that
+    // covers the rest, so either would report "all surface" before the add changed a pixel — hence a bare
+    // sky and the front view's angles pulled back to a distance that leaves the frame mostly sky.
+    let view = json!({
+        "yaw": core::f32::consts::PI, "pitch": 0.12, "distance": 6.0,
+        "width": 96, "height": 72, "stage": false,
+    });
+    let before = call(&mut state, "render_view", view.clone());
+    let added = call(
+        &mut state,
+        "add_part",
+        json!({
+            "combine": "Union",
+            "shape": { "kind": "Sphere", "r": 1.2, "centre": [0.0, 0.0, 0.0] },
+        }),
+    );
+    let after = call(&mut state, "render_view", view);
+
+    assert_eq!(
+        after["preview_signature"], added["preview_signature"],
+        "the frame rendered is not the state the add left behind"
+    );
+    assert_ne!(
+        after["path"], before["path"],
+        "two different states wrote the same PNG, so a reader cannot tell which frame they are looking at"
+    );
+    assert_eq!(
+        after["undrawn_pixels"],
+        json!(0),
+        "the march refused to draw the frame the add produced"
+    );
+    let (before_surface, total) = (
+        before["surface_pixels"].as_u64().expect("a count"),
+        before["total_pixels"].as_u64().expect("a count"),
+    );
+    assert!(
+        before_surface < total,
+        "the frame before the add was already all surface, so this instrument cannot show a gain"
+    );
+    assert!(
+        after["surface_pixels"].as_u64().expect("a count") > before_surface,
+        "a sphere of r 1.2 joined the tree and the picture did not gain a pixel: {} -> {}",
+        before_surface,
+        after["surface_pixels"],
+    );
+}

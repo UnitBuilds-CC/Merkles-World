@@ -59,6 +59,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "set_transform",
     "select_part",
     "set_part",
+    "add_part",
+    "delete_part",
     "render_view",
     "save_entity",
 ];
@@ -151,6 +153,8 @@ fn dispatch(
         "set_transform" => Some(set_transform(state, arguments)),
         "select_part" => Some(select_part(state, arguments)),
         "set_part" => Some(set_part(state, arguments)),
+        "add_part" => Some(add_part(state, arguments)),
+        "delete_part" => Some(delete_part(state, arguments)),
         "render_view" => Some(render_view(state, arguments)),
         "save_entity" => Some(save_entity(state, arguments)),
         _ => None,
@@ -343,15 +347,7 @@ fn route_name(shape: &Shape, steps: &[Step]) -> Value {
 
 /// What one node can be asked for, in the words a caller has to answer with.
 fn parameter_names(node: &Shape) -> String {
-    let specs = params::params_of(node);
-    if specs.is_empty() {
-        return "none — a combinator's operands are reached by route".to_string();
-    }
-    specs
-        .iter()
-        .map(|spec| format!("{:?} ({:?})", spec.name, spec.range_text()))
-        .collect::<Vec<_>>()
-        .join(", ")
+    params::field_text(shape_path::kind(node))
 }
 
 fn parameters_json(node: &Shape) -> Vec<Value> {
@@ -367,6 +363,21 @@ fn parameters_json(node: &Shape) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// The node a call acts on: the route it passes, or the node the editor already holds selected when it
+/// passes none. Shared by `set_part` and `add_part`, so clicking a row and then acting on it is one
+/// gesture rather than two dialects of it.
+fn route_steps(state: &EditorState, arguments: &Value) -> Result<Vec<Step>, String> {
+    match arguments.get("route") {
+        Some(value) => {
+            let route = value
+                .as_str()
+                .ok_or_else(|| "route must be a string".to_string())?;
+            route_of(&state.entity_def.shape, route)
+        }
+        None => Ok(state.selected.clone()),
+    }
 }
 
 /// Point the editor at one node of the tree, which is what a click on a row of the panel's part list does.
@@ -403,15 +414,7 @@ fn select_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
 /// can make that the window cannot is exactly the disagreement gate E7 exists to catch.
 fn set_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
     let name = string_arg(arguments, "parameter")?;
-    let steps = match arguments.get("route") {
-        Some(value) => {
-            let route = value
-                .as_str()
-                .ok_or_else(|| "route must be a string".to_string())?;
-            route_of(&state.entity_def.shape, route)?
-        }
-        None => state.selected.clone(),
-    };
+    let steps = route_steps(state, arguments)?;
 
     let node = shape_path::resolve(&state.entity_def.shape, &steps)
         .ok_or_else(|| "the selected node is no longer in the tree; pass a route".to_string())?;
@@ -429,32 +432,8 @@ fn set_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String>
     let given = arguments
         .get("value")
         .ok_or_else(|| "value is required".to_string())?;
-    // A single-lane field takes a number, a three-lane one takes an array of exactly three — `element`
-    // checks the length on its first read, so a four-lane `centre` is refused rather than truncated.
-    let lanes = if spec.lanes == 1 {
-        [scalar(given, "value")?, 0.0, 0.0]
-    } else {
-        [
-            element(given, 0, "value")?,
-            element(given, 1, "value")?,
-            element(given, 2, "value")?,
-        ]
-    };
-
-    for lane in lanes.iter().take(spec.lanes as usize) {
-        if !lane.is_finite() {
-            return Err(format!("{name} must be finite, got {lanes:?}"));
-        }
-        if spec.whole && *lane != lane.trunc() {
-            return Err(format!("{name} is a whole choice, got {lane}"));
-        }
-        if !(spec.lo..=spec.hi).contains(lane) {
-            return Err(format!(
-                "{name} must be inside {}, got {lane}",
-                spec.range_text()
-            ));
-        }
-    }
+    let lanes = lanes_of(given, &spec, "value")?;
+    check_lanes(&spec, &lanes)?;
 
     let from = params::read_param(node, name.as_str()).expect("the spec came from this node");
     let kind_name = shape_path::kind(node);
@@ -482,6 +461,343 @@ fn set_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String>
         "summary": shape_path::summary(node),
         "preview_signature": state.preview_signature(),
         "state": state_json(state),
+    }))
+}
+
+/// The combinators `add_part` can build. `Repeat` and `Mirror` are absent on purpose: they wrap the one
+/// node they hold rather than join two, which is a different gesture and not one this tool makes yet.
+const COMBINATIONS: &[&str] = &["Union", "Subtract", "Intersect", "SmoothUnion"];
+
+/// A list of names in the shape a refusal answers with: `"a", "b"`.
+fn quoted(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("{name:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The lanes a value carries for a field of this width: a number for a scalar, an array of exactly three
+/// for a vector.
+fn lanes_of(value: &Value, spec: &params::Param, key: &str) -> Result<[f32; 3], String> {
+    if spec.lanes == 1 {
+        return Ok([scalar(value, key)?, 0.0, 0.0]);
+    }
+    Ok([
+        element(value, 0, key)?,
+        element(value, 1, key)?,
+        element(value, 2, key)?,
+    ])
+}
+
+/// One written value, against the range the panel's slider offers. `set_part` and `add_part` read the same
+/// check, so authoring a node from nothing cannot slip past a limit that editing one would refuse.
+fn check_lanes(spec: &params::Param, lanes: &[f32; 3]) -> Result<(), String> {
+    let name = spec.name;
+    for lane in lanes.iter().take(spec.lanes as usize) {
+        if !lane.is_finite() {
+            return Err(format!("{name} must be finite, got {lanes:?}"));
+        }
+        if spec.whole && *lane != lane.trunc() {
+            return Err(format!("{name} is a whole choice, got {lane}"));
+        }
+        if !(spec.lo..=spec.hi).contains(lane) {
+            return Err(format!(
+                "{name} must be inside {}, got {lane}",
+                spec.range_text()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The node `add_part` authors from nothing.
+///
+/// Every field the kind publishes has to be supplied: a defaulted radius would be a value the caller never
+/// asked for, and the file the editor writes would read as though it had. A key that is neither `kind` nor
+/// one of those fields is refused for the same reason — a typo that is quietly dropped authors a node
+/// nobody described.
+fn authored_leaf(given: &Value) -> Result<Shape, String> {
+    let kind = string_arg(given, "kind")?;
+    let mut node = params::blank(&kind).ok_or_else(|| {
+        format!(
+            "{kind:?} cannot be authored from nothing; the kinds add_part creates are {}, and a \
+             combinator needs operands before it exists",
+            quoted(params::AUTHORABLE)
+        )
+    })?;
+    let table = params::params_of(&node);
+    if let Some(fields) = given.as_object() {
+        for key in fields.keys() {
+            if key != "kind" && !table.iter().any(|spec| spec.name == key) {
+                return Err(format!(
+                    "{kind} takes no field {key:?}; it takes {}",
+                    params::field_text(&kind)
+                ));
+            }
+        }
+    }
+    for spec in table {
+        let value = given.get(spec.name).ok_or_else(|| {
+            format!(
+                "{kind} takes {}; {:?} is missing",
+                params::field_text(&kind),
+                spec.name
+            )
+        })?;
+        let lanes = lanes_of(value, spec, spec.name)?;
+        check_lanes(spec, &lanes)?;
+        // A field the table publishes but the writer cannot set is a defect in `params`, and it says so
+        // here rather than letting a zero from `blank` into the tree.
+        params::write_param(&mut node, spec.name, &lanes[..spec.lanes as usize]).ok_or_else(
+            || {
+                format!(
+                    "{} is listed for a {kind} but this build cannot write it",
+                    spec.name
+                )
+            },
+        )?;
+    }
+    Ok(node)
+}
+
+/// Which slot of the new combinator keeps the node already in the tree. The names are the authored file's
+/// — `a`/`b`, and `kept`/`cutter` for a `Subtract`, where the order is the difference between a hole and
+/// an animal.
+fn keep_slot(arguments: &Value, combine: &str) -> Result<(Step, &'static str), String> {
+    let names = shape_path::child_names(combine);
+    let (first_name, first_step) = *names.first().ok_or_else(|| {
+        format!("{combine} has no slot to keep, so it is not a combinator add_part can build")
+    })?;
+    match arguments.get("keep") {
+        None => Ok((first_step, first_name)),
+        Some(value) => {
+            let want = value.as_str().ok_or_else(|| {
+                "keep must be a string naming the slot the existing node keeps".to_string()
+            })?;
+            names
+                .iter()
+                .find(|(name, _)| *name == want)
+                .map(|(name, step)| (*step, *name))
+                .ok_or_else(|| {
+                    format!(
+                        "{combine} has no slot {want:?}; it names {}",
+                        quoted(&names.iter().map(|(name, _)| *name).collect::<Vec<_>>())
+                    )
+                })
+        }
+    }
+}
+
+/// A `SmoothUnion`'s blend width: required of the one combinator that has a parameter of its own, and
+/// refused for the three that do not, so a `k` on a `Union` cannot sit there doing nothing.
+fn blend_k(arguments: &Value, combine: &str) -> Result<f32, String> {
+    let spec = *params::params_of_kind("SmoothUnion")
+        .first()
+        .expect("a SmoothUnion publishes k");
+    match arguments.get("k") {
+        Some(value) => {
+            if combine != "SmoothUnion" {
+                return Err(format!("{combine} carries no k; only a SmoothUnion blends"));
+            }
+            let lanes = lanes_of(value, &spec, "k")?;
+            check_lanes(&spec, &lanes)?;
+            Ok(lanes[0])
+        }
+        None if combine == "SmoothUnion" => Err(format!(
+            "SmoothUnion needs k, the width it blends with; it takes {:?}",
+            spec.range_text()
+        )),
+        None => Ok(0.0),
+    }
+}
+
+/// Put a rebuilt tree into the state, answering the whole call with the compiler's own refusal if the
+/// tree it would leave cannot compile.
+///
+/// Both structural tools build their result on a clone and hand it here, so a refusal cannot leave the
+/// editor holding half a change. `assetc::lower` is the pass the shipped `.bin` comes out of — the depth
+/// cap, a non-unit axis, a NaN length — and an editor that wrote a tree the compiler refuses would hand
+/// an author a file that cannot become an asset and say nothing until the boot fails.
+fn commit(state: &mut EditorState, candidate: Shape, select: Vec<Step>) -> Result<usize, String> {
+    if let Err(refusal) = assetc::lower(&candidate) {
+        return Err(format!(
+            "the tree this would leave cannot be compiled: {refusal}"
+        ));
+    }
+    let before = shape_path::outline(&state.entity_def.shape).len();
+    state.entity_def.shape = candidate;
+    state.select(select);
+    state.mark_dirty();
+    Ok(before)
+}
+
+/// Grow the tree: wrap the node a route names in a new combinator, joining it to a freshly authored leaf.
+///
+/// There is no free slot in this grammar — a combinator is full the moment it exists — so *adding* means
+/// wrapping, and that is also how a node reaches any position the routes can name, `root` included.
+fn add_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let steps = route_steps(state, arguments)?;
+    let combine = string_arg(arguments, "combine")?;
+    if !COMBINATIONS.contains(&combine.as_str()) {
+        return Err(format!(
+            "no combinator {combine:?}; add_part joins with {}",
+            quoted(COMBINATIONS)
+        ));
+    }
+    let given = arguments.get("shape").ok_or_else(|| {
+        format!(
+            "{combine} needs the node to join it to: pass shape as {{\"kind\": \"Sphere\", ...}} — \
+             the kinds it can author are {}",
+            quoted(params::AUTHORABLE)
+        )
+    })?;
+    let leaf = authored_leaf(given)?;
+    let (keep, keep_name) = keep_slot(arguments, &combine)?;
+    let k = blend_k(arguments, &combine)?;
+
+    let mut candidate = state.entity_def.shape.clone();
+    let slot = shape_path::resolve_mut(&mut candidate, &steps)
+        .ok_or_else(|| "the selected node is no longer in the tree; pass a route".to_string())?;
+    let existing = core::mem::replace(slot, leaf.clone());
+    let (first, second) = if keep == Step::First {
+        (existing, leaf)
+    } else {
+        (leaf, existing)
+    };
+    *slot = match combine.as_str() {
+        "Union" => Shape::Union {
+            a: Box::new(first),
+            b: Box::new(second),
+        },
+        "Intersect" => Shape::Intersect {
+            a: Box::new(first),
+            b: Box::new(second),
+        },
+        "Subtract" => Shape::Subtract {
+            kept: Box::new(first),
+            cutter: Box::new(second),
+        },
+        _ => Shape::SmoothUnion {
+            a: Box::new(first),
+            b: Box::new(second),
+            k,
+        },
+    };
+
+    let before = commit(state, candidate, steps.clone())?;
+    let snapshot = state_json(state);
+    let tree = &state.entity_def.shape;
+    let at = route_name(tree, &steps);
+    // The existing node stayed in the slot `keep` names and the new leaf took the other one, so both
+    // reports read back out of the tree the call just left instead of being described from the arguments.
+    let slots = shape_path::child_names(combine.as_str());
+    let (other, other_name) = if keep == Step::First {
+        (slots[1].1, slots[1].0)
+    } else {
+        (slots[0].1, slots[0].0)
+    };
+    let leaf_path = [steps.as_slice(), &[other]].concat();
+    let kept_path = [steps.as_slice(), &[keep]].concat();
+    let added =
+        shape_path::resolve(tree, &leaf_path).expect("commit put the wrapper at this route");
+    let kept = shape_path::resolve(tree, &kept_path)
+        .expect("commit kept the node the route named in the slot it named");
+    Ok(json!({
+        "at": at,
+        "into": combine,
+        "kept": {
+            "slot": keep_name,
+            "route": route_name(tree, &kept_path),
+            "kind": shape_path::kind(kept),
+            "summary": shape_path::summary(kept),
+        },
+        "added": {
+            "slot": other_name,
+            "route": route_name(tree, &leaf_path),
+            "kind": shape_path::kind(added),
+            "summary": shape_path::summary(added),
+        },
+        "selected": at,
+        "nodes_before": before,
+        "node_count": snapshot["node_count"],
+        "preview_signature": state.preview_signature(),
+        "state": snapshot,
+    }))
+}
+
+/// Take one node out of the tree, and the combinator that held it with it.
+///
+/// A two-operand combinator missing an operand is not a shape, so the surviving operand takes its parent's
+/// place and the tree loses two nodes while keeping everything below the survivor. A one-child wrapper has
+/// nothing to promote, so deleting its child refuses rather than answering with a `Mirror` of nothing.
+/// Deleting a `Subtract`'s `kept` leaves its `cutter` standing — that is what the caller asked for, and the
+/// reply names the node that took the place.
+fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let route = string_arg(arguments, "route")?;
+    if route.trim().is_empty() {
+        return Err(
+            "route is required; editor_state's parts list names the parts that can be deleted, and \
+             \"root\" is the whole entity"
+                .to_string(),
+        );
+    }
+    let steps = route_of(&state.entity_def.shape, &route)?;
+    let Some((&last, parent_path)) = steps.split_last() else {
+        return Err(
+            "\"root\" is the whole entity — deleting it leaves an editor holding nothing; delete its \
+             parts until the tree is the one you want"
+                .to_string(),
+        );
+    };
+    let tree = &state.entity_def.shape;
+    let gone = shape_path::resolve(tree, &steps).expect("route_of walked to this node");
+    let (gone_kind, gone_summary, gone_route) = (
+        shape_path::kind(gone),
+        shape_path::summary(gone),
+        route_name(tree, &steps),
+    );
+    let parent = shape_path::resolve(tree, parent_path).expect("route_of walked through here");
+    if shape_path::children(parent).len() != 2 {
+        let wrapper = shape_path::kind(parent);
+        return Err(format!(
+            "{} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. \
+             Delete the {wrapper} itself from its own parent, or set its parameter.",
+            gone_route.as_str().unwrap_or(route.as_str())
+        ));
+    }
+    let survivor_step = if last == Step::First {
+        Step::Second
+    } else {
+        Step::First
+    };
+    let survivor_path = [parent_path, &[survivor_step]].concat();
+    let survivor = shape_path::resolve(tree, &survivor_path)
+        .expect("a two-operand combinator holds both of its operands")
+        .clone();
+
+    let mut candidate = tree.clone();
+    *shape_path::resolve_mut(&mut candidate, parent_path).expect("route_of walked through here") =
+        survivor;
+    // The paths below the collapsed combinator have all shifted, so nothing the caller had selected can
+    // be trusted to still mean what it meant: the selection goes back to the root rather than being kept
+    // as a path into an unrelated node.
+    let before = commit(state, candidate, Vec::new())?;
+    let snapshot = state_json(state);
+    let now = shape_path::resolve(&state.entity_def.shape, parent_path)
+        .expect("the survivor took its parent's place in the tree");
+    Ok(json!({
+        "deleted": { "route": gone_route, "kind": gone_kind, "summary": gone_summary },
+        "its_parent": {
+            "route": route_name(&state.entity_def.shape, parent_path),
+            "replaced_by": shape_path::kind(now),
+            "summary": shape_path::summary(now),
+        },
+        "selected": snapshot["selected"],
+        "nodes_before": before,
+        "node_count": snapshot["node_count"],
+        "preview_signature": state.preview_signature(),
+        "state": snapshot,
     }))
 }
 
@@ -779,6 +1095,41 @@ pub fn tool_specs() -> Value {
                     "value": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } ] }
                 },
                 "required": ["parameter", "value"]
+            }
+        },
+        {
+            "name": "add_part",
+            "description": "Grow the tree: wrap the node a route names (or the selected one) in a new Union, Subtract, Intersect or SmoothUnion, joining it to a freshly authored Sphere, RoundedBox or Plane. Every field of the new leaf is required, in the ranges set_part offers; k is required for a SmoothUnion and refused for the rest. keep names which slot the existing node stays in (a/b, or kept/cutter for a Subtract) and defaults to the first. The whole call refuses, leaving the tree untouched, if the tree it would leave cannot be compiled.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "route": { "type": "string" },
+                    "combine": { "type": "string", "enum": ["Union", "Subtract", "Intersect", "SmoothUnion"] },
+                    "keep": { "type": "string" },
+                    "k": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "shape": {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["Sphere", "RoundedBox", "Plane"] },
+                            "r": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } ] },
+                            "centre": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                            "half": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                            "normal": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                            "offset": { "type": "number" }
+                        },
+                        "required": ["kind"]
+                    }
+                },
+                "required": ["combine", "shape"]
+            }
+        },
+        {
+            "name": "delete_part",
+            "description": "Take one node out of the tree by route. The two-operand combinator that held it goes too, and its surviving operand takes its place. A one-child wrapper's child cannot be deleted (that would leave a wrapper of nothing), and root cannot be deleted. The selection returns to root, because every path below the collapse means something else now.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "route": { "type": "string" } },
+                "required": ["route"]
             }
         },
         {
