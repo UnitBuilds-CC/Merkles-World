@@ -827,6 +827,16 @@ slot `keep` names instead of the one it does not named five rows. Dropping
 refusal table. All six were reverted and the suite re-run green at 321, measured by
 `tools/check_suite_size.sh`.
 
+The live pipe was driven over stdio, not only through the module: `tools/list` published fourteen
+tools with `graft_part` among them, and the shipped pig was re-parented by its own node — the ear pair
+lifted out of the root's `Union` and grafted onto the tail that shared it, which is the one graft that
+reconstructs the tree it started from. The reply read `at` `root.b`, the anchor in slot `a` at
+`root.b.a`, the pair in slot `b` at `root.b.b`, 36 nodes in and 36 out, and the selection on
+`root.b.b`; the frame that followed was the same file at the same path with the same bytes as the
+frame before it — same key, 2,410 surface of 19,200 with nothing undrawn at 160×120 — and the animal
+still reads as a pig. A re-parent that changes no composition cannot change the picture, and that is
+what the transport answered.
+
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
 a debug build on this machine, on the run that landed this section.
