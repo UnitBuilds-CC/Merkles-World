@@ -3272,6 +3272,577 @@ fn exchanging_a_subs_two_halves_turns_a_bite_into_a_crescent() {
 }
 
 #[test]
+fn grafting_a_finished_subtree_under_another_node_moves_it_and_keeps_the_count() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was = before["parts"].as_array().expect("a list").clone();
+    // The ear pair is a two-child `Union`, not a wrapper, so lifting it collapses a real combinator and the
+    // tail sharing that combinator has to stand in its place. A wrapper would have been unwrapped instead,
+    // which is the one case this fixture is chosen not to measure.
+    let from = "root.b.b";
+    let under = "root.a.a.b";
+    assert_eq!(part_at(&was, from)["kind"], json!("Union"));
+    assert_eq!(part_at(&was, &format!("{from}.a"))["kind"], json!("Sphere"));
+    assert_eq!(part_at(&was, &format!("{from}.b"))["kind"], json!("Sphere"));
+    assert_eq!(part_at(&was, "root.b")["kind"], json!("Union"));
+    assert_eq!(
+        part_at(&was, under)["kind"],
+        json!("SmoothUnion"),
+        "the landing node is not the neck-and-head branch"
+    );
+    let mut held = vec![content_of(part_at(&was, from))];
+    held.extend(contents_under(&was, from));
+    held.sort();
+    let head = content_of(part_at(&was, under));
+
+    let grafted = call(
+        &mut state,
+        "graft_part",
+        json!({ "from": from, "under": under, "combine": "Union" }),
+    );
+    assert_eq!(grafted["at"], json!(under));
+    assert_eq!(grafted["into"], json!("Union"));
+    assert_eq!(grafted["anchor"]["slot"], json!("a"));
+    assert_eq!(grafted["anchor"]["route"], json!(format!("{under}.a")));
+    assert_eq!(grafted["grafted"]["slot"], json!("b"));
+    assert_eq!(grafted["grafted"]["was"], json!(from));
+    assert_eq!(grafted["grafted"]["route"], json!(format!("{under}.b")));
+    assert_eq!(grafted["grafted"]["kind"], json!("Union"));
+    assert_eq!(grafted["grafted"]["children"], json!(2));
+    assert_eq!(
+        grafted["nodes_before"], before["node_count"],
+        "the reply does not count the tree the lift started from"
+    );
+    assert_eq!(
+        grafted["node_count"], before["node_count"],
+        "a graft lost or duplicated nodes: the lift takes the holder and the subtree out and the join \
+         puts the subtree and one combinator back, so the count cannot move: {} -> {}",
+        grafted["nodes_before"], grafted["node_count"]
+    );
+    assert_eq!(grafted["selected"], json!(format!("{under}.b")));
+
+    let after = call(&mut state, "editor_state", json!({}));
+    let now = after["parts"].as_array().expect("a list").clone();
+    assert_eq!(now.len(), was.len(), "the parts list changed length");
+    let mut carried = vec![content_of(part_at(&now, &format!("{under}.b")))];
+    carried.extend(contents_under(&now, &format!("{under}.b")));
+    carried.sort();
+    assert_eq!(
+        carried, held,
+        "the graft did not carry the lifted subtree node for node"
+    );
+    assert_eq!(
+        content_of(part_at(&now, &format!("{under}.a"))),
+        head,
+        "the landing node did not keep its slot intact"
+    );
+    // The holder collapsed: the tail is now the node `root.b` names, and nothing is left below it.
+    assert_eq!(
+        content_of(part_at(&now, "root.b")),
+        content_of(part_at(&was, "root.b.a")),
+        "the survivor did not take the collapsed Union's place"
+    );
+    assert!(
+        !now.iter().any(|part| route_of(part).starts_with("root.b.")),
+        "a route below the collapsed Union survived, so the ears were copied instead of moved"
+    );
+    assert_ne!(
+        grafted["preview_signature"], before["preview_signature"],
+        "the frame key did not move, so the viewport would keep the old picture"
+    );
+
+    // What the reply reported and what a reload reads back are the same tree.
+    let saved = temp_path("graft.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": saved.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": saved.to_string_lossy() }),
+    );
+    let back = call(&mut reloaded, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&back["parts"]),
+        fingerprints(&after["parts"]),
+        "the saved file does not hold the tree the graft reported"
+    );
+    let _ = std::fs::remove_file(saved);
+}
+
+#[test]
+fn a_graft_that_cannot_land_says_why_and_leaves_the_tree_alone() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was = before["parts"].as_array().expect("a list").clone();
+    let leaf = was
+        .iter()
+        .find(|part| {
+            part["kind"]
+                .as_str()
+                .is_some_and(|kind| LEAF_KINDS.contains(&kind))
+        })
+        .map(route_of)
+        .expect("the pig ends in leaves")
+        .to_string();
+
+    let cases: Vec<(&str, Value, &str)> = vec![
+        (
+            "the same node at both ends",
+            json!({ "from": "root.a", "under": "root.a", "combine": "Union" }),
+            "are the same node",
+        ),
+        (
+            "the root as the node to lift",
+            json!({ "from": "root", "under": "root.b.a", "combine": "Union" }),
+            "the whole entity",
+        ),
+        (
+            "no from",
+            json!({ "under": "root.a", "combine": "Union" }),
+            "from is required and must be a string",
+        ),
+        (
+            "no under",
+            json!({ "from": "root.b.b", "combine": "Union" }),
+            "under is required and must be a string",
+        ),
+        (
+            "a blank from",
+            json!({ "from": "  ", "under": "root.a", "combine": "Union" }),
+            "from is required",
+        ),
+        (
+            "a blank under",
+            json!({ "from": "root.b.b", "under": " ", "combine": "Union" }),
+            "under is required",
+        ),
+        (
+            "an under that is not a route",
+            json!({ "from": "root.b.b", "under": 3, "combine": "Union" }),
+            "must be a string",
+        ),
+        (
+            "a from that walks off the tree",
+            json!({ "from": "root.nope", "under": "root.a", "combine": "Union" }),
+            "has no child",
+        ),
+        (
+            "an under that walks into a leaf",
+            json!({ "from": "root.b.b", "under": format!("{leaf}.a"), "combine": "Union" }),
+            "has no children",
+        ),
+        (
+            "a node lifted out from over its landing",
+            json!({ "from": "root.b", "under": "root.b.a", "combine": "Union" }),
+            "holds",
+        ),
+        (
+            "a node lifted onto the combinator that holds it",
+            json!({ "from": "root.b.a", "under": "root.b", "combine": "Union" }),
+            "sits directly under",
+        ),
+        (
+            "a node lifted onto the root that holds it",
+            json!({ "from": "root.a", "under": "root", "combine": "Union" }),
+            "sits directly under",
+        ),
+        (
+            "a wrapper's only child",
+            json!({ "from": "root.a.b.child", "under": "root.b.a", "combine": "Union" }),
+            "only child",
+        ),
+        (
+            "Mirror as the join",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "Mirror" }),
+            "wraps the one node it holds",
+        ),
+        (
+            "Repeat as the join",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "Repeat" }),
+            "wraps the one node it holds",
+        ),
+        (
+            "no such combinator",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "Blend" }),
+            "no combinator",
+        ),
+        (
+            "a SmoothUnion without k",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "SmoothUnion" }),
+            "needs k",
+        ),
+        (
+            "a k on a Union",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "Union", "k": 0.1 }),
+            "carries no k",
+        ),
+        (
+            "a slot the join does not have",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "Union", "keep": "kept" }),
+            "has no slot",
+        ),
+        (
+            "an argument the tool does not take",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": "Union", "shape": {} }),
+            "has no argument",
+        ),
+        (
+            "a combine that is not a string",
+            json!({ "from": "root.b.b", "under": "root.a.a.b", "combine": 2 }),
+            "must be a string",
+        ),
+        (
+            "an empty call",
+            json!({}),
+            "from is required and must be a string",
+        ),
+    ];
+    for (what, arguments, expected) in &cases {
+        let (message, refused) = try_call(&mut state, "graft_part", arguments.clone());
+        assert!(refused, "{what} was accepted: {message}");
+        assert!(
+            message.contains(expected),
+            "the refusal for {what} says {message:?}, which does not mention {expected:?}"
+        );
+    }
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&before["parts"]),
+        "{} refused grafts moved the tree anyway",
+        cases.len()
+    );
+    assert_eq!(after["dirty"], json!(false));
+    assert_eq!(after["selected"], before["selected"]);
+    assert_eq!(after["preview_signature"], before["preview_signature"]);
+}
+
+#[test]
+fn a_graft_that_cannot_lift_a_wrappers_child_names_the_wrapper_that_can() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was = before["parts"].as_array().expect("a list").clone();
+    let mirror = "root.a.b";
+    let child = "root.a.b.child";
+    assert_eq!(part_at(&was, mirror)["kind"], json!("Mirror"));
+    let tail = "root.b.a";
+    assert_eq!(part_at(&was, tail)["kind"], json!("Sphere"));
+    // What the refusal names is the Mirror, so what the second call must carry is the Mirror *and* the
+    // child the first call was after — not the child alone.
+    let mut held = vec![content_of(part_at(&was, mirror))];
+    held.extend(contents_under(&was, mirror));
+    held.sort();
+
+    let (message, refused) = try_call(
+        &mut state,
+        "graft_part",
+        json!({ "from": child, "under": tail, "combine": "Union" }),
+    );
+    assert!(refused, "a mirror's only child was lifted out: {message}");
+    assert!(
+        message.contains(&format!("Graft the Mirror at \"{mirror}\"")),
+        "the refusal does not name the call that moves this node: {message}"
+    );
+    // The named call works, and it carries the child the first call was after — which is the sentence the
+    // refusal promised, measured rather than asserted in prose.
+    let grafted = call(
+        &mut state,
+        "graft_part",
+        json!({ "from": mirror, "under": tail, "combine": "Union" }),
+    );
+    assert_eq!(grafted["grafted"]["kind"], json!("Mirror"));
+    assert_eq!(grafted["grafted"]["was"], json!(mirror));
+    assert_eq!(grafted["node_count"], before["node_count"]);
+    let after = call(&mut state, "editor_state", json!({}));
+    let now = after["parts"].as_array().expect("a list").clone();
+    let landing = format!("{tail}.b");
+    let mut carried = vec![content_of(part_at(&now, &landing))];
+    carried.extend(contents_under(&now, &landing));
+    carried.sort();
+    assert_eq!(
+        carried, held,
+        "the wrapper was grafted without the subtree it held"
+    );
+    // Lifting the Mirror collapsed the SmoothUnion it shared with the legs: the legs' branch is that node
+    // now, and the Mirror is not reachable at its old route.
+    assert_eq!(
+        content_of(part_at(&now, "root.a")),
+        content_of(part_at(&was, "root.a.a")),
+        "the survivor did not take the collapsed SmoothUnion's place"
+    );
+    assert!(
+        !now.iter().any(|part| route_of(part) == child),
+        "the wrapper's child is still under the route it left"
+    );
+}
+
+#[test]
+fn a_graft_follows_a_landing_route_through_the_operand_the_lift_promoted() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was = before["parts"].as_array().expect("a list").clone();
+    // Lifting the whole body branch collapses the root, and the tail-and-ears Union takes the root's place.
+    // Every route below it loses two steps, so the ear the caller named is not at the route it wrote by the
+    // time anything lands: the call has to follow the survivor rather than fail on a route it moved itself.
+    let from = "root.a";
+    let under = "root.b.b.b";
+    assert_eq!(part_at(&was, from)["kind"], json!("SmoothUnion"));
+    assert_eq!(part_at(&was, under)["kind"], json!("Sphere"));
+    let mut held = vec![content_of(part_at(&was, from))];
+    held.extend(contents_under(&was, from));
+    held.sort();
+
+    let grafted = call(
+        &mut state,
+        "graft_part",
+        json!({ "from": from, "under": under, "combine": "Union" }),
+    );
+    assert_eq!(
+        grafted["at"],
+        json!("root.b.b"),
+        "the reply names the route the caller wrote, not the route the anchor actually moved to"
+    );
+    assert_eq!(grafted["anchor"]["called_with"], json!(under));
+    assert_eq!(grafted["anchor"]["route"], json!("root.b.b.a"));
+    assert_eq!(grafted["grafted"]["route"], json!("root.b.b.b"));
+    assert_eq!(grafted["selected"], json!("root.b.b.b"));
+    assert_eq!(
+        grafted["node_count"], before["node_count"],
+        "following the promoted operand lost or duplicated nodes"
+    );
+    let after = call(&mut state, "editor_state", json!({}));
+    let now = after["parts"].as_array().expect("a list").clone();
+    let mut carried = vec![content_of(part_at(&now, "root.b.b.b"))];
+    carried.extend(contents_under(&now, "root.b.b.b"));
+    carried.sort();
+    assert_eq!(carried, held, "the graft did not carry the body branch");
+    // The survivor's whole line moved up two steps, and that is the remap this test exists for: the tail
+    // that was `root.b.a` is the entity's `root.a`, and the ear that shared the ear Union with the anchor
+    // is `root.b.a`.
+    assert_eq!(
+        content_of(part_at(&now, "root.a")),
+        content_of(part_at(&was, "root.b.a"))
+    );
+    assert_eq!(
+        content_of(part_at(&now, "root.b.a")),
+        content_of(part_at(&was, "root.b.b.a"))
+    );
+}
+
+#[test]
+fn a_graft_can_lift_a_part_up_to_an_ancestor_that_would_not_collapse() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was = before["parts"].as_array().expect("a list").clone();
+    // The front leg leaves its Union, which collapses to the back leg, and is grafted beside the body it
+    // was attached to. The landing node is an ancestor of the lifted node, so its contents change — the
+    // call allows exactly that case and refuses an anchor it could not identify.
+    let from = "root.a.b.child.a";
+    let under = "root.a";
+    assert_eq!(part_at(&was, from)["kind"], json!("SmoothUnion"));
+    let mut held = vec![content_of(part_at(&was, from))];
+    held.extend(contents_under(&was, from));
+    held.sort();
+
+    let grafted = call(
+        &mut state,
+        "graft_part",
+        json!({ "from": from, "under": under, "combine": "Union" }),
+    );
+    assert_eq!(grafted["at"], json!(under));
+    assert_eq!(grafted["anchor"]["route"], json!("root.a.a"));
+    assert_eq!(grafted["grafted"]["route"], json!("root.a.b"));
+    assert_eq!(grafted["selected"], json!("root.a.b"));
+    assert_eq!(
+        grafted["node_count"], before["node_count"],
+        "lifting a part up to its own ancestor lost or duplicated nodes"
+    );
+    let after = call(&mut state, "editor_state", json!({}));
+    let now = after["parts"].as_array().expect("a list").clone();
+    let mut carried = vec![content_of(part_at(&now, "root.a.b"))];
+    carried.extend(contents_under(&now, "root.a.b"));
+    carried.sort();
+    assert_eq!(carried, held, "the graft did not carry the front leg");
+    assert_eq!(
+        content_of(part_at(&now, "root.a.a")),
+        content_of(part_at(&was, under)),
+        "the landing node's own contents were not kept in the slot it kept"
+    );
+    // The leg's Union collapsed to the back leg, which now stands in the Mirror's child slot. Both halves
+    // are named by a route above, so a copy left behind would fail one of them.
+    assert_eq!(
+        content_of(part_at(&now, "root.a.a.b.child")),
+        content_of(part_at(&was, "root.a.b.child.b")),
+        "the survivor did not take the collapsed Union's place"
+    );
+}
+
+#[test]
+fn the_graft_schema_publishes_the_arguments_the_tool_reads() {
+    let mut state = fresh();
+    let listing: Value = serde_json::from_str(&ask(
+        &mut state,
+        &json!({"jsonrpc":"2.0","id":22,"method":"tools/list"}).to_string(),
+    ))
+    .expect("tools/list is JSON");
+    let spec = listing["result"]["tools"]
+        .as_array()
+        .expect("tools is an array")
+        .iter()
+        .find(|tool| tool["name"] == json!("graft_part"))
+        .expect("graft_part is published");
+    let schema = &spec["inputSchema"];
+    assert_eq!(schema["type"], json!("object"));
+    let mut properties: Vec<&str> = schema["properties"]
+        .as_object()
+        .expect("graft_part publishes its arguments")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    properties.sort();
+    assert_eq!(
+        properties,
+        ["combine", "from", "k", "keep", "under"],
+        "the schema publishes a different set of arguments than the tool reads"
+    );
+    assert_eq!(schema["required"], json!(["from", "under", "combine"]));
+    assert_eq!(
+        schema["additionalProperties"],
+        json!(false),
+        "a client is allowed to send an argument the tool refuses"
+    );
+    assert_eq!(
+        schema["properties"]["combine"]["enum"],
+        json!(["Union", "Subtract", "Intersect", "SmoothUnion"]),
+        "the joins published are not the four the tool builds, in the order add_part prints them"
+    );
+    for field in ["from", "under", "keep"] {
+        assert_eq!(schema["properties"][field]["type"], json!("string"));
+    }
+    assert_eq!(schema["properties"]["k"]["type"], json!("number"));
+    assert_eq!(schema["properties"]["k"]["minimum"], json!(0));
+    assert_eq!(schema["properties"]["k"]["maximum"], json!(1));
+}
+
+#[test]
+fn the_join_slot_is_the_meaning_so_a_graft_can_carve_instead_of_adding() {
+    // The same lift grafted with each join, from the same fixture. `Union` rebuilds exactly the tree the
+    // fixture held, so its frame is the control: it proves the silhouette counts below belong to the join
+    // and not to an instrument that moves whenever anything is called.
+    fn frame_after(combine: &str, keep: &str) -> (Value, Value) {
+        let mut state = fresh();
+        let view = json!({ "view": "front", "width": 96, "height": 72, "stage": false });
+        // Small enough that the front camera does not crop it: the fresh editor's unit ball at the named
+        // views' distance 1.5 covers the whole frame, and a bite taken out of a silhouette that is off the
+        // edge is a loss the pixel count cannot show.
+        call(
+            &mut state,
+            "set_part",
+            json!({ "route": "root", "parameter": "r", "value": 0.4 }),
+        );
+        call(
+            &mut state,
+            "add_part",
+            json!({
+                "route": "root", "combine": "Union", "keep": "a",
+                "shape": { "kind": "Sphere", "r": 0.2, "centre": [0.25, 0.0, 0.0] },
+            }),
+        );
+        let before = call(&mut state, "render_view", view.clone());
+        call(
+            &mut state,
+            "graft_part",
+            json!({ "from": "root.b", "under": "root.a", "combine": combine, "keep": keep }),
+        );
+        let after = call(&mut state, "render_view", view);
+        (before, after)
+    }
+
+    let (plain, added) = frame_after("Union", "a");
+    let (_, cut) = frame_after("Subtract", "kept");
+    let (_, lens) = frame_after("Intersect", "a");
+    for (what, frame) in [
+        ("the plain frame", &plain),
+        ("the union graft", &added),
+        ("the subtract graft", &cut),
+        ("the intersect graft", &lens),
+    ] {
+        assert_eq!(
+            frame["undrawn_pixels"],
+            json!(0),
+            "the march refused to draw {what}"
+        );
+    }
+    let surface = |frame: &Value| frame["surface_pixels"].as_u64().expect("a count");
+    let (plain_surface, added_surface) = (surface(&plain), surface(&added));
+    let (cut_surface, lens_surface) = (surface(&cut), surface(&lens));
+    assert_eq!(
+        added_surface, plain_surface,
+        "a Union graft rebuilt the solid the fixture held, so its silhouette cannot move: {} -> {}",
+        plain_surface, added_surface
+    );
+    assert_eq!(
+        added["path"], plain["path"],
+        "the same solid was written under two names, so a reader cannot tell it did not move"
+    );
+    assert!(
+        cut_surface > 0,
+        "the subtract joined two spheres and drew nothing"
+    );
+    assert!(
+        cut_surface < added_surface,
+        "cutting the protruding ball out of the big one left the picture no smaller: {} -> {}",
+        added_surface,
+        cut_surface
+    );
+    assert!(
+        lens_surface > 0,
+        "the two spheres intersect, so the intersection cannot be empty"
+    );
+    assert!(
+        lens_surface < cut_surface,
+        "the lens between two spheres came out no smaller than the ball it is cut from: {} -> {}",
+        cut_surface,
+        lens_surface
+    );
+    assert_ne!(
+        cut["path"], plain["path"],
+        "the subtract frame was written under the control's name"
+    );
+    assert_ne!(lens["path"], plain["path"]);
+}
+
+#[test]
 fn deleting_a_nested_wrapper_unwraps_it_and_carries_the_subtree_it_held() {
     let mut state = fresh();
     call(

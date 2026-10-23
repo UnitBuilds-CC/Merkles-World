@@ -261,7 +261,7 @@ anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handl
 it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
 same module rather than a mock of it.
 
-Thirteen tools:
+Fourteen tools:
 
 | Tool | Answers |
 |------|---------|
@@ -276,10 +276,11 @@ Thirteen tools:
 | `add_part` | grows the tree one of two ways. `Union`, `Subtract`, `Intersect` or `SmoothUnion` wraps the node a route names in that combinator, joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `Mirror` or `Repeat` wraps it alone — no `shape`, no `keep`, and the wrapper's own `axis` or `period` beside `combine`, from the same table `set_part` writes. `route` optional: without one it wraps the selected node. A wrapper that discards part of what it wraps is not an error — it is legal grammar that draws less than it holds — so the wrap lands and answers with `wrapped.extent`, the box it measured, and `wrapped.notice`, which names the cell or the plane and what the wrap leaves of it; both are null when the wrapper's domain reaches the whole part |
 | `delete_part` | a route in, the node out. A one-child wrapper goes by **unwrapping**, at any depth: the node it held takes the wrapper's place, the subtree below it comes along, and the selection stays on the route the wrapper held because that route still names a node — the promoted one. A two-operand combinator cannot hold one operand, so there its surviving operand takes the combinator's place, the tree loses two nodes, and the selection goes back to `root`, because every path under a collapse now means something else. Deleting the sole child of a wrapper is refused, and the refusal names the route that wrapper actually holds as the call that works |
 | `move_part` | two routes in, both ends out. It is an **exchange**, not a reparent: the node at `from` and the node at `to` trade places, every other route keeps resolving to the same node it did, and `node_count` is unchanged. Refused: a pair on one line from the root (one holds the other, so one write would land inside the other and a subtree would be lost rather than moved), `root` as either end for the same reason, the same route twice, and two routes holding identical content — an exchange of equals moves nothing |
+| `graft_part` | the re-parent: the subtree at `from` is lifted out and joined to the node at `under` inside a new `Union`, `Subtract`, `Intersect` or `SmoothUnion`. `keep` names the slot `under` keeps (the first by default, so a `Subtract` cuts the lifted part out of `under`), and `k` is required of a `SmoothUnion` and refused for the rest. The lift collapses whichever combinator held `from` the way `delete_part` does, except that a lifted wrapper leaves *with* its child instead of being unwrapped — so the holder and the subtree go, the join puts the subtree and one combinator back, and `node_count` is unchanged. Refused: `from` holding `under`, `from` sitting directly under `under` (or under `root` when `root` is its holder), a wrapper's only child — with the wrapper's own route named as the call that works — and a landing route the lift moved in a way the call cannot follow. A route through the operand the collapse promoted is followed to where that node now sits, which is what makes an anchor that is an ancestor of `from` landable |
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts. `view` names one of the six angles; only leaving it off steers by `yaw`, `pitch` and `distance`, and the file is then named `custom`. A `view` of any other type — a number, a boolean, an array, an object, `null` — is refused rather than read as "no view" |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
-Twelve of those decisions are about honesty rather than features:
+Thirteen of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
   1e-4 of 1; scale finite and positive; every `position` lane finite), and validates the whole call before
@@ -308,14 +309,16 @@ Twelve of those decisions are about honesty rather than features:
   while `mcp.rs` validates against it. Two written-down ranges would drift into an edit an agent can make
   that the window cannot, which is the disagreement this gate exists to catch. The field names are the
   ones `.ron` files and `assetc`'s refusals use, so a caller can paste either.
-- **A structural edit is compiled before it lands.** The three structural tools — `add_part`,
-  `delete_part` and `move_part` — build their result on a clone and pass it through `assetc::lower` — the
-  same pass the shipped `.bin` comes out of — so the depth cap, a non-unit `Mirror` axis and a NaN length
-  are refused with the compiler's own words and the held tree never moves. An editor that wrote a tree the
-  compiler refuses would hand an author a file that cannot become an asset and say nothing until the boot
-  fails. `move_part` needs that gate more than the other two: an exchange that puts a deep subtree into a
-  slot that held a leaf makes the tree deeper on one side, and nothing about the gesture is itself
-  illegal — so the cap is the only clause that can see the hazard.
+- **A structural edit is compiled before it lands.** The four structural tools — `add_part`,
+  `delete_part`, `move_part` and `graft_part` — build their result on a clone and pass it through
+  `assetc::lower` — the same pass the shipped `.bin` comes out of — so the depth cap, a non-unit `Mirror`
+  axis and a NaN length are refused with the compiler's own words and the held tree never moves. An editor
+  that wrote a tree the compiler refuses would hand an author a file that cannot become an asset and say
+  nothing until the boot fails. `move_part` and `graft_part` need that gate more than the other two: an
+  exchange that puts a deep subtree into a slot that held a leaf makes the tree deeper on one side, and a
+  graft can carry a deep branch under a deep anchor — the count does not move, but the longest path does —
+  and nothing about either gesture is itself illegal, so the cap is the only clause that can see the
+  hazard.
 - **Adding is wrapping, and deleting is collapsing.** Every combinator in this grammar is full the moment
   it exists — a `Union` with one operand is not a shape — so there is no free slot to fill, and the only
   honest *add* is a new wrapper around the node the route names. The reply then reads both slots back out
@@ -336,6 +339,25 @@ Twelve of those decisions are about honesty rather than features:
   failure this pipe refuses hardest. The reply reads both ends back out of the tree it left — `was` and
   `now`, each with its kind, summary and child count — so a caller sees which content went which way instead
   of inferring it from a route it computed itself.
+- **Re-parenting is lifting and joining, and the lift is not the delete.** `graft_part` is `delete_part`'s
+  collapse followed by `add_part`'s wrapper, in one call: the subtree at `from` leaves, the combinator that
+  held it collapses, and the subtree is joined to the node at `under` inside a new `Union`, `Subtract`,
+  `Intersect` or `SmoothUnion` — so no node is held in transit by anything, the holder and the subtree go
+  and the join puts the subtree and one combinator back, and `node_count` is the same before and after.
+  The lift is deliberately not the delete's: `delete_part` unwraps a one-child `Mirror` or `Repeat`, but a
+  wrapper lifted here leaves *with* its child, because unwrapping it would promote the child into the
+  wrapper's slot and then graft a second copy of it — the tree would report a re-parent and hold two of
+  the part. Landing is the one end that can be wrong: `from` holding `under` would write the subtree into
+  the anchor it was just lifted out of, and `from` sitting directly under `under` would join the subtree to
+  the node that is about to take its place, so both are refused rather than answered with a tree that
+  contradicts the call. A wrapper's sole child is refused for the same reason the delete refuses it — the
+  wrapper would be left holding nothing — and the refusal names the wrapper's route, which is the call that
+  lifts the whole thing. The landing route is read again *after* the lift, through the operand a collapse
+  promoted: that remap is what lets `under` be an ancestor of `from`, and the anchor is taken from the tree
+  the lift left behind because the pre-lift node still carries the subtree being lifted and joining that
+  would put the part back twice and lose the survivor. The reply reads the outcome out of the tree it left
+  — the anchor, and the grafted node with its slot, route, kind and child count — and puts the selection on
+  the grafted slot, the new node the edit created.
 - **The one-child gesture is a different call, and says so.** A `Mirror` or `Repeat` wraps one node rather
   than joining two, so it has no operand to author and no slot to choose: `add_part` refuses a wrapper
   handed a `shape` or a `keep` instead of quietly dropping the argument the caller did not need, and asks
@@ -442,14 +464,16 @@ always read the same way — a `null` there answers "must be a string" — and s
 which types `view` as a string; the fallthrough was the one place in the pipe where a schema violation could
 turn into a picture.
 
-What the pipe still does **not** do: it can exchange two routes but it cannot *re-parent* one — no call
-lifts a finished subtree out and grafts it under a different parent while the tree stays whole, because
-there is no slot to hold a node in transit. A symmetric creature is still authored by building one side and
-wrapping it in a `Mirror`, which is what the shipped pig's tree does; `move_part` rearranges two parts that
-already have parents. The one thing a wrapper's sole child still cannot do is go away by itself — deleting it
-would leave the wrapper holding nothing, which is the grammar's refusal rather than this pipe's — and since
-increment 7 the answer to that is one call, not a subtree: the wrapper over it unwraps wherever it sits, so a
-`Repeat` inside a `Mirror` comes out and leaves the `Mirror` standing.
+What the pipe still does **not** do: a re-parent cannot land on the node its own lift replaces.
+`graft_part` carries a finished subtree to a different parent, but `from` and `under` may not lie on one
+holder-and-held or parent-and-child line — the subtree would be written into the anchor it was just lifted
+out of, or joined to the node about to take its place — so no call re-roots a part under the parent that
+already holds it. A symmetric creature is still authored by building one side and wrapping it in a
+`Mirror`, which is what the shipped pig's tree does. The one thing a wrapper's sole child still cannot do
+is go away by itself — deleting it would leave the wrapper holding nothing, which is the grammar's refusal
+rather than this pipe's — and since increment 7 the answer to that is one call, not a subtree: the wrapper
+over it unwraps wherever it sits, so a `Repeat` inside a `Mirror` comes out and leaves the `Mirror`
+standing.
 Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them,
 `set_material` writes them, and writing them changes no pixel.
@@ -458,7 +482,7 @@ file carries `material_id` and nothing else about a slot — so an entity saved 
 process does not register loads into an empty slot, which the viewport paints unlit white and warns about.
 That is the gap a materials asset would close; it is a contract change, not a tool.
 
-`crates/editor/tests/mcp.rs` is 60 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 67 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -750,6 +774,59 @@ between refusing and refusing with the sentence the caller needs. Reporting the 
 schema row's `slot` refusal, which is the one place `additionalProperties: false` is executed rather than
 printed. All four were reverted and the suite re-run green at 314.
 
+Increment 12 adds seven, and the call they police is the one this section used to name as missing:
+a finished subtree lifted out of the node that held it and joined under a different parent, with the
+tree staying whole. The first row is the whole gesture on the shipped pig — the ear pair
+(`root.b.b`, a two-child `Union`, chosen so the lift collapses a real combinator) grafted under the
+snout branch (`root.a.a.b`): the reply's `at` and `into`, the anchor's slot and route, the grafted
+node's slot, `was`, route, kind and child count are each read back out of the tree the call left, the
+carried subtree is compared content for content against the parts list captured before the call —
+sorted, so a combinator's print order is not what the assertion checks — the landing node is required
+to keep its contents in the slot it kept, `nodes_before` and `node_count` are both required to equal
+the count that went in, the survivor takes the collapsed `Union`'s route with nothing left below it,
+the selection lands on the grafted slot, the key moves, and the file the call saves reloads as the
+same tree. The refusal row walks twenty-two calls the tool cannot answer — the same route at both
+ends, `from` at `root`, both ends missing, blank, or not routes, a route off the tree and one into a
+leaf, `from` over its landing and `from` onto the combinator that holds it (including `root`), a
+wrapper's only child, `Mirror` and `Repeat` named as the join, an invented combinator, `k` missing
+from a `SmoothUnion` and `k` handed to a `Union`, a slot the join does not have, an argument the tool
+does not take, a non-string `combine`, and an empty call — and then requires the fingerprints, the
+dirty flag, the selection and the preview key to be where they were, because a refusal that arrives
+after the lift is a tree that moved under a sentence saying it did not.
+A wrapper is lifted *with* its child, and that is the row that says so: the `Mirror` at `root.a.b`
+cannot be approached through its child, and the refusal names `Graft the Mirror at "root.a.b"` —
+the call that works. Making it is required to carry all twelve nodes of the wrapper, to leave the
+node count where it was, and to leave the leg branch standing in the collapsed `SmoothUnion`'s place.
+That row exists because the first draft reused the delete's unwrap for this lift and the graft
+duplicated the child.
+Two rows lift a part *up*, where the landing node is an ancestor of `from` and its contents therefore
+change underneath the call. The far one lifts the whole body out of `root.b.b.b`, which collapses the
+root: the reply's `at` is the route the anchor actually moved to (`root.b.b`) beside the
+`called_with` the caller passed, the anchor and grafted routes are read one step below it, the
+selection follows, the body branch is carried, and the two lines that moved are each named at their
+new route. The near one lifts the pig's front leg to the body it hangs from: the anchor keeps its own
+contents in the kept slot, the leg is carried, and the back leg is required to stand in the collapsed
+leg `Union`'s place. That pair found the increment's one defect rather than confirming it: the anchor
+was captured before the lift, so it still held the subtree being lifted and the join put the part back
+twice — 42 nodes where 36 went in. The fix reads the anchor out of the tree the lift left behind and
+allows it to differ from the pre-lift value only when the landing node is an ancestor of `from`, which
+is the case whose contents the call has to change. The schema row pins the five properties, the three
+required keys, `additionalProperties: false` and the four joins in the order `add_part` prints them;
+the frame row asks the march what the slot means: the same lift joined with a `Union` rebuilds the
+solid the fixture held, so its surface count and its path are the unjoined frame's, while a
+`Subtract` grafted into `kept` bites strictly less and an `Intersect` less again, both positive, both
+below `total_pixels`, both in a frame with nothing undrawn, and both under a different path from the
+plain one.
+
+Six plants ran, one clause each. Making this lift always unwrap a one-child wrapper named the wrapper
+row. Capturing the anchor before the lift named the near lift-up row, which is the defect it was
+written for. Skipping the promotion remap named the remap row and the frame row — a landing route
+that no longer resolves refuses rather than landing somewhere else. Writing the lifted part into the
+slot `keep` names instead of the one it does not named five rows. Dropping
+`additionalProperties: false` named the schema row, and removing the "holds" refusal named the
+refusal table. All six were reverted and the suite re-run green at 321, measured by
+`tools/check_suite_size.sh`.
+
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
 a debug build on this machine, on the run that landed this section.
@@ -900,7 +977,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — a new material is defined in full, held to the same table, and paints nothing until the entity is assigned to its slot — and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 60 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — exchanged with another route only in a tree `assetc::lower` still compiles, and re-parented under a different node while the node count stays the same, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — a new material is defined in full, held to the same table, and paints nothing until the entity is assigned to its slot — and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 67 tests |
 
 ## Migration from current code
 

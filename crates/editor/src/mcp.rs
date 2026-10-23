@@ -67,6 +67,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "add_part",
     "delete_part",
     "move_part",
+    "graft_part",
     "render_view",
     "save_entity",
 ];
@@ -164,6 +165,7 @@ fn dispatch(
         "add_part" => Some(add_part(state, arguments)),
         "delete_part" => Some(delete_part(state, arguments)),
         "move_part" => Some(move_part(state, arguments)),
+        "graft_part" => Some(graft_part(state, arguments)),
         "render_view" => Some(render_view(state, arguments)),
         "save_entity" => Some(save_entity(state, arguments)),
         _ => None,
@@ -1004,6 +1006,33 @@ fn blend_k(arguments: &Value, combine: &str) -> Result<f32, String> {
     }
 }
 
+/// The combinator `combine` names, holding `first` and `second` in that order.
+///
+/// Both structural calls reach this after deciding which node keeps which slot, so a slot's meaning is
+/// written once: a `Subtract`'s `kept`/`cutter` is the difference between a hole and an animal, and a second
+/// copy of this match is where that pair could get reversed.
+fn joined(combine: &str, first: Shape, second: Shape, k: f32) -> Shape {
+    match combine {
+        "Union" => Shape::Union {
+            a: Box::new(first),
+            b: Box::new(second),
+        },
+        "Intersect" => Shape::Intersect {
+            a: Box::new(first),
+            b: Box::new(second),
+        },
+        "Subtract" => Shape::Subtract {
+            kept: Box::new(first),
+            cutter: Box::new(second),
+        },
+        _ => Shape::SmoothUnion {
+            a: Box::new(first),
+            b: Box::new(second),
+            k,
+        },
+    }
+}
+
 /// The three axes, named the way an authored `centre` reads.
 const AXES: [&str; 3] = ["x", "y", "z"];
 
@@ -1160,25 +1189,7 @@ fn add_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String>
     } else {
         (leaf, existing)
     };
-    *slot = match combine.as_str() {
-        "Union" => Shape::Union {
-            a: Box::new(first),
-            b: Box::new(second),
-        },
-        "Intersect" => Shape::Intersect {
-            a: Box::new(first),
-            b: Box::new(second),
-        },
-        "Subtract" => Shape::Subtract {
-            kept: Box::new(first),
-            cutter: Box::new(second),
-        },
-        _ => Shape::SmoothUnion {
-            a: Box::new(first),
-            b: Box::new(second),
-            k,
-        },
-    };
+    *slot = joined(&combine, first, second, k);
 
     let before = commit(state, candidate, steps.clone())?;
     let snapshot = state_json(state);
@@ -1320,14 +1331,142 @@ fn wrap_part(
     }))
 }
 
-/// Take one node out of the tree, and the combinator that held it with it.
+/// The route a node is printed at, as text. Every caller here walked to the node first, so the `null`
+/// `route_name` answers for a path the tree does not hold cannot occur.
+fn route_text(shape: &Shape, steps: &[Step]) -> String {
+    route_name(shape, steps)
+        .as_str()
+        .map(str::to_string)
+        .expect("a node the tree holds has a route")
+}
+
+/// One node lifted out of the tree, and the tree it left behind.
+struct Lifted {
+    /// The node that came out, exactly as it stood, subtree and all.
+    removed: Shape,
+    /// The tree without it: the holder is gone and the node that shared the holder — or the one a wrapper
+    /// held — stands in the holder's place.
+    remaining: Shape,
+    /// The route the survivor took, which is where the holder stood.
+    slot: Vec<Step>,
+    /// The step, *before* the lift, at which the survivor sat under `slot`. A route that ran through it
+    /// loses those two steps once the survivor is promoted; see [`after_collapse`].
+    promoted: Step,
+    /// The selection that still means something afterwards: the survivor's route, or the root when a
+    /// combinator below it was flattened and every path below shifted.
+    select: Vec<Step>,
+}
+
+/// Why the grammar cannot lift a node out of the tree at all.
+enum Unliftable {
+    /// The root is not a one-child wrapper: one operand of a union is not a shape, and a root leaf would
+    /// leave the editor holding nothing.
+    Root,
+    /// The node is a one-child wrapper's only child, so lifting it would leave the wrapper holding nothing.
+    OnlyChild {
+        node: String,
+        wrapper: &'static str,
+        wrapper_route: String,
+    },
+}
+
+/// How a lift treats a node that holds exactly one child.
+enum Lift {
+    /// Take the wrapper out and leave its child in its place. This is `delete_part`'s gesture: a one-child
+    /// wrapper is removed by unwrapping it, at any depth.
+    Unwrap,
+    /// Take the wrapper out *with* its child, and collapse the combinator that held the wrapper. This is
+    /// `graft_part`'s: a lifted subtree is the node and everything under it, so nothing may be left behind —
+    /// unwrapping first would promote the child and then graft a second copy of it.
+    Whole,
+}
+
+/// Take one node out of the tree, and the combinator that held it with it, answering the tree that is left
+/// and the selection that still means something in it.
 ///
 /// A two-operand combinator missing an operand is not a shape, so the surviving operand takes its parent's
 /// place and the tree loses two nodes while keeping everything below the survivor. A one-child wrapper has
-/// nothing to promote, so deleting its child refuses rather than answering with a `Mirror` of nothing.
+/// nothing to promote, so lifting its child is refused rather than answering with a `Mirror` of nothing.
+/// `lift` decides what happens to a node that is itself a one-child wrapper: [`Lift::Unwrap`] takes it out
+/// and leaves its child standing (a deletion), [`Lift::Whole`] takes the child with it (a move). The root is
+/// its own holder, so it goes only under [`Lift::Unwrap`], where what it holds can stand alone: unwrapping a
+/// root `Mirror` or `Repeat` makes its child the tree.
+///
+/// Both callers get the same structural answer: `delete_part` drops the removed node and `graft_part`
+/// re-attaches it somewhere else. The wording belongs to the caller — "deleting it" and "lifting it out"
+/// are different acts — so this answers *why* it refused rather than a sentence.
+fn collapse_out(tree: &Shape, steps: &[Step], lift: Lift) -> Result<Lifted, Unliftable> {
+    let removed = shape_path::resolve(tree, steps)
+        .expect("the caller walked to this node")
+        .clone();
+    // Where the survivor goes, the step it came from, and where the selection lands.
+    let (slot, promoted, select) =
+        if matches!(lift, Lift::Unwrap) && shape_path::children(&removed).len() == 1 {
+            // A one-child wrapper is lifted by *unwrapping* it: the node it held takes the wrapper's place, at
+            // any depth. This is the exact inverse of `add_part`'s wrapper gesture, and it is not root-only
+            // because a `Repeat` wrapped inside a `Mirror` was otherwise only ever removable together with the
+            // `Mirror` over it. The route the wrapper held still names a node afterwards — the promoted child —
+            // so the selection stays on it rather than retreating to `root`.
+            (steps.to_vec(), Step::Sole, steps.to_vec())
+        } else {
+            match steps.split_last() {
+                // A node below the root goes with the combinator that held it, and that combinator's other
+                // operand takes its place.
+                Some((&last, parent_path)) => {
+                    let parent = shape_path::resolve(tree, parent_path)
+                        .expect("route_of walked through here");
+                    if shape_path::children(parent).len() != 2 {
+                        return Err(Unliftable::OnlyChild {
+                            node: route_text(tree, steps),
+                            wrapper: shape_path::kind(parent),
+                            wrapper_route: route_text(tree, parent_path),
+                        });
+                    }
+                    let promoted = if last == Step::First {
+                        Step::Second
+                    } else {
+                        Step::First
+                    };
+                    (parent_path.to_vec(), promoted, Vec::new())
+                }
+                // A root that is not a one-child wrapper cannot be lifted: one operand of a `Union` is not a
+                // shape, and a root leaf would leave the editor holding nothing at all.
+                None => return Err(Unliftable::Root),
+            }
+        };
+    let survivor_path = [slot.as_slice(), &[promoted]].concat();
+    let survivor = shape_path::resolve(tree, &survivor_path)
+        .expect("the slot named here holds the node this lift promotes")
+        .clone();
+    let mut remaining = tree.clone();
+    *shape_path::resolve_mut(&mut remaining, &slot)
+        .expect("the survivor's slot is on the lifted node's own line") = survivor;
+    Ok(Lifted {
+        removed,
+        remaining,
+        slot,
+        promoted,
+        select,
+    })
+}
+
+/// Where a route that ran through the lifted node's holder points once the survivor has taken its place.
+///
+/// The collapse removes two steps from that line — the holder's, and the step of the operand that was lifted
+/// — so a route through the surviving operand keeps its tail and loses both, and a route that named the
+/// survivor itself lands on the holder's route. `None` for a route that did not run through it, which the
+/// caller leaves alone.
+fn after_collapse(steps: &[Step], slot: &[Step], promoted: Step) -> Option<Vec<Step>> {
+    let rest = steps.strip_prefix(slot)?;
+    let (first, tail) = rest.split_first()?;
+    (*first == promoted).then(|| [slot, tail].concat())
+}
+
+/// Take one node out of the tree, and the combinator that held it with it.
+///
 /// Deleting a `Subtract`'s `kept` leaves its `cutter` standing — that is what the caller asked for, and the
-/// reply names the node that took the place. The root is its own holder, so it goes only when what it holds
-/// can stand alone: deleting a root `Mirror` or `Repeat` unwraps it, and its child becomes the tree.
+/// reply names the node that took the place. The structure itself is [`collapse_out`]'s; this is that answer
+/// with the removed node dropped and said in the words of a deletion.
 fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
     let route = string_arg(arguments, "route")?;
     if route.trim().is_empty() {
@@ -1345,77 +1484,212 @@ fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
         shape_path::summary(gone),
         route_name(tree, &steps),
     );
-    // Where the survivor goes, what it is reached by, and where the selection lands.
-    let (slot_path, survivor_path, select_path) = if shape_path::children(gone).len() == 1 {
-        // A one-child wrapper is deleted by *unwrapping* it: the node it held takes the wrapper's place, at
-        // any depth. This is the exact inverse of `add_part`'s wrapper gesture, and it is not root-only
-        // because a `Repeat` wrapped inside a `Mirror` was otherwise only ever removable together with the
-        // `Mirror` over it. The route the wrapper held still names a node after the call — the promoted
-        // child — so the selection stays on it rather than retreating to `root`.
-        (
-            steps.clone(),
-            [steps.as_slice(), &[Step::Sole]].concat(),
-            steps.clone(),
-        )
-    } else {
-        match steps.split_last() {
-            // A node below the root goes with the combinator that held it, and that combinator's other
-            // operand takes its place.
-            Some((&last, parent_path)) => {
-                let parent =
-                    shape_path::resolve(tree, parent_path).expect("route_of walked through here");
-                if shape_path::children(parent).len() != 2 {
-                    let wrapper = shape_path::kind(parent);
-                    return Err(format!(
-                        "{} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. \
-                         Delete the {wrapper} at \"{}\" instead — that takes the wrapper out and leaves this \
-                         node where it is — or set this node's parameter.",
-                        gone_route.as_str().unwrap_or(route.as_str()),
-                        route_name(tree, parent_path).as_str().unwrap_or("root")
-                    ));
-                }
-                let survivor_step = if last == Step::First {
-                    Step::Second
-                } else {
-                    Step::First
-                };
-                (
-                    parent_path.to_vec(),
-                    [parent_path, &[survivor_step]].concat(),
-                    Vec::new(),
-                )
-            }
-            // A root that is not a one-child wrapper cannot be deleted: one operand of a `Union` is not a
-            // shape, and a root leaf would leave the editor holding nothing at all.
-            None => {
-                return Err(
-                    "\"root\" is the whole entity — deleting it leaves an editor holding nothing; delete \
-                     its parts until the tree is the one you want"
-                        .to_string(),
-                );
-            }
-        }
-    };
-    let survivor = shape_path::resolve(tree, &survivor_path)
-        .expect("the slot named here holds the node this deletion promotes")
-        .clone();
-
-    let mut candidate = tree.clone();
-    *shape_path::resolve_mut(&mut candidate, &slot_path).expect("route_of walked through here") =
-        survivor;
+    let lifted = collapse_out(tree, &steps, Lift::Unwrap).map_err(|why| match why {
+        Unliftable::Root => "\"root\" is the whole entity — deleting it leaves an editor holding nothing; \
+             delete its parts until the tree is the one you want"
+            .to_string(),
+        Unliftable::OnlyChild {
+            node,
+            wrapper,
+            wrapper_route,
+        } => format!(
+            "{node} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. Delete \
+             the {wrapper} at \"{wrapper_route}\" instead — that takes the wrapper out and leaves this node \
+             where it is — or set this node's parameter."
+        ),
+    })?;
     // The paths below a collapsed combinator have all shifted, so nothing the caller had selected can be
     // trusted to still mean what it meant and the selection goes back to the root; an unwrap leaves every
     // route outside the wrapper alone, so it lands on the promoted node.
-    let before = commit(state, candidate, select_path)?;
+    let before = commit(state, lifted.remaining, lifted.select)?;
     let snapshot = state_json(state);
-    let now = shape_path::resolve(&state.entity_def.shape, &slot_path)
+    let now = shape_path::resolve(&state.entity_def.shape, &lifted.slot)
         .expect("the survivor took the slot this deletion named");
     Ok(json!({
         "deleted": { "route": gone_route, "kind": gone_kind, "summary": gone_summary },
         "its_parent": {
-            "route": route_name(&state.entity_def.shape, &slot_path),
+            "route": route_name(&state.entity_def.shape, &lifted.slot),
             "replaced_by": shape_path::kind(now),
             "summary": shape_path::summary(now),
+        },
+        "selected": snapshot["selected"],
+        "nodes_before": before,
+        "node_count": snapshot["node_count"],
+        "preview_signature": state.preview_signature(),
+        "state": snapshot,
+    }))
+}
+
+/// Re-parent one node: lift the subtree a route names out of the tree, and graft it onto another node.
+///
+/// This is the gesture the full combinators otherwise cannot make. A grammar whose combinators are full the
+/// moment they exist can exchange two operands ([`move_part`]) and grow ([`add_part`]), but nothing before
+/// this call could put a finished subtree under a different parent: a part is authored twice, or authored
+/// once and wrapped. `graft_part` lifts `from` exactly as [`delete_part`] would — the same collapse of the
+/// combinator that held it — and joins the lifted subtree to `under` as one operand of a new `combine`, in
+/// the slot `keep` does not name. The tree stays whole: the lift takes the holder and the subtree out, and the
+/// join puts the subtree and one combinator back, so the node count is the same before and after.
+///
+/// The node `under` has to survive the lift, which is what the refusals are about. `from` may not hold
+/// `under`, because lifting it would take the landing node with it. `under` may not be the combinator that
+/// holds `from` — nor `root` when `from` is one of its operands — because the collapse replaces that very
+/// node with its surviving operand, so the node the graft was asked to land on would not exist by the time
+/// anything was grafted onto it. An ancestor of `from` that is not its holder does survive, and is the
+/// useful shape of a lift-up: the part comes out of its branch and is joined beside the node that contained
+/// it. A route through the operand the collapse promoted moves with it ([`after_collapse`]), so a target
+/// inside that operand is followed rather than refused for a route the caller could not have known.
+fn graft_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    const KNOWN: [&str; 5] = ["from", "under", "combine", "keep", "k"];
+    if let Some(map) = arguments.as_object() {
+        for key in map.keys() {
+            if !KNOWN.contains(&key.as_str()) {
+                return Err(format!(
+                    "graft_part has no argument {key:?}; it takes {}",
+                    quoted(&KNOWN)
+                ));
+            }
+        }
+    }
+    let from = named_route(arguments, "from")?;
+    let under = named_route(arguments, "under")?;
+    let combine = string_arg(arguments, "combine")?;
+    if WRAPPERS.contains(&combine.as_str()) {
+        return Err(format!(
+            "{combine} wraps the one node it holds and joins nothing, so it cannot graft one node onto \
+             another; graft_part joins with {}. To wrap a route, call add_part.",
+            quoted(COMBINATIONS)
+        ));
+    }
+    if !COMBINATIONS.contains(&combine.as_str()) {
+        return Err(format!(
+            "no combinator {combine:?}; graft_part joins with {}",
+            quoted(COMBINATIONS)
+        ));
+    }
+    let (keep, keep_name) = keep_slot(arguments, &combine)?;
+    let k = blend_k(arguments, &combine)?;
+
+    let tree = &state.entity_def.shape;
+    let from_steps = route_of(tree, &from)?;
+    let under_steps = route_of(tree, &under)?;
+
+    if from_steps == under_steps {
+        return Err(format!(
+            "{from} and {under} are the same node — a graft lifts one node out and joins it to a \
+             different one. To change this part's own field use set_part."
+        ));
+    }
+    if from_steps.is_empty() {
+        return Err(
+            "\"root\" is the whole entity — lifting it out would leave nothing to graft it under; graft \
+             one of its parts instead"
+                .to_string(),
+        );
+    }
+    if holds(&from_steps, &under_steps) {
+        return Err(format!(
+            "{from} holds {under}, so lifting it out would take {under} with it and leave nothing to graft \
+             it under. Graft {from} under a node outside it."
+        ));
+    }
+    if from_steps
+        .split_last()
+        .is_some_and(|(_, parent)| parent == under_steps.as_slice())
+    {
+        return Err(format!(
+            "{from} sits directly under {under}, so lifting it out would replace {under} with its other \
+             operand — the node the graft was asked to land on would not exist by then. Graft {from} under \
+             a node that does not hold it."
+        ));
+    }
+
+    let anchor_before = shape_path::resolve(tree, &under_steps)
+        .expect("route_of walked to this node")
+        .clone();
+    let from_route = route_text(tree, &from_steps);
+    let lifted = collapse_out(tree, &from_steps, Lift::Whole).map_err(|why| match why {
+        Unliftable::Root => "\"root\" is the whole entity — lifting it out would leave nothing to graft \
+             it under; graft one of its parts instead"
+            .to_string(),
+        Unliftable::OnlyChild {
+            node,
+            wrapper,
+            wrapper_route,
+        } => format!(
+            "{node} is {wrapper}'s only child; lifting it out would leave a {wrapper} holding nothing. \
+             Graft the {wrapper} at \"{wrapper_route}\" instead — that moves the wrapper and this node \
+             together."
+        ),
+    })?;
+
+    let under_now = after_collapse(&under_steps, &lifted.slot, lifted.promoted)
+        .unwrap_or_else(|| under_steps.clone());
+    // The anchor is read from the tree the lift left behind, not from the tree before it. When `under`
+    // holds `from` the lift happened inside the anchor, so the earlier value still carries the subtree that
+    // was just lifted out — joining that would put the lifted part back twice and lose the survivor.
+    let anchor = shape_path::resolve(&lifted.remaining, &under_now);
+    // The anchor must still be there. Its *contents* change when the lift happened inside it — that is the
+    // lift-up this call allows — so the value is only compared when `under` does not hold `from`, where the
+    // lift touched nothing on the anchor's line and the comparison is the guard on a route that moved.
+    if anchor.is_none() || (!holds(&under_steps, &from_steps) && anchor != Some(&anchor_before)) {
+        return Err(format!(
+            "lifting {from} out moved the node {under} names in a way this call could not follow, so \
+             nothing was grafted and the tree is as it was"
+        ));
+    }
+    let anchor = anchor
+        .expect("the check above refused a missing anchor")
+        .clone();
+
+    let (first, second) = if keep == Step::First {
+        (anchor, lifted.removed)
+    } else {
+        (lifted.removed, anchor)
+    };
+    let mut candidate = lifted.remaining;
+    *shape_path::resolve_mut(&mut candidate, &under_now)
+        .expect("resolve read the node at this route a moment ago") =
+        joined(&combine, first, second, k);
+
+    let slots = shape_path::child_names(&combine);
+    let (other, other_name) = if keep == Step::First {
+        (slots[1].1, slots[1].0)
+    } else {
+        (slots[0].1, slots[0].0)
+    };
+    // The selection follows the node the caller lifted, which now sits in the slot `keep` did not name.
+    let select = [under_now.as_slice(), &[other]].concat();
+    let before = commit(state, candidate, select)?;
+
+    let snapshot = state_json(state);
+    let tree = &state.entity_def.shape;
+    let at = route_name(tree, &under_now);
+    let anchor_path = [under_now.as_slice(), &[keep]].concat();
+    let grafted_path = [under_now.as_slice(), &[other]].concat();
+    // Both halves read back out of the tree the call just left: a graft that wrote one operand and lost the
+    // other would report the pair it was asked for from its arguments instead.
+    let anchor_now = shape_path::resolve(tree, &anchor_path)
+        .expect("commit put the new combinator at the route the anchor kept");
+    let grafted_now = shape_path::resolve(tree, &grafted_path)
+        .expect("commit put the lifted subtree in the slot it did not keep");
+    Ok(json!({
+        "at": at,
+        "into": combine,
+        "anchor": {
+            "slot": keep_name,
+            "called_with": under,
+            "route": route_name(tree, &anchor_path),
+            "kind": shape_path::kind(anchor_now),
+            "summary": shape_path::summary(anchor_now),
+            "children": shape_path::children(anchor_now).len(),
+        },
+        "grafted": {
+            "slot": other_name,
+            "was": from_route,
+            "route": route_name(tree, &grafted_path),
+            "kind": shape_path::kind(grafted_now),
+            "summary": shape_path::summary(grafted_now),
+            "children": shape_path::children(grafted_now).len(),
         },
         "selected": snapshot["selected"],
         "nodes_before": before,
@@ -1964,6 +2238,22 @@ pub fn tool_specs() -> Value {
                     "to": { "type": "string" }
                 },
                 "required": ["from", "to"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "graft_part",
+            "description": "Re-parent one node: lift the subtree from names out of the tree and join it to the node under names, inside a new Union, Subtract, Intersect or SmoothUnion. The lifted subtree takes the slot keep does not name, and the node under keeps the one it does (a/b, or kept/cutter; it defaults to the first, so a Subtract cuts the lifted part out of under). The lift collapses whichever combinator held from — the same collapse delete_part makes, except that a lifted wrapper leaves with its child instead of being unwrapped — and the graft puts the subtree and one combinator back in its place, so nothing is dropped and the node count is the same before and after. from may not hold under, and under may not be the combinator holding from (nor root when from is one of its operands), because the lift collapses that node; an ancestor of from that is not its holder survives, which is the lift-up shape. k is required for a SmoothUnion and refused for the rest. The selection follows the lifted subtree, and a tree the compiler cannot lower is refused before it lands.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string" },
+                    "under": { "type": "string" },
+                    "combine": { "type": "string", "enum": ["Union", "Subtract", "Intersect", "SmoothUnion"] },
+                    "keep": { "type": "string" },
+                    "k": { "type": "number", "minimum": 0, "maximum": 1 }
+                },
+                "required": ["from", "under", "combine"],
                 "additionalProperties": false
             }
         },
