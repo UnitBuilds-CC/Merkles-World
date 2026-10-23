@@ -1547,8 +1547,8 @@ fn a_leaf_authored_from_nothing_is_refused_until_it_is_complete_and_in_range() {
             "carries no k",
         ),
         (
-            "a wrapper this tool does not build",
-            json!({ "combine": "Mirror", "shape": sphere }),
+            "a combinator this grammar does not have",
+            json!({ "combine": "Translate", "shape": sphere }),
             "add_part joins with",
         ),
     ];
@@ -1814,5 +1814,402 @@ fn a_part_added_is_in_the_frame_render_view_draws() {
         "a sphere of r 1.2 joined the tree and the picture did not gain a pixel: {} -> {}",
         before_surface,
         after["surface_pixels"],
+    );
+}
+
+/// The one-child gesture: the node keeps its route and gains a wrapper above it.
+#[test]
+fn add_part_wraps_a_node_in_a_one_child_wrapper_and_reports_both_halves() {
+    let mut state = fresh();
+    let before = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        before["node_count"],
+        json!(1),
+        "a fresh editor holds one sphere, so a wrapper is the only thing this can add"
+    );
+    let sphere_line = before["parts"][0].clone();
+    assert_eq!(sphere_line["route"], json!("root"));
+
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Mirror", "axis": 1 }),
+    );
+    assert_eq!(wrapped["into"], json!("Mirror"));
+    assert_eq!(wrapped["at"], json!("root"));
+    assert_eq!(wrapped["selected"], json!("root"));
+    assert_eq!(wrapped["wrapper"]["route"], json!("root"));
+    assert_eq!(wrapped["wrapper"]["kind"], json!("Mirror"));
+    assert_eq!(
+        wrapped["wrapper"]["summary"],
+        json!("axis 1"),
+        "the reply reports a Mirror that does not carry the axis it was handed"
+    );
+    assert_eq!(wrapped["wrapped"]["slot"], json!("child"));
+    assert_eq!(wrapped["wrapped"]["route"], json!("root.child"));
+    assert_eq!(wrapped["wrapped"]["kind"], sphere_line["kind"]);
+    assert_eq!(wrapped["wrapped"]["summary"], sphere_line["summary"]);
+    assert_eq!(
+        wrapped["node_count"],
+        json!(2),
+        "a wrapper adds one node; two is what joining a leaf costs"
+    );
+    assert_eq!(wrapped["state"]["dirty"], json!(true));
+    assert_ne!(
+        wrapped["preview_signature"], before["preview_signature"],
+        "a node joined the tree and the preview key did not move"
+    );
+
+    // The parts list is where a caller reads the new route from, so it has to carry it.
+    let routes: Vec<&str> = wrapped["state"]["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .map(|part| part["route"].as_str().expect("a route"))
+        .collect();
+    assert!(
+        routes.contains(&"root.child"),
+        "the outline never printed the route the reply names: {routes:?}"
+    );
+
+    // A route through the wrapper reaches the node inside it, and that node is still editable.
+    let selected = call(&mut state, "select_part", json!({ "route": "root.child" }));
+    assert_eq!(selected["kind"], json!("Sphere"));
+    let edited = call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root.child", "parameter": "r", "value": 0.5 }),
+    );
+    assert_eq!(edited["changed"], json!(true));
+    assert_eq!(edited["state"]["node_count"], json!(2));
+
+    // And a slot a Mirror does not have is refused with the one it does.
+    let (message, refused) = try_call(&mut state, "select_part", json!({ "route": "root.a" }));
+    assert!(refused, "a Mirror was given an `a` operand: {message}");
+    assert!(
+        message.contains("\"child\""),
+        "the refusal for root.a never names the slot a Mirror does have: {message}"
+    );
+
+    let path = temp_path("wrap_mirror_round_trip.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let again = call(&mut reloaded, "editor_state", json!({}));
+    assert_eq!(again["node_count"], json!(2));
+    assert_eq!(
+        fingerprints(&again["parts"]),
+        fingerprints(&edited["state"]["parts"]),
+        "the saved file reads back as a different tree than the wrapped one the pipe reported"
+    );
+}
+
+/// A wrapper's own field comes from the same published table `set_part` writes, and the two arguments that
+/// only mean something to a two-operand combinator are refused rather than dropped.
+#[test]
+fn a_wrapper_takes_its_own_field_from_the_same_table_and_refuses_the_two_operand_arguments() {
+    let mut state = fresh();
+    let before = call(&mut state, "editor_state", json!({}));
+    let sphere = json!({ "kind": "Sphere", "r": 0.4, "centre": [0.0, 0.0, 0.0] });
+    let cases: Vec<(&str, Value, &str)> = vec![
+        (
+            "a Mirror with no axis",
+            json!({ "combine": "Mirror" }),
+            "Mirror takes \"axis\"",
+        ),
+        (
+            "a Repeat with no period",
+            json!({ "combine": "Repeat" }),
+            "Repeat takes \"period\"",
+        ),
+        (
+            "an axis past the panel's last choice",
+            json!({ "combine": "Mirror", "axis": 3 }),
+            "0..=2",
+        ),
+        (
+            "an axis that is not a whole choice",
+            json!({ "combine": "Mirror", "axis": 1.5 }),
+            "whole choice",
+        ),
+        (
+            "an axis spelled as text",
+            json!({ "combine": "Mirror", "axis": "x" }),
+            "axis must be a number",
+        ),
+        (
+            "a period under the smallest the table offers",
+            json!({ "combine": "Repeat", "period": 0.01 }),
+            "0.05..=10",
+        ),
+        (
+            "a wrapper handed an operand",
+            json!({ "combine": "Mirror", "axis": 0, "shape": sphere }),
+            "takes no shape",
+        ),
+        (
+            "a wrapper asked which slot to keep",
+            json!({ "combine": "Repeat", "period": 1.0, "keep": "a" }),
+            "no slot to keep",
+        ),
+        (
+            "a blend width on a wrapper",
+            json!({ "combine": "Mirror", "axis": 2, "k": 0.3 }),
+            "carries no k",
+        ),
+    ];
+    for (what, arguments, expected) in cases {
+        let (message, refused) = try_call(&mut state, "add_part", arguments);
+        assert!(refused, "{what} was wrapped: {message}");
+        assert!(
+            message.contains(expected),
+            "the refusal for {what} says {message:?}, which does not mention {expected:?}"
+        );
+    }
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&before["parts"]),
+        "nine refused wraps changed the tree"
+    );
+    assert_eq!(after["preview_signature"], before["preview_signature"]);
+    assert_eq!(after["dirty"], json!(false));
+}
+
+/// Every wrapper the server advertises is built here, with its field named and its value written out in
+/// this test rather than read back from `params` — so a kind added to the list without a row here, or one
+/// that stopped carrying the field this call needs, fails instead of going unexercised.
+#[test]
+fn every_wrapper_the_pipe_advertises_it_builds_with_the_field_it_was_given() {
+    let builds: &[(&str, &str, f64, &str)] = &[
+        ("Mirror", "axis", 2.0, "axis 2"),
+        ("Repeat", "period", 0.75, "period 0.75"),
+    ];
+    for name in mcp::WRAPPERS {
+        assert!(
+            builds.iter().any(|(kind, ..)| kind == name),
+            "{name} is in WRAPPERS but has no row here, so nothing proves the pipe can build it",
+        );
+    }
+
+    let mut state = fresh();
+    for (index, (kind, field, value, expect)) in builds.iter().enumerate() {
+        let mut arguments = json!({ "combine": kind, "route": "root" });
+        arguments
+            .as_object_mut()
+            .expect("an object")
+            .insert((*field).to_string(), json!(value));
+        let wrapped = call(&mut state, "add_part", arguments);
+        assert_eq!(wrapped["wrapper"]["kind"], json!(kind));
+        assert_eq!(
+            wrapped["wrapper"]["summary"],
+            json!(expect),
+            "{kind} was built without the {field} it was handed"
+        );
+        assert_eq!(wrapped["wrapped"]["route"], json!("root.child"));
+        assert_eq!(
+            wrapped["node_count"],
+            json!(2 + index as u64),
+            "each wrapper adds exactly one node, nested above the last"
+        );
+    }
+    // The nesting is the point of the loop: a `Repeat` over a `Mirror` is a tree the compiler still takes.
+    let final_state = call(&mut state, "editor_state", json!({}));
+    assert_eq!(final_state["node_count"], json!(builds.len() as u64 + 1));
+    assert_eq!(final_state["dirty"], json!(true));
+}
+
+/// Deleting a root that holds one node unwraps it; a root that holds two, or nothing, still refuses.
+#[test]
+fn deleting_a_root_wrapper_unwraps_the_tree_and_a_root_that_holds_two_refuses() {
+    let mut state = fresh();
+    let sphere = call(&mut state, "editor_state", json!({}));
+
+    let (message, refused) = try_call(&mut state, "delete_part", json!({ "route": "root" }));
+    assert!(refused, "a leaf root was deleted: {message}");
+    assert!(
+        message.contains("the whole entity"),
+        "the refusal for a leaf root says {message:?}"
+    );
+
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Mirror", "axis": 0 }),
+    );
+    let deleted = call(&mut state, "delete_part", json!({ "route": "root" }));
+    assert_eq!(deleted["deleted"]["route"], json!("root"));
+    assert_eq!(deleted["deleted"]["kind"], json!("Mirror"));
+    assert_eq!(
+        deleted["deleted"]["summary"], wrapped["wrapper"]["summary"],
+        "the reply reports deleting a wrapper it did not remove"
+    );
+    assert_eq!(
+        deleted["its_parent"]["route"],
+        json!("root"),
+        "a root is its own holder, so the unwrap is reported at root"
+    );
+    assert_eq!(deleted["its_parent"]["replaced_by"], json!("Sphere"));
+    assert_eq!(
+        deleted["its_parent"]["summary"], wrapped["wrapped"]["summary"],
+        "the node the wrapper held came back changed"
+    );
+    assert_eq!(deleted["node_count"], json!(1));
+    assert_eq!(deleted["selected"], json!("root"));
+    assert_eq!(
+        deleted["preview_signature"],
+        sphere["preview_signature"],
+        "wrapping the root and deleting the wrapper is the identity, and the tree did not come back the \
+         tree that went in"
+    );
+    assert_eq!(
+        fingerprints(&deleted["state"]["parts"]),
+        fingerprints(&sphere["parts"])
+    );
+
+    // A root with two operands cannot be deleted, because one operand of a `Union` is not a shape.
+    call(
+        &mut state,
+        "add_part",
+        json!({
+            "combine": "Union",
+            "shape": { "kind": "Sphere", "r": 0.5, "centre": [2.0, 0.0, 0.0] },
+        }),
+    );
+    let (message, refused) = try_call(&mut state, "delete_part", json!({ "route": "root" }));
+    assert!(refused, "a two-operand root was deleted: {message}");
+    assert!(
+        message.contains("the whole entity"),
+        "the refusal for a Union root says {message:?}, which does not explain why one operand is not a \
+         shape"
+    );
+}
+
+/// The wrap has to reach the marcher, not just the tree: a mirror of an off-plane part is a wider animal.
+#[test]
+fn a_mirror_of_an_off_centre_part_doubles_what_the_frame_sees() {
+    let mut state = fresh();
+    // The default sphere sits on every mirror plane, so a wrap of it is the same silhouette however the
+    // axis is chosen. Moving it off X first is what makes the frame a test rather than a tautology.
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.6, 0.0, 0.0] }),
+    );
+    let view = json!({
+        "yaw": core::f32::consts::PI, "pitch": 0.12, "distance": 6.0,
+        "width": 96, "height": 72, "stage": false,
+    });
+    let before = call(&mut state, "render_view", view.clone());
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Mirror", "axis": 0 }),
+    );
+    let after = call(&mut state, "render_view", view);
+
+    assert_eq!(
+        after["preview_signature"], wrapped["preview_signature"],
+        "the frame rendered is not the state the wrap left behind"
+    );
+    assert_ne!(after["path"], before["path"]);
+    assert_eq!(
+        after["undrawn_pixels"],
+        json!(0),
+        "the march refused to draw the mirrored frame"
+    );
+    let (one_limb, mirrored, total) = (
+        before["surface_pixels"].as_u64().expect("a count"),
+        after["surface_pixels"].as_u64().expect("a count"),
+        before["total_pixels"].as_u64().expect("a count"),
+    );
+    assert!(
+        one_limb < total,
+        "the frame before the wrap was already all surface, so this instrument cannot show a gain"
+    );
+    assert!(
+        mirrored > one_limb,
+        "mirroring a sphere at x = 0.6 about X added its other half and the picture gained nothing: \
+         {one_limb} -> {mirrored}"
+    );
+}
+
+/// What a `Repeat` actually tiles, measured in the frame rather than in the tree.
+///
+/// The compiler folds the *query point* into `[-period/2, period/2)` on every axis before it evaluates the
+/// child, so the copies are of whatever the child has inside that cell — not of the child wherever it
+/// sits. A part authored wholly outside the cell therefore renders as nothing, which is a result an agent
+/// can easily mistake for a failed wrap. The two halves below are what the pipe's own tests can say about
+/// it: the blank frame proves the fold is live, and the frame that comes back after the cell widens proves
+/// the blank was the cell's doing and not the wrapper's.
+#[test]
+fn a_repeat_tiles_its_fold_cell_so_a_part_authored_outside_it_renders_as_nothing() {
+    let mut state = fresh();
+    // The default sphere is r 1.0 at the origin, which every cell contains. Moving it to x = 1.5 puts its
+    // whole span, 0.5 to 2.5, outside a period-0.4 cell.
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [1.5, 0.0, 0.0] }),
+    );
+    let view = json!({
+        "yaw": core::f32::consts::PI, "pitch": 0.12, "distance": 6.0,
+        "width": 96, "height": 72, "stage": false,
+    });
+    let alone = call(&mut state, "render_view", view.clone());
+    assert!(
+        alone["surface_pixels"].as_u64().expect("a count") > 0,
+        "the sphere was already invisible before the wrap, so a blank frame afterwards would prove nothing"
+    );
+
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "combine": "Repeat", "period": 0.4 }),
+    );
+    assert_eq!(wrapped["node_count"], json!(2));
+    let tiled = call(&mut state, "render_view", view.clone());
+    assert_eq!(
+        tiled["preview_signature"], wrapped["preview_signature"],
+        "the frame rendered is not the state the wrap left behind"
+    );
+    assert_eq!(
+        tiled["undrawn_pixels"],
+        json!(0),
+        "the march refused to draw the tiled frame, which reads the same as an empty one"
+    );
+    assert_eq!(
+        tiled["surface_pixels"],
+        json!(0),
+        "a period-0.4 cell spans -0.2 to 0.2 and the sphere spans 0.5 to 2.5, so the tiling has nothing \
+         to copy and the frame should be sky: {} pixels found surface anyway",
+        tiled["surface_pixels"]
+    );
+
+    // Widen the cell to hold the part and the same tree renders it, tiled. This is the check that the blank
+    // frame above was the fold cell and not a wrapper the marcher ignores.
+    let widened = call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "period", "value": 4.0 }),
+    );
+    let retiled = call(&mut state, "render_view", view);
+    assert_eq!(
+        retiled["preview_signature"], widened["preview_signature"],
+        "the frame rendered is not the state the period edit left behind"
+    );
+    assert_ne!(retiled["path"], tiled["path"]);
+    assert!(
+        retiled["surface_pixels"].as_u64().expect("a count") > 0,
+        "a period-4 cell spans -2 to 2 and holds the sphere, so the tiling should draw it"
     );
 }

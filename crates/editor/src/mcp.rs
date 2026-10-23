@@ -464,9 +464,15 @@ fn set_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String>
     }))
 }
 
-/// The combinators `add_part` can build. `Repeat` and `Mirror` are absent on purpose: they wrap the one
-/// node they hold rather than join two, which is a different gesture and not one this tool makes yet.
+/// The combinators `add_part` can build by joining two nodes: the one the route names, and a leaf authored
+/// on the call.
 const COMBINATIONS: &[&str] = &["Union", "Subtract", "Intersect", "SmoothUnion"];
+
+/// The wrappers `add_part` can build around one node. These do not join anything — the node the route
+/// names becomes their single child — so they take no `shape` and no `keep`, and their own field (`axis`,
+/// `period`) sits beside `combine` exactly as a `SmoothUnion`'s `k` does. A test walks this list against
+/// the field each wrapper is built with, so a name here that the code cannot build is caught.
+pub const WRAPPERS: &[&str] = &["Mirror", "Repeat"];
 
 /// A list of names in the shape a refusal answers with: `"a", "b"`.
 fn quoted(names: &[&str]) -> String {
@@ -561,6 +567,25 @@ fn authored_leaf(given: &Value) -> Result<Shape, String> {
     Ok(node)
 }
 
+/// A wrapper of the one node already at the route, with its own fields still at the build's defaults.
+///
+/// Like [`authored_leaf`], no default survives the call: every field the parameter table publishes for
+/// this kind has to be supplied, and the loop in [`wrap_part`] writes each one into the node before it
+/// joins the tree. `None` for a name [`WRAPPERS`] does not list.
+fn blank_wrapper(kind: &str, child: Shape) -> Option<Shape> {
+    match kind {
+        "Mirror" => Some(Shape::Mirror {
+            axis: 0,
+            child: Box::new(child),
+        }),
+        "Repeat" => Some(Shape::Repeat {
+            period: 1.0,
+            child: Box::new(child),
+        }),
+        _ => None,
+    }
+}
+
 /// Which slot of the new combinator keeps the node already in the tree. The names are the authored file's
 /// — `a`/`b`, and `kept`/`cutter` for a `Subtract`, where the order is the difference between a hole and
 /// an animal.
@@ -639,10 +664,14 @@ fn commit(state: &mut EditorState, candidate: Shape, select: Vec<Step>) -> Resul
 fn add_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
     let steps = route_steps(state, arguments)?;
     let combine = string_arg(arguments, "combine")?;
+    if WRAPPERS.contains(&combine.as_str()) {
+        return wrap_part(state, arguments, &combine, steps);
+    }
     if !COMBINATIONS.contains(&combine.as_str()) {
         return Err(format!(
-            "no combinator {combine:?}; add_part joins with {}",
-            quoted(COMBINATIONS)
+            "no combinator {combine:?}; add_part joins with {} and wraps with {}",
+            quoted(COMBINATIONS),
+            quoted(WRAPPERS)
         ));
     }
     let given = arguments.get("shape").ok_or_else(|| {
@@ -726,13 +755,109 @@ fn add_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String>
     }))
 }
 
+/// Grow the tree the one-child way: put the node a route names inside a `Mirror` or a `Repeat`.
+///
+/// The gesture is different enough from [`add_part`]'s to deserve its own function: there is no second
+/// operand to author and no slot to choose, so a call that passes either is refused rather than ignored,
+/// and the wrapper's own field is read from the same parameter table `set_part` writes — which is what
+/// keeps `axis` a whole choice in 0..=2 here and on the panel.
+///
+/// A `Repeat` folds the *query point* into the cell `[-period/2, period/2)` on every axis before its
+/// child is evaluated (`render::wrap`, transcribed identically in `interp.wgsl`), so the tiles are copies
+/// of whatever the child has inside that cell — not copies of the child wherever it sits. A part authored
+/// wholly outside the cell therefore renders as nothing, and the frame the pipe returns says so. This is
+/// the compiler's meaning, not this call's: `add_part` wraps, and the wrap is visible in the field.
+fn wrap_part(
+    state: &mut EditorState,
+    arguments: &Value,
+    combine: &str,
+    steps: Vec<Step>,
+) -> Result<Value, String> {
+    if arguments.get("shape").is_some() {
+        return Err(format!(
+            "{combine} wraps the node the route names instead of joining it to one, so it takes no \
+             shape; to add a part beside it pass combine as {}",
+            quoted(COMBINATIONS)
+        ));
+    }
+    if arguments.get("keep").is_some() {
+        return Err(format!(
+            "{combine} holds one node — the one already at the route — so there is no slot to keep; \
+             keep chooses which of two operands survives and only {} have two",
+            quoted(COMBINATIONS)
+        ));
+    }
+    // A `k` on a wrapper is the same mistake it is on a `Union`: a parameter that would sit in the file
+    // doing nothing. `blend_k` refuses it in those words.
+    blend_k(arguments, combine)?;
+
+    let mut candidate = state.entity_def.shape.clone();
+    let existing = shape_path::resolve(&candidate, &steps)
+        .ok_or_else(|| "the selected node is no longer in the tree; pass a route".to_string())?;
+    let mut wrapper =
+        blank_wrapper(combine, existing.clone()).expect("WRAPPERS lists only what this builds");
+    for spec in params::params_of(&wrapper) {
+        let value = arguments.get(spec.name).ok_or_else(|| {
+            format!(
+                "{combine} takes {}; {:?} is missing",
+                params::field_text(combine),
+                spec.name
+            )
+        })?;
+        let lanes = lanes_of(value, spec, spec.name)?;
+        check_lanes(spec, &lanes)?;
+        params::write_param(&mut wrapper, spec.name, &lanes[..spec.lanes as usize]).ok_or_else(
+            || {
+                format!(
+                    "{} is listed for a {combine} but this build cannot write it",
+                    spec.name
+                )
+            },
+        )?;
+    }
+    *shape_path::resolve_mut(&mut candidate, &steps)
+        .expect("resolve read the node at this route a moment ago") = wrapper;
+
+    let before = commit(state, candidate, steps.clone())?;
+    let snapshot = state_json(state);
+    let tree = &state.entity_def.shape;
+    let at = route_name(tree, &steps);
+    let held_path = [steps.as_slice(), &[Step::Sole]].concat();
+    // Both halves of the reply read back out of the tree the call just left: the wrapper at the route the
+    // caller named, and the node it now holds one level deeper.
+    let now = shape_path::resolve(tree, &steps).expect("commit put the wrapper at this route");
+    let held = shape_path::resolve(tree, &held_path)
+        .expect("a wrapper holds one node at its own child step");
+    Ok(json!({
+        "at": at,
+        "into": combine,
+        "wrapper": {
+            "route": at,
+            "kind": shape_path::kind(now),
+            "summary": shape_path::summary(now),
+        },
+        "wrapped": {
+            "slot": "child",
+            "route": route_name(tree, &held_path),
+            "kind": shape_path::kind(held),
+            "summary": shape_path::summary(held),
+        },
+        "selected": at,
+        "nodes_before": before,
+        "node_count": snapshot["node_count"],
+        "preview_signature": state.preview_signature(),
+        "state": snapshot,
+    }))
+}
+
 /// Take one node out of the tree, and the combinator that held it with it.
 ///
 /// A two-operand combinator missing an operand is not a shape, so the surviving operand takes its parent's
 /// place and the tree loses two nodes while keeping everything below the survivor. A one-child wrapper has
 /// nothing to promote, so deleting its child refuses rather than answering with a `Mirror` of nothing.
 /// Deleting a `Subtract`'s `kept` leaves its `cutter` standing — that is what the caller asked for, and the
-/// reply names the node that took the place.
+/// reply names the node that took the place. The root is its own holder, so it goes only when what it holds
+/// can stand alone: deleting a root `Mirror` or `Repeat` unwraps it, and its child becomes the tree.
 fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
     let route = string_arg(arguments, "route")?;
     if route.trim().is_empty() {
@@ -743,13 +868,6 @@ fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
         );
     }
     let steps = route_of(&state.entity_def.shape, &route)?;
-    let Some((&last, parent_path)) = steps.split_last() else {
-        return Err(
-            "\"root\" is the whole entity — deleting it leaves an editor holding nothing; delete its \
-             parts until the tree is the one you want"
-                .to_string(),
-        );
-    };
     let tree = &state.entity_def.shape;
     let gone = shape_path::resolve(tree, &steps).expect("route_of walked to this node");
     let (gone_kind, gone_summary, gone_route) = (
@@ -757,23 +875,45 @@ fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
         shape_path::summary(gone),
         route_name(tree, &steps),
     );
-    let parent = shape_path::resolve(tree, parent_path).expect("route_of walked through here");
-    if shape_path::children(parent).len() != 2 {
-        let wrapper = shape_path::kind(parent);
-        return Err(format!(
-            "{} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. \
-             Delete the {wrapper} itself from its own parent, or set its parameter.",
-            gone_route.as_str().unwrap_or(route.as_str())
-        ));
-    }
-    let survivor_step = if last == Step::First {
-        Step::Second
-    } else {
-        Step::First
+    const NO_STEPS: &[Step] = &[];
+    // Where the survivor goes, and what it is.
+    let (parent_path, survivor_path) = match steps.split_last() {
+        // A node below the root goes with the combinator that held it, and that combinator's other
+        // operand takes its place.
+        Some((&last, parent_path)) => {
+            let parent =
+                shape_path::resolve(tree, parent_path).expect("route_of walked through here");
+            if shape_path::children(parent).len() != 2 {
+                let wrapper = shape_path::kind(parent);
+                return Err(format!(
+                    "{} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. \
+                     Delete the {wrapper} itself from its own parent, or set its parameter.",
+                    gone_route.as_str().unwrap_or(route.as_str())
+                ));
+            }
+            let survivor_step = if last == Step::First {
+                Step::Second
+            } else {
+                Step::First
+            };
+            (parent_path, [parent_path, &[survivor_step]].concat())
+        }
+        // The root is its own holder, so deleting it leaves nothing only when what it holds cannot stand
+        // alone: a `Mirror` or `Repeat` at the root can be deleted, and its child becomes the tree. A
+        // two-operand root cannot, because one operand of a `Union` is not a shape.
+        None => {
+            if shape_path::children(tree).len() != 1 {
+                return Err(
+                    "\"root\" is the whole entity — deleting it leaves an editor holding nothing; delete \
+                     its parts until the tree is the one you want"
+                        .to_string(),
+                );
+            }
+            (NO_STEPS, vec![Step::Sole])
+        }
     };
-    let survivor_path = [parent_path, &[survivor_step]].concat();
     let survivor = shape_path::resolve(tree, &survivor_path)
-        .expect("a two-operand combinator holds both of its operands")
+        .expect("the slot named here holds the node this deletion promotes")
         .clone();
 
     let mut candidate = tree.clone();
@@ -1099,14 +1239,16 @@ pub fn tool_specs() -> Value {
         },
         {
             "name": "add_part",
-            "description": "Grow the tree: wrap the node a route names (or the selected one) in a new Union, Subtract, Intersect or SmoothUnion, joining it to a freshly authored Sphere, RoundedBox or Plane. Every field of the new leaf is required, in the ranges set_part offers; k is required for a SmoothUnion and refused for the rest. keep names which slot the existing node stays in (a/b, or kept/cutter for a Subtract) and defaults to the first. The whole call refuses, leaving the tree untouched, if the tree it would leave cannot be compiled.",
+            "description": "Grow the tree. With combine Union, Subtract, Intersect or SmoothUnion: wrap the node a route names (or the selected one) in that combinator, joining it to a freshly authored Sphere, RoundedBox or Plane. Every field of the new leaf is required, in the ranges set_part offers; k is required for a SmoothUnion and refused for the rest. keep names which slot the existing node stays in (a/b, or kept/cutter for a Subtract) and defaults to the first. With combine Mirror or Repeat: wrap that node in the one-child wrapper instead — no shape, no keep, and its own field (axis, period) required beside combine in the ranges set_part offers. A Repeat tiles the fold cell [-period/2, period/2) about the origin, so it repeats what lies inside that cell and renders a part authored wholly outside it as nothing; a Mirror folds about its own plane and doubles whatever sits off it. Either call refuses, leaving the tree untouched, if the tree it would leave cannot be compiled.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "route": { "type": "string" },
-                    "combine": { "type": "string", "enum": ["Union", "Subtract", "Intersect", "SmoothUnion"] },
+                    "combine": { "type": "string", "enum": ["Union", "Subtract", "Intersect", "SmoothUnion", "Mirror", "Repeat"] },
                     "keep": { "type": "string" },
                     "k": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "axis": { "type": "number", "minimum": 0, "maximum": 2 },
+                    "period": { "type": "number", "minimum": 0.05, "maximum": 10.0 },
                     "shape": {
                         "type": "object",
                         "properties": {
@@ -1120,12 +1262,12 @@ pub fn tool_specs() -> Value {
                         "required": ["kind"]
                     }
                 },
-                "required": ["combine", "shape"]
+                "required": ["combine"]
             }
         },
         {
             "name": "delete_part",
-            "description": "Take one node out of the tree by route. The two-operand combinator that held it goes too, and its surviving operand takes its place. A one-child wrapper's child cannot be deleted (that would leave a wrapper of nothing), and root cannot be deleted. The selection returns to root, because every path below the collapse means something else now.",
+            "description": "Take one node out of the tree by route. The two-operand combinator that held it goes too, and its surviving operand takes its place. A one-child wrapper's child cannot be deleted (that would leave a wrapper of nothing). Root cannot be deleted either, unless it is itself a one-child wrapper, in which case deleting it unwraps the tree and its child becomes the root. The selection returns to root, because every path below the collapse means something else now.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "route": { "type": "string" } },
