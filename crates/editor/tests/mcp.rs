@@ -2298,3 +2298,682 @@ fn a_loaded_non_finite_position_is_refused_by_the_compiler_instead_of_marching_i
     let _ = std::fs::remove_file(broken);
     let _ = std::fs::remove_file(saved);
 }
+
+/// What one part holds, without the route: the route is the slot, and an exchange moves contents between
+/// slots rather than moving the slots.
+fn content_of(part: &Value) -> String {
+    format!(
+        "{}|{}",
+        part["kind"].as_str().expect("a kind"),
+        part["summary"].as_str().expect("a summary")
+    )
+}
+
+fn part_at<'p>(parts: &'p [Value], route: &str) -> &'p Value {
+    parts
+        .iter()
+        .find(|part| route_of(part) == route)
+        .unwrap_or_else(|| panic!("the parts list does not hold {route}"))
+}
+
+/// The contents sitting below one route, sorted so a test can compare two subtrees without depending on
+/// the order the outline walks them in.
+fn contents_under(parts: &[Value], route: &str) -> Vec<String> {
+    let prefix = format!("{route}.");
+    let mut lines: Vec<String> = parts
+        .iter()
+        .filter(|part| route_of(part).starts_with(&prefix))
+        .map(content_of)
+        .collect();
+    lines.sort();
+    lines
+}
+
+/// A pair of leaf siblings holding different things, so an exchange of them is visible. Two identical
+/// spheres would make every assertion below pass on a tool that moved nothing at all.
+fn differing_sibling_leaf_pair(parts: &[Value]) -> (String, String) {
+    let is_leaf = |part: &Value| {
+        part["kind"]
+            .as_str()
+            .is_some_and(|kind| LEAF_KINDS.contains(&kind))
+    };
+    for part in parts {
+        let route = route_of(part);
+        if !route.contains('.') || !is_leaf(part) {
+            continue;
+        }
+        let parent = route.rsplit_once('.').expect("a dotted route").0;
+        let siblings = parts.iter().filter(|other| {
+            let her = route_of(other);
+            her != route
+                && is_leaf(other)
+                && her
+                    .rsplit_once('.')
+                    .is_some_and(|(his_parent, _)| his_parent == parent)
+        });
+        for sibling in siblings {
+            if content_of(part) != content_of(sibling) {
+                return (route.to_string(), route_of(sibling).to_string());
+            }
+        }
+    }
+    panic!(
+        "no two leaf siblings in the tree differ, so exchanging a pair of them is not being run"
+    );
+}
+
+#[test]
+fn an_exchange_moves_both_ends_and_leaves_every_other_route_exactly_where_it_was() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was_parts = before["parts"].as_array().expect("a list").clone();
+    let (from, to) = differing_sibling_leaf_pair(&was_parts);
+
+    let moved = call(&mut state, "move_part", json!({ "from": from, "to": to }));
+    let now_parts = moved["state"]["parts"].as_array().expect("a list").clone();
+    let ends = moved["exchanged"].as_array().expect("two ends");
+    assert_eq!(ends.len(), 2, "an exchange reports both of its ends");
+
+    // Each end says what it held and what it holds now, and the two answers are each other's.
+    assert_eq!(ends[0]["called_with"], json!(from));
+    assert_eq!(ends[0]["route"], json!(from));
+    assert_eq!(ends[1]["called_with"], json!(to));
+    for (end, route, other) in [(&ends[0], &from, &to), (&ends[1], &to, &from)] {
+        assert_eq!(
+            end["was"]["kind"],
+            part_at(&was_parts, route)["kind"],
+            "the reply says {route} held something else",
+        );
+        assert_eq!(end["was"]["summary"], part_at(&was_parts, route)["summary"]);
+        assert_eq!(
+            end["now"]["kind"],
+            part_at(&was_parts, other)["kind"],
+            "{route} did not take what {other} held",
+        );
+        assert_eq!(end["now"]["summary"], part_at(&was_parts, other)["summary"]);
+        assert_eq!(end["children"], json!(0), "two leaves were exchanged");
+    }
+    assert_eq!(
+        content_of(part_at(&now_parts, &from)),
+        content_of(part_at(&was_parts, &to))
+    );
+    assert_eq!(
+        content_of(part_at(&now_parts, &to)),
+        content_of(part_at(&was_parts, &from))
+    );
+
+    // The selection followed the node the caller moved, which is now at `to`.
+    assert_eq!(moved["selected"], json!(to));
+    // Total, not destructive: the tree keeps its count.
+    assert_eq!(moved["nodes_before"], before["node_count"]);
+    assert_eq!(
+        moved["node_count"], before["node_count"],
+        "an exchange added or lost a node"
+    );
+    assert_eq!(
+        contents_under(&now_parts, &to),
+        contents_under(&was_parts, &from),
+        "the moved subtree did not travel intact"
+    );
+
+    // Every route that is not one of the two ends, or below one of them, reads exactly as it did.
+    let outside = |line: &String| {
+        let route = line.split('|').next().expect("a route");
+        route != from
+            && route != to
+            && !route.starts_with(&format!("{from}."))
+            && !route.starts_with(&format!("{to}."))
+    };
+    let kept: Vec<String> = fingerprints(&before["parts"])
+        .into_iter()
+        .filter(outside)
+        .collect();
+    let still: Vec<String> = fingerprints(&moved["state"]["parts"])
+        .into_iter()
+        .filter(outside)
+        .collect();
+    assert_eq!(
+        kept, still,
+        "an exchange of {from} and {to} rewrote a route it was never given"
+    );
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        after["dirty"],
+        json!(true),
+        "a real move left the file clean"
+    );
+    assert_ne!(
+        after["preview_signature"], before["preview_signature"],
+        "the moved tree is the tree the state came with"
+    );
+}
+
+#[test]
+fn an_exchange_reads_back_out_of_the_file_it_saves() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let (from, to) = differing_sibling_leaf_pair(before["parts"].as_array().expect("a list"));
+    let moved = call(&mut state, "move_part", json!({ "from": from, "to": to }));
+
+    let path = temp_path("exchanged_pig.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": path.to_string_lossy() }),
+    );
+    let again = call(&mut reloaded, "editor_state", json!({}));
+    assert_eq!(again["dirty"], json!(false));
+    assert_eq!(again["node_count"], moved["node_count"]);
+    assert_eq!(
+        fingerprints(&again["parts"]),
+        fingerprints(&moved["state"]["parts"]),
+        "the file reads back as a different tree than the exchange reported"
+    );
+    // And it is the animal the compiler accepts, not just the one the editor is holding.
+    assetc::compile_entity(&reloaded.entity_def)
+        .expect("the exchanged pig does not compile into an asset");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn the_same_pair_exchanged_twice_puts_the_tree_back() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let (from, to) = differing_sibling_leaf_pair(before["parts"].as_array().expect("a list"));
+
+    let once = call(&mut state, "move_part", json!({ "from": from, "to": to }));
+    assert_ne!(
+        once["preview_signature"], before["preview_signature"],
+        "the first exchange did not move anything, so the second cannot undo it"
+    );
+    let back = call(&mut state, "move_part", json!({ "from": to, "to": from }));
+
+    assert_eq!(
+        fingerprints(&back["state"]["parts"]),
+        fingerprints(&before["parts"]),
+        "exchanging {from} with {to} and then {to} with {from} left the tree changed"
+    );
+    assert_eq!(back["preview_signature"], before["preview_signature"]);
+    assert_eq!(back["node_count"], before["node_count"]);
+    assert_eq!(back["selected"], json!(from));
+}
+
+#[test]
+fn every_kind_the_grammar_has_travels_across_an_exchange() {
+    // The child counts are written here rather than read back from `shape_path::child_names`, so a kind
+    // that stopped carrying its operands into the exchange moves a number instead of passing silently.
+    let leaf_pair = |kind: &str| {
+        json!({
+            "route": "root", "combine": "Union", "keep": "a",
+            "shape": match kind {
+                "Sphere" => json!({ "kind": "Sphere", "r": 0.3, "centre": [0.0, 0.0, 0.0] }),
+                "RoundedBox" => json!({ "kind": "RoundedBox", "half": [0.2, 0.2, 0.2], "r": 0.05 }),
+                _ => json!({ "kind": "Plane", "normal": [0.0, 1.0, 0.0], "offset": 0.0 }),
+            },
+        })
+    };
+    let small = json!({ "kind": "Sphere", "r": 0.15, "centre": [0.4, 0.0, 0.0] });
+    let builds: Vec<(&str, usize, Value, Option<Value>)> = vec![
+        ("Sphere", 0, leaf_pair("Sphere"), None),
+        ("RoundedBox", 0, leaf_pair("RoundedBox"), None),
+        ("Plane", 0, leaf_pair("Plane"), None),
+        (
+            "Union",
+            2,
+            leaf_pair("Sphere"),
+            Some(json!({ "route": "root.b", "combine": "Union", "keep": "a", "shape": small })),
+        ),
+        (
+            "SmoothUnion",
+            2,
+            leaf_pair("Sphere"),
+            Some(
+                json!({ "route": "root.b", "combine": "SmoothUnion", "keep": "a", "k": 0.12, "shape": small }),
+            ),
+        ),
+        (
+            "Subtract",
+            2,
+            leaf_pair("Sphere"),
+            Some(
+                json!({ "route": "root.b", "combine": "Subtract", "keep": "kept", "shape": small }),
+            ),
+        ),
+        (
+            "Intersect",
+            2,
+            leaf_pair("Sphere"),
+            Some(json!({ "route": "root.b", "combine": "Intersect", "keep": "a", "shape": small })),
+        ),
+        (
+            "Mirror",
+            1,
+            leaf_pair("Sphere"),
+            Some(json!({ "route": "root.b", "combine": "Mirror", "axis": 1 })),
+        ),
+        (
+            "Repeat",
+            1,
+            leaf_pair("Sphere"),
+            Some(json!({ "route": "root.b", "combine": "Repeat", "period": 0.7 })),
+        ),
+    ];
+
+    let mut carried = 0;
+    for (kind, children, seed, wrap) in builds {
+        let mut state = fresh();
+        call(&mut state, "add_part", seed);
+        if let Some(second) = wrap {
+            call(&mut state, "add_part", second);
+        }
+        let before = call(&mut state, "editor_state", json!({}));
+        let was_parts = before["parts"].as_array().expect("a list").clone();
+        assert_eq!(
+            part_at(&was_parts, "root.b")["kind"],
+            json!(kind),
+            "the seed did not leave a {kind} at root.b, so {kind} is not being exchanged"
+        );
+
+        let moved = call(
+            &mut state,
+            "move_part",
+            json!({ "from": "root.b", "to": "root.a" }),
+        );
+        let now_parts = moved["state"]["parts"].as_array().expect("a list").clone();
+        // The moved node is at `to`, which the reply lists second; the first end is the slot it came from.
+        assert_eq!(moved["exchanged"][0]["was"]["kind"], json!(kind));
+        assert_eq!(moved["exchanged"][1]["now"]["kind"], json!(kind));
+        assert_eq!(
+            moved["exchanged"][1]["children"],
+            json!(children),
+            "the reply reads {kind}'s children off the wrong end"
+        );
+        assert_eq!(
+            contents_under(&now_parts, "root.a"),
+            contents_under(&was_parts, "root.b"),
+            "a {kind} lost or gained a node on the way across"
+        );
+        assert_eq!(part_at(&now_parts, "root.a")["kind"], json!(kind));
+        // The other end came the other way: the sphere the editor started with.
+        assert_eq!(part_at(&now_parts, "root.b")["kind"], json!("Sphere"));
+        assert_eq!(
+            part_at(&now_parts, "root.b")["summary"],
+            part_at(&was_parts, "root.a")["summary"]
+        );
+        assert_eq!(
+            moved["node_count"], before["node_count"],
+            "exchanging a {kind} moved the count"
+        );
+        carried += 1;
+    }
+    assert_eq!(
+        carried, 9,
+        "the authored grammar has nine kinds and this walked {carried}"
+    );
+}
+
+#[test]
+fn an_exchange_refuses_the_pair_that_sits_on_one_line_from_the_root() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let deep = before["parts"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .map(route_of)
+        .find(|route| route.matches('.').count() >= 2)
+        .expect(
+            "the shipped pig is deeper than two levels, so a node holding another is in the list",
+        )
+        .to_string();
+    let holder = deep.rsplit_once('.').expect("a dotted route").0.to_string();
+
+    let cases: Vec<(&str, Value, bool)> = vec![
+        (
+            "a node and the slot that holds it",
+            json!({ "from": holder, "to": deep }),
+            false,
+        ),
+        (
+            "the same pair, the other way round",
+            json!({ "from": deep, "to": holder }),
+            false,
+        ),
+        (
+            "root and a part below it",
+            json!({ "from": "root", "to": deep }),
+            true,
+        ),
+        (
+            "a part and root",
+            json!({ "from": deep, "to": "root" }),
+            true,
+        ),
+    ];
+    for (what, arguments, mentions_root) in cases {
+        let (message, refused) = try_call(&mut state, "move_part", arguments);
+        assert!(refused, "{what} was exchanged: {message}");
+        assert!(
+            message.contains("holds"),
+            "the refusal for {what} does not name the end that holds the other: {message}"
+        );
+        if mentions_root {
+            assert!(
+                message.contains("contains every route"),
+                "the refusal for {what} does not say why root cannot be one end: {message}"
+            );
+        }
+    }
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&before["parts"]),
+        "four refused exchanges changed the tree"
+    );
+    assert_eq!(after["preview_signature"], before["preview_signature"]);
+    assert_eq!(after["dirty"], json!(false));
+    assert_eq!(after["selected"], before["selected"]);
+}
+
+#[test]
+fn a_move_refuses_the_call_it_cannot_answer_and_equal_contents_move_nothing() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let was_parts = before["parts"].as_array().expect("a list").clone();
+    let leaf = was_parts
+        .iter()
+        .find(|part| {
+            part["kind"]
+                .as_str()
+                .is_some_and(|kind| LEAF_KINDS.contains(&kind))
+        })
+        .map(|part| route_of(part).to_string())
+        .expect("the pig ends in leaves");
+
+    let cases: Vec<(&str, Value, &str)> = vec![
+        (
+            "the same node at both ends",
+            json!({ "from": "root.a", "to": "a" }),
+            "the same node",
+        ),
+        (
+            "no from",
+            json!({ "to": "root.a" }),
+            "from is required and must be a string",
+        ),
+        (
+            "no to",
+            json!({ "from": "root.a" }),
+            "to is required and must be a string",
+        ),
+        (
+            "a blank end",
+            json!({ "from": "  ", "to": "root.a" }),
+            "from is required",
+        ),
+        (
+            "an end that is not a route",
+            json!({ "from": 3, "to": "root.a" }),
+            "must be a string",
+        ),
+        (
+            "a slot the parent does not have",
+            json!({ "from": "root.nope", "to": "root.a" }),
+            "has no child",
+        ),
+        (
+            "a step into a leaf",
+            json!({ "from": format!("{leaf}.a"), "to": "root.a" }),
+            "has no children",
+        ),
+    ];
+    for (what, arguments, expected) in cases {
+        let (message, refused) = try_call(&mut state, "move_part", arguments);
+        assert!(refused, "{what} was accepted: {message}");
+        assert!(
+            message.contains(expected),
+            "the refusal for {what} says {message:?}, which does not mention {expected:?}"
+        );
+    }
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&before["parts"]),
+        "seven refused calls moved a node anyway"
+    );
+    assert_eq!(after["dirty"], json!(false));
+    assert_eq!(after["selected"], before["selected"]);
+
+    // Equal contents at the two ends: the file would come back identical, so the call says so instead of
+    // reporting a move and leaving `dirty` set.
+    let mut twin = fresh();
+    call(
+        &mut twin,
+        "add_part",
+        json!({
+            "route": "root", "combine": "Union", "keep": "a",
+            // The same sphere the fresh editor already holds, authored again beside it.
+            "shape": { "kind": "Sphere", "r": 1.0, "centre": [0.0, 0.0, 0.0] },
+        }),
+    );
+    let seed = call(&mut twin, "editor_state", json!({}));
+    let seed_parts = seed["parts"].as_array().expect("a list").clone();
+    assert_eq!(
+        content_of(part_at(&seed_parts, "root.a")),
+        content_of(part_at(&seed_parts, "root.b")),
+        "the fixture was meant to hold the same content at both ends"
+    );
+    let (message, refused) = try_call(
+        &mut twin,
+        "move_part",
+        json!({ "from": "root.a", "to": "root.b" }),
+    );
+    assert!(refused, "two identical halves were exchanged: {message}");
+    assert!(
+        message.contains("moves nothing"),
+        "the refusal does not say the exchange would move nothing: {message}"
+    );
+    assert!(
+        message.contains(
+            &part_at(&seed_parts, "root.a")["summary"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        ),
+        "the refusal does not quote the content it refused: {message}"
+    );
+    let clean = call(&mut twin, "editor_state", json!({}));
+    assert_eq!(
+        clean["dirty"], seed["dirty"],
+        "a refused exchange changed the dirty flag the add had already set"
+    );
+    assert_eq!(clean["preview_signature"], seed["preview_signature"]);
+}
+
+#[test]
+fn an_exchange_the_compiler_cannot_lower_is_refused_before_it_lands() {
+    // A tree whose `kept` side can be grown to the grammar's cap, with a second branch two levels deep to
+    // exchange the tall one into. The cap itself is never written here: the loop stops when the compiler
+    // says so, the same way the add test finds it.
+    let seed = temp_path("cap_seed.ron");
+    std::fs::write(
+        &seed,
+        "EntityDef(
+    shape: Subtract(
+        kept: Sphere(r: 0.4, centre: (0.0, 0.0, 0.0)),
+        cutter: Subtract(
+            kept: Sphere(r: 0.25, centre: (1.0, 0.0, 0.0)),
+            cutter: Sphere(r: 0.25, centre: (-1.0, 0.0, 0.0)),
+        ),
+    ),
+)
+",
+    )
+    .expect("the fixture is writable");
+
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": seed.to_string_lossy() }),
+    );
+
+    let mut grown = 0;
+    let mut last_refusal = String::new();
+    for _ in 0..64 {
+        let (message, refused) = try_call(
+            &mut state,
+            "add_part",
+            json!({
+                "route": "root.kept",
+                "combine": "Subtract",
+                "keep": "kept",
+                "shape": { "kind": "Sphere", "r": 0.05, "centre": [5.0, 5.0, 5.0] },
+            }),
+        );
+        if !refused {
+            grown += 1;
+            continue;
+        }
+        last_refusal = message;
+        break;
+    }
+    assert!(
+        grown > 1,
+        "the kept chain never grew, so this test cannot see the cap: {last_refusal}"
+    );
+    assert!(
+        last_refusal.contains("levels deep") && last_refusal.contains("cap"),
+        "the growth stopped for a reason other than the depth cap: {last_refusal}"
+    );
+
+    // The tree now sits exactly at the cap, and the exchange that would push the tall chain one step
+    // deeper is the move a caller would never see coming: same node count, same parameters, no free slot.
+    let at_cap = call(&mut state, "editor_state", json!({}));
+    assetc::compile_entity(&state.entity_def)
+        .expect("the grown tree is meant to be exactly at the cap");
+    let (message, refused) = try_call(
+        &mut state,
+        "move_part",
+        json!({ "from": "root.kept", "to": "root.cutter.kept" }),
+    );
+    assert!(
+        refused,
+        "a {grown}-deep chain moved one step further down and the compiler said nothing: {message}"
+    );
+    assert!(
+        message.contains("cannot be compiled"),
+        "the refusal is not the compiler's: {message}"
+    );
+    assert!(
+        message.contains("levels deep") && message.contains("cap"),
+        "the refusal does not quote the compiler's depth words: {message}"
+    );
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&after["parts"]),
+        fingerprints(&at_cap["parts"]),
+        "the exchange the compiler refused rewrote the tree anyway"
+    );
+    assert_eq!(after["preview_signature"], at_cap["preview_signature"]);
+    assert_eq!(after["selected"], at_cap["selected"]);
+
+    let _ = std::fs::remove_file(seed);
+}
+
+#[test]
+fn exchanging_a_subs_two_halves_turns_a_bite_into_a_crescent() {
+    // Not a commutative parent: exchanging a `Union`'s operands leaves the solid exactly as it was, so a
+    // frame test on one would pass on a tool that moved nothing. `kept` and `cutter` are the pair where
+    // the slot is the meaning — the difference between a hole and an animal.
+    let mut state = fresh();
+    let view = json!({ "view": "front", "width": 96, "height": 72, "stage": false });
+
+    let bitten = call(
+        &mut state,
+        "add_part",
+        json!({
+            "route": "root", "combine": "Subtract", "keep": "kept",
+            "shape": { "kind": "Sphere", "r": 0.6, "centre": [0.0, 0.6, 0.0] },
+        }),
+    );
+    let before_frame = call(&mut state, "render_view", view.clone());
+    assert_eq!(
+        before_frame["preview_signature"],
+        bitten["preview_signature"]
+    );
+
+    let moved = call(
+        &mut state,
+        "move_part",
+        json!({ "from": "root.kept", "to": "root.cutter" }),
+    );
+    let after_frame = call(&mut state, "render_view", view);
+
+    assert_eq!(
+        after_frame["preview_signature"], moved["preview_signature"],
+        "the frame rendered is not the state the exchange left behind"
+    );
+    assert_ne!(
+        after_frame["path"], before_frame["path"],
+        "two different states wrote the same PNG, so a reader cannot tell which frame they are looking at"
+    );
+    assert_eq!(
+        after_frame["undrawn_pixels"],
+        json!(0),
+        "the march refused to draw the frame the exchange produced"
+    );
+    assert_eq!(before_frame["undrawn_pixels"], json!(0));
+
+    let bitten_surface = before_frame["surface_pixels"].as_u64().expect("a count");
+    let crescent = after_frame["surface_pixels"].as_u64().expect("a count");
+    assert!(
+        bitten_surface > 0,
+        "the ball with a bite in it drew nothing, so this instrument cannot show a loss"
+    );
+    assert!(
+        crescent > 0,
+        "the cap that sticks out past the ball was marched away entirely"
+    );
+    assert!(
+        crescent < bitten_surface,
+        "keeping the small sphere and cutting with the big one left the picture no smaller: {} -> {}",
+        bitten_surface,
+        crescent,
+    );
+}

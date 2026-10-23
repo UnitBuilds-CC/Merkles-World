@@ -253,7 +253,7 @@ anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handl
 it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
 same module rather than a mock of it.
 
-Ten tools:
+Eleven tools:
 
 | Tool | Answers |
 |------|---------|
@@ -265,10 +265,11 @@ Ten tools:
 | `set_part` | one authored field of one node — a `Sphere`'s `r` or `centre`, a `RoundedBox`'s `half` or `r`, a `Plane`'s `normal` or `offset`, a `SmoothUnion`'s `k`, a `Repeat`'s `period`, a `Mirror`'s `axis` — with the route optional: without one it writes the node the editor already holds selected |
 | `add_part` | grows the tree one of two ways. `Union`, `Subtract`, `Intersect` or `SmoothUnion` wraps the node a route names in that combinator, joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `Mirror` or `Repeat` wraps it alone — no `shape`, no `keep`, and the wrapper's own `axis` or `period` beside `combine`, from the same table `set_part` writes. `route` optional: without one it wraps the selected node |
 | `delete_part` | a route in, the node out. A two-operand combinator cannot hold one operand, so its surviving operand takes the combinator's place and the tree loses two nodes; the selection goes back to `root`, because every path under a collapse now means something else. `root` itself goes only when it holds one node: deleting a root `Mirror` unwraps the tree |
+| `move_part` | two routes in, both ends out. It is an **exchange**, not a reparent: the node at `from` and the node at `to` trade places, every other route keeps resolving to the same node it did, and `node_count` is unchanged. Refused: a pair on one line from the root (one holds the other, so one write would land inside the other and a subtree would be lost rather than moved), `root` as either end for the same reason, the same route twice, and two routes holding identical content — an exchange of equals moves nothing |
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
-Nine of those decisions are about honesty rather than features:
+Ten of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
   1e-4 of 1; scale finite and positive; every `position` lane finite), and validates the whole call before
@@ -297,11 +298,14 @@ Nine of those decisions are about honesty rather than features:
   while `mcp.rs` validates against it. Two written-down ranges would drift into an edit an agent can make
   that the window cannot, which is the disagreement this gate exists to catch. The field names are the
   ones `.ron` files and `assetc`'s refusals use, so a caller can paste either.
-- **A structural edit is compiled before it lands.** `add_part` and `delete_part` build their result on a
-  clone and pass it through `assetc::lower` — the same pass the shipped `.bin` comes out of — so the depth
-  cap, a non-unit `Mirror` axis and a NaN length are refused with the compiler's own words and the held
-  tree never moves. An editor that wrote a tree the compiler refuses would hand an author a file that
-  cannot become an asset and say nothing until the boot fails.
+- **A structural edit is compiled before it lands.** The three structural tools — `add_part`,
+  `delete_part` and `move_part` — build their result on a clone and pass it through `assetc::lower` — the
+  same pass the shipped `.bin` comes out of — so the depth cap, a non-unit `Mirror` axis and a NaN length
+  are refused with the compiler's own words and the held tree never moves. An editor that wrote a tree the
+  compiler refuses would hand an author a file that cannot become an asset and say nothing until the boot
+  fails. `move_part` needs that gate more than the other two: an exchange that puts a deep subtree into a
+  slot that held a leaf makes the tree deeper on one side, and nothing about the gesture is itself
+  illegal — so the cap is the only clause that can see the hazard.
 - **Adding is wrapping, and deleting is collapsing.** Every combinator in this grammar is full the moment
   it exists — a `Union` with one operand is not a shape — so there is no free slot to fill, and the only
   honest *add* is a new wrapper around the node the route names. The reply then reads both slots back out
@@ -309,6 +313,17 @@ Nine of those decisions are about honesty rather than features:
   versus `Subtract.cutter` — a hole and an animal — is stated, not implied. `delete_part` answers with the
   node it removed *and* the combinator that held it, and resets the selection to `root`: a path kept across
   a collapse would edit some unrelated node.
+- **Moving is exchanging, and `root` is not a destination.** For the same reason there is no free slot to
+  fill, there is no slot to *put* a node into — the only total move between two routes is a swap, where each
+  end takes the other's content. A swap keeps every route outside the two ends resolving to the node it
+  already did and leaves `node_count` alone, which is what makes it an edit an author can reason about
+  rather than a tree rewrite. Two pairs cannot be swapped: a node and any descendant of it, because the
+  write into the outer slot lands inside the node the inner write is replacing, so a subtree is lost rather
+  than moved — and `root` is the outer end of every such pair, so it can never be one end of a call; and two
+  routes holding identical content, because an answer that reports an exchange and changes nothing is the
+  failure this pipe refuses hardest. The reply reads both ends back out of the tree it left — `was` and
+  `now`, each with its kind, summary and child count — so a caller sees which content went which way instead
+  of inferring it from a route it computed itself.
 - **The one-child gesture is a different call, and says so.** A `Mirror` or `Repeat` wraps one node rather
   than joining two, so it has no operand to author and no slot to choose: `add_part` refuses a wrapper
   handed a `shape` or a `keep` instead of quietly dropping the argument the caller did not need, and asks
@@ -354,14 +369,18 @@ front view" would be looking at a different picture from the one the dump was de
 capped at 768 on a side, because this is a CPU march and a 4096² request is a way to wedge a tool that is
 supposed to answer.
 
-What the pipe still does **not** do: it cannot move a node from one route to another, so a part can be
-added, wrapped and removed but not re-parented — a symmetric creature is authored by building one side and
-wrapping it in a `Mirror`, which is what the shipped pig's tree does, not by lifting a finished part under a
-new parent. Material fields other than `base_color` are read by no shader
+What the pipe still does **not** do: it can exchange two routes but it cannot *re-parent* one — no call
+lifts a finished subtree out and grafts it under a different parent while the tree stays whole, because
+there is no slot to hold a node in transit. A symmetric creature is still authored by building one side and
+wrapping it in a `Mirror`, which is what the shipped pig's tree does; `move_part` rearranges two parts that
+already have parents. Nor can it undo one wrapper from inside another: deleting the sole child of a `Mirror`
+or `Repeat` would leave that wrapper holding nothing, so the smallest deletion there is the wrapper together
+with everything it holds, and a `Repeat` nested under a `Mirror` can only come out with the `Mirror` over it.
+Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
 setting them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 31 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 39 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -413,6 +432,26 @@ turn into a magnitude cap; and `tests/mcp.rs` loads a hand-authored `position: (
 follows it all the way through: the state holds it, the compiler refuses it naming the field, the preview
 comes back as the whole frame undrawn rather than as sky, and one legal `set_transform` plus a save and a
 reload makes the identical frame draw.
+Increment 6 adds eight. An exchange of two of the shipped pig's own routes moves both ends and leaves every
+other route's kind and summary exactly where it was — each end's `was` checked against the parts list
+captured *before* the call rather than against a value written into the test, the subtree that arrived read
+back as the subtree that left, `nodes_before` equal to `node_count`, and the selection on the end the moved
+node now sits at; the same exchange reading back out of the file it saves and compiling from there; the same
+pair exchanged twice putting the tree back, signature and selection included; every one of the nine authored
+kinds carried across an exchange, each seeded by `add_part` and wrapped where it is not a leaf, with the
+child count the reply reports written down in the test as 0, 1 or 2 by kind and a counter that moves if a
+kind stops being exercised; the four one-line pairs refused — holder-then-held, held-then-holder, and `root`
+both ways, those two also naming that `root` contains every route — against a tree that does not move, a
+signature that does not change and a `dirty` flag that stays false; seven calls the tool cannot answer refused
+in turn (the same route spelled twice, no `from`, no `to`, a blank one, a number where a route belongs, a
+child the tree does not have, a step into a leaf) and then the twin the fixture authors — a second sphere
+built to the default's exact radius and centre — refused because exchanging equals moves nothing, quoting the
+summary it compared; an exchange that would push one branch past the compiler's cap refused with the
+compiler's own words and nothing moved, reached by growing the branch until `assetc` speaks rather than by
+hardcoding the number; and the picture two operands make, which is a `Subtract` and not a `Union` because a
+`Union`'s operands are commutative and its frame would look identical however they were swapped — a sphere
+biting a sphere, then the bite exchanged into a crescent, both frames positive, both below their
+`total_pixels`, both with zero undrawn pixels and different paths against the signature the move returned.
 
 Each of those checks was run against a planted defect in the clause it is meant to police, on this machine,
 and each plant is recorded with the one test it named: dropping `assetc::lower` from `commit` named the
@@ -436,7 +475,19 @@ Increment 5's three plants sat on the clause itself: renaming its route to `cent
 their `location()` line; widening it to `lane.abs() < 1e6` — a magnitude cap the compiler must not become,
 because OQ-58 owns the range question — was then planted alone and named only the `lowering` row's control
 half, which is exactly the check the editor's row cannot express; and deleting the clause named both again,
-one at its `{label} position compiled` panic and one where it asks for the refusal. Every plant was
+one at its `{label} position compiled` panic and one where it asks for the refusal.
+Increment 6's six plants ran the same way: turning the one-line guard off named only the refusal test;
+writing only the end the node came from — the far content lands at `from` while `to` keeps its own, so a
+subtree is duplicated rather than moved — named the
+both-ends test, the every-kind walk, the cap test and the exchange-it-back test, but **not** the frame test,
+because a `Subtract` whose two operands are equal marches as a zero-thickness shell rather than as nothing,
+so its surface count stays positive and its crescent assertion never fires; selecting the end that vacated
+instead of the one that arrived named that test's `selected` line and the pig test's; disabling the
+equal-contents refusal named only the malformed-call test; reading the reply's child count off the content
+that left rather than the one that arrived named only the every-kind walk, which is the one place a leaf and
+a combinator are told apart by the number beside the route; and writing the candidate into the state without
+`commit`'s compile named only the cap test — the row that says the exchange path really does go through the
+gate the other two structural tools use. Every plant was
 reverted and the suite re-run green afterwards.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
@@ -589,7 +640,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped and removed only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 31 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed and exchanged with another route only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 39 tests |
 
 ## Migration from current code
 

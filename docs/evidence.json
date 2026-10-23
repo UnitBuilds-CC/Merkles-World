@@ -4,7 +4,7 @@
   "claims": {
     "suite_size": {
       "kind": "phrase",
-      "value": "283 tests in 36 suites",
+      "value": "291 tests in 36 suites",
       "what": "The workspace's measured test total, as `cargo test -q` reports it summed across the per-suite lines. It is on the README's front page, which is the place most likely to be read and the place that drifted furthest once - a status board saying '32 tests' while the suite held 183 is a public lie, not a stale number.",
       "measured_by": "`cargo test -q` - the sum of the `test result: ok.` lines",
       "cited_in": [

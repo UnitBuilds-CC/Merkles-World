@@ -61,6 +61,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "set_part",
     "add_part",
     "delete_part",
+    "move_part",
     "render_view",
     "save_entity",
 ];
@@ -155,6 +156,7 @@ fn dispatch(
         "set_part" => Some(set_part(state, arguments)),
         "add_part" => Some(add_part(state, arguments)),
         "delete_part" => Some(delete_part(state, arguments)),
+        "move_part" => Some(move_part(state, arguments)),
         "render_view" => Some(render_view(state, arguments)),
         "save_entity" => Some(save_entity(state, arguments)),
         _ => None,
@@ -334,6 +336,26 @@ fn route_of(shape: &Shape, route: &str) -> Result<Vec<Step>, String> {
         node = child;
     }
     Ok(steps)
+}
+
+/// A route a caller has to spell out. `move_part` acts on two nodes, so neither end can be the selection
+/// the way `set_part`'s and `add_part`'s optional `route` is — the question "which one is the selected
+/// part?" has no answer when the call moves one part into another's place.
+fn named_route(arguments: &Value, key: &str) -> Result<String, String> {
+    let route = string_arg(arguments, key)?;
+    if route.trim().is_empty() {
+        return Err(format!(
+            "{key} is required; editor_state's parts list names the routes that exist, and \"root\" is \
+             the whole entity"
+        ));
+    }
+    Ok(route)
+}
+
+/// Whether `deepest` walks through `highest` on its way down from the root, so the node at `highest` holds
+/// the node at `deepest`. Equal paths are not `holds` — one node does not hold itself.
+fn holds(highest: &[Step], deepest: &[Step]) -> bool {
+    highest.len() < deepest.len() && deepest.starts_with(highest)
 }
 
 /// The route a node's `Step` path is printed as, or `null` if the tree no longer holds it.
@@ -640,7 +662,7 @@ fn blend_k(arguments: &Value, combine: &str) -> Result<f32, String> {
 /// Put a rebuilt tree into the state, answering the whole call with the compiler's own refusal if the
 /// tree it would leave cannot compile.
 ///
-/// Both structural tools build their result on a clone and hand it here, so a refusal cannot leave the
+/// The structural tools build their result on a clone and hand it here, so a refusal cannot leave the
 /// editor holding half a change. `assetc::lower` is the pass the shipped `.bin` comes out of — the depth
 /// cap, a non-unit axis, a NaN length — and an editor that wrote a tree the compiler refuses would hand
 /// an author a file that cannot become an asset and say nothing until the boot fails.
@@ -933,6 +955,104 @@ fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
             "replaced_by": shape_path::kind(now),
             "summary": shape_path::summary(now),
         },
+        "selected": snapshot["selected"],
+        "nodes_before": before,
+        "node_count": snapshot["node_count"],
+        "preview_signature": state.preview_signature(),
+        "state": snapshot,
+    }))
+}
+
+/// Move one node to another node's place, and that node into its: an exchange of two routes' contents.
+///
+/// There is no free slot in this grammar — a combinator is full the moment it exists — so a move that
+/// *inserted* would have to answer what happens to the node it displaces, and the honest answers are only
+/// "it is dropped" (a tool that silently deletes geometry) and "it goes where the moved node came from",
+/// which is this call. Exchanging is total: both ends keep holding exactly one node, the tree keeps its
+/// node count, and every route outside the two named still resolves to what it resolved to before.
+///
+/// The two ends may not sit on one line from the root. Both writes are applied to the same tree, and on an
+/// ancestor pair the deeper write lands inside the very node the shallower one replaces, so one of the two
+/// subtrees would be overwritten rather than moved and the count would come back different — a loss the
+/// caller cannot see in the reply. `root` is an ancestor of every route, so it is never one end of an
+/// exchange: the grammar has no hole to put the root's contents in. Two unrelated routes can still deepen
+/// the tree, because a subtree that sat one step below the root can move several steps down, and that
+/// refusal is the compiler's — [`commit`] runs `assetc::lower` before anything lands.
+fn move_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let from = named_route(arguments, "from")?;
+    let to = named_route(arguments, "to")?;
+    let tree = &state.entity_def.shape;
+    let from_steps = route_of(tree, &from)?;
+    let to_steps = route_of(tree, &to)?;
+
+    if from_steps == to_steps {
+        return Err(format!(
+            "{from} and {to} are the same node — an exchange needs two ends. To change this part's own \
+             field use set_part."
+        ));
+    }
+    let on_one_line = if holds(&from_steps, &to_steps) {
+        Some((&from, &to))
+    } else if holds(&to_steps, &from_steps) {
+        Some((&to, &from))
+    } else {
+        // Neither end contains the other, so the two writes land in different nodes.
+        None
+    };
+    if let Some((holder, held)) = on_one_line {
+        return Err(format!(
+            "{holder} holds {held}, so exchanging them would write into a node the other write \
+             replaces: one of the two subtrees would be lost rather than moved. Exchange two routes \
+             neither of which contains the other — and \"root\" contains every route, so it cannot be \
+             one end."
+        ));
+    }
+
+    let from_was = shape_path::resolve(tree, &from_steps)
+        .expect("route_of walked to this node")
+        .clone();
+    let to_was = shape_path::resolve(tree, &to_steps)
+        .expect("route_of walked to this node")
+        .clone();
+    if from_was == to_was {
+        // Not a no-op worth reporting as success: the file would come back identical, and a caller who
+        // meant to re-parent would read `dirty` and believe the tree moved.
+        return Err(format!(
+            "{from} and {to} both hold {} ({}) — exchanging equal contents moves nothing. Edit one of \
+             them with set_part, or exchange it with a part that differs.",
+            shape_path::kind(&from_was),
+            shape_path::summary(&from_was),
+        ));
+    }
+
+    let mut candidate = tree.clone();
+    *shape_path::resolve_mut(&mut candidate, &from_steps)
+        .expect("resolve read the node at this route a moment ago") = to_was.clone();
+    *shape_path::resolve_mut(&mut candidate, &to_steps)
+        .expect("resolve read the node at this route a moment ago") = from_was.clone();
+    // The selection follows the node the caller moved, which is now at the route they named `to`.
+    let before = commit(state, candidate, to_steps.clone())?;
+
+    let snapshot = state_json(state);
+    let tree = &state.entity_def.shape;
+    // Both ends read back out of the tree the call just left: what the route held and what it holds now,
+    // so a move that wrote only one side cannot report the pair it was asked for.
+    let end = |spelled: &str, steps: &[Step], was: &Shape| {
+        let now =
+            shape_path::resolve(tree, steps).expect("an exchange keeps every route resolving");
+        json!({
+            "route": route_name(tree, steps),
+            "called_with": spelled,
+            "was": { "kind": shape_path::kind(was), "summary": shape_path::summary(was) },
+            "now": { "kind": shape_path::kind(now), "summary": shape_path::summary(now) },
+            "children": shape_path::children(now).len(),
+        })
+    };
+    Ok(json!({
+        "exchanged": [
+            end(&from, &from_steps, &from_was),
+            end(&to, &to_steps, &to_was),
+        ],
         "selected": snapshot["selected"],
         "nodes_before": before,
         "node_count": snapshot["node_count"],
@@ -1272,6 +1392,19 @@ pub fn tool_specs() -> Value {
                 "type": "object",
                 "properties": { "route": { "type": "string" } },
                 "required": ["route"]
+            }
+        },
+        {
+            "name": "move_part",
+            "description": "Exchange two nodes' places: the node at from ends up at to, and whatever held to ends up at from. There is no free slot in this grammar, so a move that only inserted would have to drop the node it displaces; an exchange keeps the node count and leaves every route outside the two ends exactly where it was. The two ends may not sit on one line from the root (one holding the other), because then one subtree would be overwritten instead of moved, and root holds every route so it is never one end. Equal contents at both ends move nothing and are refused. The selection follows the node that was moved, and a tree the compiler cannot lower — an exchange can deepen the tree — is refused before it lands.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "from": { "type": "string" },
+                    "to": { "type": "string" }
+                },
+                "required": ["from", "to"],
+                "additionalProperties": false
             }
         },
         {
