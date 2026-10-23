@@ -261,7 +261,7 @@ anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handl
 it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
 same module rather than a mock of it.
 
-Fourteen tools:
+Sixteen tools:
 
 | Tool | Answers |
 |------|---------|
@@ -279,8 +279,10 @@ Fourteen tools:
 | `graft_part` | the re-parent: the subtree at `from` is lifted out and joined to the node at `under` inside a new `Union`, `Subtract`, `Intersect` or `SmoothUnion`. `keep` names the slot `under` keeps (the first by default, so a `Subtract` cuts the lifted part out of `under`), and `k` is required of a `SmoothUnion` and refused for the rest. The lift collapses whichever combinator held `from` the way `delete_part` does, except that a lifted wrapper leaves *with* its child instead of being unwrapped — so the holder and the subtree go, the join puts the subtree and one combinator back, and `node_count` is unchanged. Refused: `from` holding `under`, `from` sitting directly under `under` (or under `root` when `root` is its holder), a wrapper's only child — with the wrapper's own route named as the call that works — and a landing route the lift moved in a way the call cannot follow. A route through the operand the collapse promoted is followed to where that node now sits, which is what makes an anchor that is an ancestor of `from` landable |
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts. `view` names one of the six angles; only leaving it off steers by `yaw`, `pitch` and `distance`, and the file is then named `custom`. A `view` of any other type — a number, a boolean, an array, an object, `null` — is refused rather than read as "no view" |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
+| `undo` | puts the entity back one edit and says how many steps remain in each direction. Every call that changes the held state is one step — the transform, a node's parameters, a structural edit, a material slot, a registration — and a call that changed nothing is not a step, so an undo never spends a gesture on an identical tree. The selection and the material registry come back with the entity, because an undo that restored the animal but left a recoloured slot or a route into a tree that no longer exists would be a different document. The history holds the last 32 edits and `load_entity` empties it, because a new file is a new document. `save_entity` is not a step: it writes what is in front of it. Refuses when there is nothing to undo |
+| `redo` | re-applies the edit `undo` took back, as long as no new edit has landed since — a new edit clears the branch rather than growing a second future. Refuses when there is nothing to redo |
 
-Thirteen of those decisions are about honesty rather than features:
+Fourteen of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
   1e-4 of 1; scale finite and positive; every `position` lane finite), and validates the whole call before
@@ -429,6 +431,17 @@ Thirteen of those decisions are about honesty rather than features:
   into a process whose registry holds the three presets, so the slot is empty and the viewport paints it
   unlit white — which is why the notice names the new process rather than only repeating that the registry
   is not in the file.
+- **An undo is a step only where something changed, and it is the whole document that changes back.**
+  The history records a snapshot before each editing call and keeps it only if the call succeeded *and*
+  left different values behind, so a refused call and a call that rewrote the value already there are both
+  not steps — otherwise undo would spend a gesture putting back an identical tree and the next undo would
+  look like it had skipped one. The snapshot is the entity, the material registry, the selection and the
+  dirty flag together: a registry left behind would undo the geometry and keep the recolour, and a
+  selection left behind would name a route into the tree the undo just replaced. A real edit clears the
+  redo branch, because a history with two futures is not one an author can reason about, and `load_entity`
+  empties both stacks because an undo into a tree the new file never had would replace the animal the
+  author just asked for. The history is bounded at 32 edits — this is a tool process an agent can drive for
+  thousands of calls, and a stack that only grows is memory nothing frees.
 
 A refusal says what was available. `select_part` with a name the node does not carry is refused with the
 children it does carry (`root.b has no child "kept"; it names "a", "b"`), and a route into a leaf is refused
@@ -482,7 +495,7 @@ file carries `material_id` and nothing else about a slot — so an entity saved 
 process does not register loads into an empty slot, which the viewport paints unlit white and warns about.
 That is the gap a materials asset would close; it is a contract change, not a tool.
 
-`crates/editor/tests/mcp.rs` is 67 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 74 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -827,6 +840,40 @@ slot `keep` names instead of the one it does not named five rows. Dropping
 refusal table. All six were reverted and the suite re-run green at 321, measured by
 `tools/check_suite_size.sh`.
 
+Increment 13 adds seven, and the call they police is the one an author reaches for before trusting any of
+the others: undo. `every_editing_call_is_one_undo_step_that_puts_the_held_state_back` runs each of the
+eight editing calls through one harness — `set_transform`, `set_part`, `add_part`, `delete_part`,
+`move_part`, `graft_part`, `set_material`, `register_material` — and compares the whole held state (the
+entity as `editor_state` reports it, with the history counts removed, plus the material registry) after
+the edit, after one undo, and after one redo, which is what catches a tool that records a step but
+restores half of what it changed. `a_call_that_changes_nothing_is_not_a_step` writes the radius a fresh
+root already has, reads `changed: false` and `undo_remaining: 0`, and requires the undo to refuse rather
+than spend a gesture on an identical tree. `a_new_edit_clears_the_branch_redo_would_have_grown_and_nothing_else_is_a_step`
+undoes one of two transforms, lands a third edit, and requires `redo` to refuse, while a render and a
+selection are shown to leave the count where they found it. `the_history_keeps_the_last_thirty_two_steps_and_drops_the_oldest`
+makes 40 edits with alternating values, captures the state after each on the way in, walks back exactly 32
+to the state after edit 8, and requires the next undo to refuse. `a_load_starts_a_new_history_because_it_starts_a_new_document`
+edits, loads the pig, and requires the count to be zero with undo refusing.
+`an_undo_brings_back_the_selection_the_edit_was_made_under` selects `root.a.a`, grafts from `root.b.b`,
+checks that the graft really moved the selection, and requires undo to put back both the tree and
+`root.a.a`. `undo_and_redo_take_no_arguments_and_refuse_the_ones_they_were_not_written_for` reads their
+published schemas — no properties, `additionalProperties: false` — and requires each to refuse
+`{"steps": 2}` by naming the key.
+
+Seven plants ran, one clause each: dropping the snapshot in `edited` named the harness row (it read 0
+steps where it required 1), making `remember` record an unchanged call named the no-op row, removing
+`redo_stack.clear()` named the branch row, dropping `selected` from `restore` named the selection row,
+skipping the history clear in `load_ron` named the new-document row, removing the depth trim named the
+bound row (after 33 edits it reported 33), and letting `no_arguments` accept anything named the argument
+row. All seven were reverted and the suite re-run green at 328, measured by `tools/check_suite_size.sh`.
+
+The live pipe was driven over stdio for this increment too: `tools/list` published sixteen tools, and on
+the shipped pig a `set_part` moving a front-leg sphere's `r` from 0.22 to 0.40 reported `changed: true`
+and left `undo_remaining` at 1; one undo put the summary back to `r 0.22` with `redo_remaining` 1, one
+redo returned it to 0.40, a second undo took it back to 0.22, and a new edit to 0.50 cleared the branch so
+`redo` refused with `there is nothing to redo: no edit has been undone since the last change`. The module
+and the transport answered the same request list; the pipe is what shows the new calls travel.
+
 The live pipe was driven over stdio, not only through the module: `tools/list` published fourteen
 tools with `graft_part` among them, and the shipped pig was re-parented by its own node — the ear pair
 lifted out of the root's `Union` and grafted onto the tail that shared it, which is the one graft that
@@ -987,7 +1034,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — exchanged with another route only in a tree `assetc::lower` still compiles, and re-parented under a different node while the node count stays the same, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — a new material is defined in full, held to the same table, and paints nothing until the entity is assigned to its slot — and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 67 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — exchanged with another route only in a tree `assetc::lower` still compiles, and re-parented under a different node while the node count stays the same, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — a new material is defined in full, held to the same table, and paints nothing until the entity is assigned to its slot — every editing call is one undo step that puts the entity, the registry and the selection back together while a call that changed nothing is not a step and a new edit clears the redo branch, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 74 tests |
 
 ## Migration from current code
 

@@ -70,6 +70,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "graft_part",
     "render_view",
     "save_entity",
+    "undo",
+    "redo",
 ];
 
 /// One JSON-RPC line in, its reply out. `None` for notifications, which must draw no response.
@@ -156,20 +158,78 @@ fn dispatch(
     match name {
         "editor_state" => Some(Ok(state_json(state))),
         "list_materials" => Some(Ok(materials_json(state))),
-        "set_material" => Some(set_material(state, arguments)),
-        "register_material" => Some(register_material(state, arguments)),
+        "set_material" => Some(edited(state, |state| set_material(state, arguments))),
+        "register_material" => Some(edited(state, |state| register_material(state, arguments))),
         "load_entity" => Some(load(state, arguments)),
-        "set_transform" => Some(set_transform(state, arguments)),
+        "set_transform" => Some(edited(state, |state| set_transform(state, arguments))),
         "select_part" => Some(select_part(state, arguments)),
-        "set_part" => Some(set_part(state, arguments)),
-        "add_part" => Some(add_part(state, arguments)),
-        "delete_part" => Some(delete_part(state, arguments)),
-        "move_part" => Some(move_part(state, arguments)),
-        "graft_part" => Some(graft_part(state, arguments)),
+        "set_part" => Some(edited(state, |state| set_part(state, arguments))),
+        "add_part" => Some(edited(state, |state| add_part(state, arguments))),
+        "delete_part" => Some(edited(state, |state| delete_part(state, arguments))),
+        "move_part" => Some(edited(state, |state| move_part(state, arguments))),
+        "graft_part" => Some(edited(state, |state| graft_part(state, arguments))),
         "render_view" => Some(render_view(state, arguments)),
         "save_entity" => Some(save_entity(state, arguments)),
+        "undo" => Some(undo(state, arguments)),
+        "redo" => Some(redo(state, arguments)),
         _ => None,
     }
+}
+
+/// Run one call that may change the entity, recording what it replaced.
+///
+/// The snapshot is taken before the call and kept only if the call succeeded *and* left different
+/// values behind, so a refused call and a call that rewrote the same value are both not steps. What
+/// counts as an edit is decided here rather than inside each tool: a tool that forgot to record itself
+/// would leave an undo that jumps over its work and looks like it skipped a step.
+fn edited(
+    state: &mut EditorState,
+    call: impl FnOnce(&mut EditorState) -> Result<Value, String>,
+) -> Result<Value, String> {
+    let before = state.snapshot();
+    let reply = call(state)?;
+    state.remember(before);
+    Ok(reply)
+}
+
+fn undo(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    no_arguments(arguments, "undo")?;
+    state.undo()?;
+    Ok(history_json(state))
+}
+
+fn redo(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    no_arguments(arguments, "redo")?;
+    state.redo()?;
+    Ok(history_json(state))
+}
+
+fn history_json(state: &EditorState) -> Value {
+    let (undo_remaining, redo_remaining) = state.history_depth();
+    json!({
+        "undo_remaining": undo_remaining,
+        "redo_remaining": redo_remaining,
+        "state": state_json(state),
+    })
+}
+
+/// Refuse arguments a no-argument tool was not written to read, rather than dropping them.
+fn no_arguments(arguments: &Value, tool: &str) -> Result<(), String> {
+    let Some(map) = arguments.as_object() else {
+        return Err(format!(
+            "{tool} takes no arguments; its arguments were not an object"
+        ));
+    };
+    if map.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{tool} takes no arguments; it was given {}",
+        map.keys()
+            .map(|key| format!("{key:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 fn load(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
@@ -1945,9 +2005,12 @@ fn state_json(state: &EditorState) -> Value {
         .find(|entry| entry.path == state.selected)
         .map(|entry| Value::String(entry.name.clone()))
         .unwrap_or(Value::Null);
+    let (undo_remaining, redo_remaining) = state.history_depth();
     json!({
         "file_path": state.file_path,
         "dirty": state.dirty,
+        "undo_remaining": undo_remaining,
+        "redo_remaining": redo_remaining,
         "preview_signature": state.preview_signature(),
         "selected": selected,
         "transform": {
@@ -2281,6 +2344,16 @@ pub fn tool_specs() -> Value {
                 "properties": { "path": { "type": "string" } },
                 "required": ["path"]
             }
+        },
+        {
+            "name": "undo",
+            "description": "Put the entity back one edit. Every call that changes the entity is one step — the transform, a node's parameters, a structural edit, a material slot, a registration — and a call that changed nothing is not a step, so undo never spends a gesture on an identical tree. The selection returns with the state it belonged to, because a route names a node of the tree it was taken in. The history holds the last 32 edits, `load_entity` empties it because a new file is a new document, and `save_entity` is not a step: it writes what is in front of it. The reply says how many steps remain in each direction. Refuses when there is nothing to undo.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
+            "name": "redo",
+            "description": "Re-apply the edit `undo` took back, as long as no new edit has landed since — a new edit clears the branch rather than growing a second future. The material registry comes back with the entity, so a recolour undone and redone is the same picture twice. Refuses when there is nothing to redo.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         }
     ])
 }

@@ -5282,3 +5282,354 @@ fn the_registry_refuses_a_two_hundred_and_fifty_seventh_material_by_name() {
         json!(256)
     );
 }
+
+/// What an author can see and would expect an undo to put back: the entity as the pipe reports it, plus
+/// the registry `editor_state` does not spell out. A registered slot lives outside the entity file, so an
+/// undo that restored the animal but left the registration behind would not be an undo.
+///
+/// The history counts are removed before the comparison: undoing legitimately changes how many steps
+/// remain, and that is asserted from the replies instead.
+fn held(state: &mut EditorState) -> (Value, Value) {
+    let entity = call(state, "editor_state", json!({}));
+    let mut fields = entity.as_object().expect("the state is an object").clone();
+    fields.remove("undo_remaining");
+    fields.remove("redo_remaining");
+    (
+        Value::Object(fields),
+        call(state, "list_materials", json!({})),
+    )
+}
+
+/// One edit, taken back by one undo and re-applied by one redo, with the whole held state compared each
+/// time — so a tool that records a step but restores only half of what it changed fails here.
+fn undo_puts_the_held_state_back(
+    label: &str,
+    setup: &dyn Fn(&mut EditorState),
+    edit: &dyn Fn(&mut EditorState),
+) {
+    let mut state = fresh();
+    setup(&mut state);
+    let before = held(&mut state);
+    let (message, refused) = try_call(&mut state, "undo", json!({}));
+    assert!(
+        refused && message.contains("nothing to undo"),
+        "{label}: the setup left an undo step, so this test would not know which call it measured: \
+         {message}"
+    );
+
+    edit(&mut state);
+    let after = held(&mut state);
+    assert_ne!(before, after, "{label} changed nothing to undo");
+    let edited = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        edited["undo_remaining"],
+        json!(1),
+        "{label} did not land as exactly one step: {edited}"
+    );
+    assert_eq!(edited["redo_remaining"], json!(0));
+
+    let undone = call(&mut state, "undo", json!({}));
+    assert_eq!(held(&mut state), before, "{label} was not put back by undo");
+    assert_eq!(
+        undone["undo_remaining"],
+        json!(0),
+        "{label}: an undo left steps behind"
+    );
+    assert_eq!(
+        undone["redo_remaining"],
+        json!(1),
+        "{label}: the edit was not offered to redo"
+    );
+    assert_eq!(undone["state"]["selected"], selection_of(&before));
+
+    let redone = call(&mut state, "redo", json!({}));
+    assert_eq!(
+        held(&mut state),
+        after,
+        "{label} was not re-applied by redo"
+    );
+    assert_eq!(redone["undo_remaining"], json!(1));
+    assert_eq!(redone["redo_remaining"], json!(0));
+    assert_eq!(redone["state"]["selected"], selection_of(&after));
+}
+
+/// The selection lane of a `held()` capture, so the reply and the captured document are compared on the
+/// same term rather than the reply being trusted on its own.
+fn selection_of(held: &(Value, Value)) -> Value {
+    held.0["selected"].clone()
+}
+
+#[test]
+fn every_editing_call_is_one_undo_step_that_puts_the_held_state_back() {
+    let pig = pig_ron().to_string_lossy().to_string();
+    let whole = json!({
+        "base_color": [0.1, 0.2, 0.3],
+        "roughness": 0.5,
+        "emissive": 0.0,
+        "index_ior": 1.5,
+        "noise": "Value",
+        "noise_frequency": 3.0,
+    });
+    let load_pig = |state: &mut EditorState| {
+        call(state, "load_entity", json!({ "path": pig.as_str() }));
+    };
+
+    undo_puts_the_held_state_back("set_transform", &load_pig, &|state| {
+        call(
+            state,
+            "set_transform",
+            json!({ "position": [0.0, 0.4, 0.0] }),
+        );
+    });
+    undo_puts_the_held_state_back("set_part", &|_| {}, &|state| {
+        call(
+            state,
+            "set_part",
+            json!({ "route": "root", "parameter": "r", "value": 1.5 }),
+        );
+    });
+    undo_puts_the_held_state_back("add_part", &|_| {}, &|state| {
+        call(
+            state,
+            "add_part",
+            json!({
+                "route": "root",
+                "combine": "Union",
+                "shape": { "kind": "Sphere", "r": 0.4, "centre": [1.0, 0.0, 0.0] },
+            }),
+        );
+    });
+    undo_puts_the_held_state_back("delete_part", &load_pig, &|state| {
+        call(state, "delete_part", json!({ "route": "root.b.a" }));
+    });
+    undo_puts_the_held_state_back("move_part", &load_pig, &|state| {
+        let parts = call(state, "editor_state", json!({}))["parts"]
+            .as_array()
+            .expect("a list")
+            .clone();
+        let (from, to) = differing_sibling_leaf_pair(&parts);
+        call(state, "move_part", json!({ "from": from, "to": to }));
+    });
+    undo_puts_the_held_state_back("graft_part", &load_pig, &|state| {
+        call(
+            state,
+            "graft_part",
+            json!({ "from": "root.b.b", "under": "root.b.a", "combine": "Union" }),
+        );
+    });
+    undo_puts_the_held_state_back("set_material", &|_| {}, &|state| {
+        call(
+            state,
+            "set_material",
+            json!({ "slot": 0, "base_color": [0.0, 0.0, 0.0] }),
+        );
+    });
+    undo_puts_the_held_state_back("register_material", &|_| {}, &|state| {
+        call(state, "register_material", whole.clone());
+    });
+}
+
+#[test]
+fn a_call_that_changes_nothing_is_not_a_step() {
+    let mut state = fresh();
+    // The fresh entity's root is a sphere of radius 1.0, so this writes the value that is already there.
+    let written = call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "r", "value": 1.0 }),
+    );
+    assert_eq!(written["changed"], json!(false));
+    assert_eq!(
+        call(&mut state, "editor_state", json!({}))["undo_remaining"],
+        json!(0),
+        "a write of the value already there became a step, so undo would spend a gesture on an \
+         identical tree"
+    );
+    let (message, refused) = try_call(&mut state, "undo", json!({}));
+    assert!(refused, "an empty history accepted an undo: {message}");
+    assert!(message.contains("nothing to undo"), "{message}");
+}
+
+#[test]
+fn a_new_edit_clears_the_branch_redo_would_have_grown_and_nothing_else_is_a_step() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_transform",
+        json!({ "position": [0.0, 0.25, 0.0] }),
+    );
+    call(
+        &mut state,
+        "set_transform",
+        json!({ "position": [0.0, 0.5, 0.0] }),
+    );
+    assert_eq!(
+        call(&mut state, "editor_state", json!({}))["undo_remaining"],
+        json!(2)
+    );
+
+    let undone = call(&mut state, "undo", json!({}));
+    assert_eq!(undone["redo_remaining"], json!(1));
+    call(
+        &mut state,
+        "set_transform",
+        json!({ "position": [0.0, 0.75, 0.0] }),
+    );
+    assert_eq!(
+        call(&mut state, "editor_state", json!({}))["redo_remaining"],
+        json!(0),
+        "a new edit left the old branch in place, so redo would grow a second future"
+    );
+    let (message, refused) = try_call(&mut state, "redo", json!({}));
+    assert!(
+        refused,
+        "redo re-applied an edit the new one replaced: {message}"
+    );
+    assert!(message.contains("nothing to redo"), "{message}");
+
+    // A view and a selection are not edits; the selection is not either, though it travels with a step.
+    let steps = call(&mut state, "editor_state", json!({}))["undo_remaining"].clone();
+    call(&mut state, "render_view", json!({ "view": "front" }));
+    call(&mut state, "select_part", json!({ "route": "root" }));
+    assert_eq!(
+        call(&mut state, "editor_state", json!({}))["undo_remaining"],
+        steps,
+        "a view or a selection became an undo step"
+    );
+}
+
+#[test]
+fn the_history_keeps_the_last_thirty_two_steps_and_drops_the_oldest() {
+    let mut state = fresh();
+    let mut resting = Vec::new();
+    for index in 0..40 {
+        let r = if index % 2 == 0 { 1.5 } else { 1.0 };
+        call(
+            &mut state,
+            "set_part",
+            json!({ "route": "root", "parameter": "r", "value": r }),
+        );
+        resting.push(held(&mut state));
+        assert_eq!(
+            call(&mut state, "editor_state", json!({}))["undo_remaining"],
+            json!(core::cmp::min(index + 1, 32)),
+            "the history depth after {} edits is not the published bound",
+            index + 1
+        );
+    }
+
+    // 32 steps back from after edit 40 is the state after edit 8, which is `resting[7]`; the older seven
+    // edits are the ones the bound dropped.
+    for step in 0..32 {
+        let undone = call(&mut state, "undo", json!({}));
+        assert_eq!(
+            undone["undo_remaining"],
+            json!(31 - step),
+            "undo {step} did not count down"
+        );
+    }
+    assert_eq!(
+        held(&mut state),
+        resting[7],
+        "the bounded history did not stop exactly 32 edits back"
+    );
+    let (message, refused) = try_call(&mut state, "undo", json!({}));
+    assert!(
+        refused,
+        "the oldest step was still reachable past the bound: {message}"
+    );
+    assert!(message.contains("nothing to undo"), "{message}");
+}
+
+#[test]
+fn a_load_starts_a_new_history_because_it_starts_a_new_document() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_transform",
+        json!({ "position": [0.0, 0.25, 0.0] }),
+    );
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    assert_eq!(
+        call(&mut state, "editor_state", json!({}))["undo_remaining"],
+        json!(0),
+        "a load kept the previous document's history, so undo would replace the animal just loaded"
+    );
+    let (message, refused) = try_call(&mut state, "undo", json!({}));
+    assert!(refused, "{message}");
+    assert!(message.contains("nothing to undo"), "{message}");
+}
+
+#[test]
+fn an_undo_brings_back_the_selection_the_edit_was_made_under() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    call(&mut state, "select_part", json!({ "route": "root.a.a" }));
+    let before = held(&mut state);
+
+    let grafted = call(
+        &mut state,
+        "graft_part",
+        json!({ "from": "root.b.b", "under": "root.b.a", "combine": "Union" }),
+    );
+    assert_eq!(
+        grafted["selected"],
+        json!("root.b.b"),
+        "the graft did not move the selection, so this test would not measure the undo"
+    );
+
+    let undone = call(&mut state, "undo", json!({}));
+    assert_eq!(
+        undone["state"]["selected"],
+        json!("root.a.a"),
+        "undo kept a route into the tree the graft made instead of the one the edit was made under"
+    );
+    assert_eq!(
+        held(&mut state),
+        before,
+        "the tree came back without its selection"
+    );
+}
+
+#[test]
+fn undo_and_redo_take_no_arguments_and_refuse_the_ones_they_were_not_written_for() {
+    let mut state = fresh();
+    let listing: Value = serde_json::from_str(&ask(
+        &mut state,
+        &json!({"jsonrpc":"2.0","id":5,"method":"tools/list"}).to_string(),
+    ))
+    .expect("tools/list is JSON");
+    let tools = listing["result"]["tools"].as_array().expect("tools");
+
+    for name in ["undo", "redo"] {
+        let spec = tools
+            .iter()
+            .find(|tool| tool["name"] == json!(name))
+            .unwrap_or_else(|| panic!("{name} is not listed"));
+        assert_eq!(
+            spec["inputSchema"]["properties"],
+            json!({}),
+            "{name} publishes properties it does not read"
+        );
+        assert_eq!(
+            spec["inputSchema"]["additionalProperties"],
+            json!(false),
+            "{name} would let a caller believe an argument was read"
+        );
+
+        let (message, refused) = try_call(&mut state, name, json!({ "steps": 2 }));
+        assert!(refused, "{name} accepted an argument it does not read");
+        assert!(
+            message.contains("takes no arguments") && message.contains("\"steps\""),
+            "{name} refused without naming what it was given: {message}"
+        );
+    }
+}

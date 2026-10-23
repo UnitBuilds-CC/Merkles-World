@@ -83,7 +83,11 @@ impl Material {
     }
 }
 
-/// Registry of 256 materials indexed by u8
+/// Registry of 256 materials indexed by u8.
+///
+/// `Clone` and `PartialEq` are for the editor's edit history: a snapshot that could not compare two
+/// registries would have to record a recolour it cannot tell from a no-op.
+#[derive(Clone, PartialEq)]
 pub struct MaterialRegistry {
     materials: [Option<Material>; 256],
     next_slot: u8,

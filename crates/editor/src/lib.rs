@@ -39,6 +39,20 @@ use assetc::{EntityDef, Shape};
 use entity::MaterialRegistry;
 use shape_path::Step;
 
+/// One edit's resting point: everything an author can change and would expect back.
+///
+/// The material registry is in here because a slot's `base_color` is a pixel; an undo that restored the
+/// entity but left a recoloured slot would put back a different animal than the one before the call.
+/// The registry is process memory rather than part of the entity file, which is why a load starts a new
+/// document instead of restoring a snapshot — see [`EditorState::load_ron`].
+#[derive(Clone, PartialEq)]
+pub struct Snapshot {
+    entity_def: EntityDef,
+    materials: MaterialRegistry,
+    selected: Vec<Step>,
+    dirty: bool,
+}
+
 /// Editor state: tracks the currently loaded entity and dirty flag
 pub struct EditorState {
     /// Current entity definition being edited
@@ -55,6 +69,10 @@ pub struct EditorState {
     pub dirty: bool,
     /// Path to loaded file (if any)
     pub file_path: Option<String>,
+    /// Edits already made, newest last. The oldest is dropped past [`EditorState::HISTORY_DEPTH`].
+    undo_stack: Vec<Snapshot>,
+    /// Edits taken back, offered to `redo` until a new edit clears the branch.
+    redo_stack: Vec<Snapshot>,
 }
 
 impl EditorState {
@@ -77,7 +95,83 @@ impl EditorState {
             selected: Vec::new(),
             dirty: false,
             file_path: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
+    }
+
+    /// How many edits the history remembers.
+    ///
+    /// Bounded because this is a tool process an agent can drive for thousands of calls: a snapshot
+    /// stack that only grows is memory nothing frees, and the oldest steps of a long session are the
+    /// ones an author is least likely to want back.
+    pub const HISTORY_DEPTH: usize = 32;
+
+    /// The values an edit would change, captured before the edit is attempted.
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            entity_def: self.entity_def.clone(),
+            materials: self.materials.clone(),
+            selected: self.selected.clone(),
+            dirty: self.dirty,
+        }
+    }
+
+    /// Keep `before` as a step if the call actually changed something; returns whether it did.
+    ///
+    /// A call that wrote the value it already had is not a step: undo would spend a gesture putting
+    /// back an identical tree and the next undo would look like it failed. A real edit also clears
+    /// the redo branch, because a history with two futures is not one an author can reason about.
+    pub(crate) fn remember(&mut self, before: Snapshot) -> bool {
+        if before == self.snapshot() {
+            return false;
+        }
+        self.undo_stack.push(before);
+        if self.undo_stack.len() > Self::HISTORY_DEPTH {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+        true
+    }
+
+    /// Put the entity back one edit, offering what it replaces to `redo`.
+    pub(crate) fn undo(&mut self) -> Result<(), String> {
+        let Some(before) = self.undo_stack.pop() else {
+            return Err(
+                "there is nothing to undo: no call has changed the entity since it was loaded"
+                    .to_string(),
+            );
+        };
+        let now = self.snapshot();
+        self.restore(before);
+        self.redo_stack.push(now);
+        Ok(())
+    }
+
+    /// Re-apply the edit `undo` took back, as long as no new edit has landed since.
+    pub(crate) fn redo(&mut self) -> Result<(), String> {
+        let Some(after) = self.redo_stack.pop() else {
+            return Err(
+                "there is nothing to redo: no edit has been undone since the last change"
+                    .to_string(),
+            );
+        };
+        let now = self.snapshot();
+        self.restore(after);
+        self.undo_stack.push(now);
+        Ok(())
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.entity_def = snapshot.entity_def;
+        self.materials = snapshot.materials;
+        self.selected = snapshot.selected;
+        self.dirty = snapshot.dirty;
+    }
+
+    /// How many edits `undo` can still take back, and how many `redo` can re-apply.
+    pub(crate) fn history_depth(&self) -> (usize, usize) {
+        (self.undo_stack.len(), self.redo_stack.len())
     }
 
     /// The node the shape sliders write to, or `None` when the selection no longer names one.
@@ -108,6 +202,10 @@ impl EditorState {
         // The tree the selection indexed into is gone; a path kept across a load would name some
         // unrelated node of the new animal and edit that.
         self.selected = Vec::new();
+        // And the history belongs to the document that was open: an undo into a tree this file never
+        // had would replace the animal the author just asked for.
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.file_path = Some(path.to_string());
         self.dirty = false;
         Ok(())
