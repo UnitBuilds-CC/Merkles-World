@@ -16,17 +16,10 @@ use entity::MaterialRegistry;
 use image::{ColorType, ImageFormat};
 use render::raster::Frame;
 
-/// `(name, yaw, pitch, distance)` — yaw 0 puts the camera on +Z, so the pig's snout (which sits at
-/// negative Z) faces the camera near `PI`. Distances are set so the subject fills the frame: the
-/// camera's vertical span at `d` is `d` world units with `half_height: 0.5`, and the pig is ~0.8 tall.
-const VIEWS: &[(&str, f32, f32, f32)] = &[
-    ("front", core::f32::consts::PI, 0.12, 1.5),
-    ("back", 0.0, 0.12, 1.5),
-    ("side", core::f32::consts::FRAC_PI_2, 0.12, 1.5),
-    ("three_quarter", -2.4, 0.30, 1.5),
-    ("low", -2.4, -0.30, 1.1),
-    ("top", 0.0, 1.15, 1.6),
-];
+/// The angles live in `editor::mcp::VIEWS` so the six views this example dumps and the six a caller of
+/// `render_view` asks for by name are one table — two lists would drift, and a reader given `front` would
+/// not know which `front` they were being shown.
+use editor::mcp::VIEWS;
 
 fn main() {
     let source_path = std::env::args()

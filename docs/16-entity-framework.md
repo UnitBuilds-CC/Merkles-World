@@ -243,6 +243,65 @@ the `k` cost the comment in `pig.ron` hypothesises: nothing here holds the node 
 varies the blend, so the same machine's load confounds it exactly as it confounded the numbers above.
 It is a reason to build that control pair before anyone prices an authored creature into a frame budget.
 
+### Driving the editor over MCP
+
+`cargo run -p editor --bin editor_mcp` speaks MCP over stdin and stdout: one JSON-RPC line in, one reply
+out. It hands an agent the same `EditorState` the window edits — one object, two front ends — so
+"did the edit land" and "what does it look like now" are answerable without a display, a device, or
+anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handle(state, line)` is all of
+it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
+same module rather than a mock of it.
+
+Six tools:
+
+| Tool | Answers |
+|------|---------|
+| `editor_state` | file, dirty flag, `preview_signature`, the selected route, the transform block, the material block, `node_count`, and every node's route and kind |
+| `list_materials` | every occupied slot, with all six authored fields |
+| `load_entity` | a `.ron` path in, the state out; a file that will not parse answers with `ron`'s own error and leaves the held state untouched |
+| `set_transform` | `position`, `rotation`, `scale`, `material_id` — every field validated before any field is applied |
+| `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts |
+| `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
+
+Three of those decisions are about honesty rather than features:
+
+- **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
+  1e-4 of 1; scale finite and positive), and validates the whole call before writing any of it. A
+  half-applied edit leaves the panel holding a state the compiler will not take, and the caller's next
+  render would show an animal that cannot exist. Assigning an *empty* material slot is refused for the
+  same reason: the viewport paints an empty slot unlit white and prints a warning nobody reading a pipe
+  would see.
+- **`render_view` names the state in the filename** (`{view}-{preview_signature:016x}.png`), so two
+  renders of two states cannot collide into one path and a reader told "this is the pig after the scale
+  edit" can check that against the signature the same call returns.
+- **The frame reports what it did not draw.** `surface_pixels` counts rays that hit the entity or the
+  stage; `undrawn_pixels` counts the `Frame::NOT_DRAWN_DEPTH` sentinel a refused placement leaves behind.
+  Counting only the first — which is what the first draft did — reports a frame the march refused to draw
+  as one covered entirely by pig. The test for it loads a finite-but-non-unit quaternion from a file, the
+  one such state `set_transform` cannot author and `load_entity` can, and requires 0 surface against 768
+  undrawn of 768.
+
+The six angles come from `mcp::VIEWS`, one table of `(name, yaw, pitch, distance)` that
+`examples/render_png` now reads as well; two lists of the same six would drift, and a reader handed "the
+front view" would be looking at a different picture from the one the dump was described by. Frames are
+capped at 768 on a side, because this is a CPU march and a 4096² request is a way to wedge a tool that is
+supposed to answer.
+
+What increment 1 does **not** do: it cannot select a part by route or move one node's parameters.
+`set_transform` reaches the placement and the material; the tree stays as authored. `editor_state`'s
+`parts` list exists so a caller can see which routes there are to write, and selecting among them is the
+next increment.
+
+`crates/editor/tests/mcp.rs` is 11 tests — the handshake and a notification's silence, a schema and an
+answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
+and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
+by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
+exist, a save that round-trips back through load, and a transport test that runs the real binary as a
+child process and reads its replies off a pipe. The dumps live in `temp_dir` (§6), and the march is the
+CPU reference, so what it prints describes authoring and never a frame budget (§7): the 64×48 front view
+of the 36-node `pig.ron` measured 494 ms in a debug build on this machine, on the run that landed this
+section.
+
 ## Runtime lifecycle
 
 ### Spawning
@@ -389,6 +448,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 11 tests |
 
 ## Migration from current code
 

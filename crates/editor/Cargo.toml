@@ -35,13 +35,18 @@ egui = "0.29"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 
+# The MCP server's wire format. Not a new graph node: `serde_json` 1.0.154 is already in the lock below
+# `wit-parser`, which `contracts` pulls as a dev-dependency — this makes an existing crate a direct one,
+# so `cargo deny` sees the same set it saw before.
+serde_json = "1"
+
+# Writing a rendered frame out as a PNG, from the library (`mcp::render_view`) rather than only from an
+# example. `image` is already in the lock via eframe, and `png` is its only feature here — a dev-dependency
+# would not do, because the module that saves the frame is part of the crate.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Logging
 env_logger = "0.11"
-
-[dev-dependencies]
-# Only the examples need a PNG encoder — the dump is what lets a rendered frame be looked at
-# instead of inferred from a log. `image` is already in the lock via eframe.
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

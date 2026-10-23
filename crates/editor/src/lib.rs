@@ -18,12 +18,15 @@
 //! - RON load and save, with dirty tracking
 //!
 //! Usage: `cargo run -p editor --example entity_editor`, or `--example render_png` to write the same
-//! frames out when there is no one to look at a window.
+//! frames out when there is no one to look at a window. An agent driving the editor without a window uses
+//! `cargo run -p editor --bin editor_mcp`, which serves the same `EditorState` over MCP on stdin/stdout —
+//! see `mcp` and docs/16 § Driving the editor over MCP.
 
 pub mod export;
 pub mod gpu_renderer;
 pub mod inspector;
 pub mod material_panel;
+pub mod mcp;
 pub mod shape_path;
 pub mod viewport;
 
