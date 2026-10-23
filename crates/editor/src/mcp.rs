@@ -36,7 +36,10 @@ pub const VIEWS: &[(&str, f32, f32, f32)] = &[
     ("back", 0.0, 0.12, 1.5),
     ("side", core::f32::consts::FRAC_PI_2, 0.12, 1.5),
     ("three_quarter", -2.4, 0.30, 1.5),
-    ("low", -2.4, -0.30, 1.1),
+    // The low view sat at 1.1, closer than the rest, and cropped the animal it exists to judge: the
+    // edge of the frame cut through the shoulder, so a leg or a belly it was meant to show was not in
+    // the picture. It shares the others' distance now — the pitch is what makes it low.
+    ("low", -2.4, -0.30, 1.5),
     ("top", 0.0, 1.15, 1.6),
 ];
 

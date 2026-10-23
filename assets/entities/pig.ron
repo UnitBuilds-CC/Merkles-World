@@ -30,14 +30,28 @@
 // well below a belly lifted to y ~0.10, the legs sit outside the body's own width so they read in front
 // view, and the head is smaller than the torso and carried *below* the topline on a neck thinner than
 // both. The snout is low on the face, and the ears are small enough to read as ears rather than a
-// bear's. Every join is still a smooth union with `k` well under the overlap so it reads as flesh.
+// bear's. Every join is a smooth union with `k` under the overlap so it reads as flesh, except the leg
+// columns' joints: the third pass below found their overlap thinner than their `k`, and blending them
+// further — not less — is what made them read as one column.
+//
+// - A third pass followed the side view: the crown sat at chest height and the snout near the knee, so
+//   the animal read as grazing, not standing. Every head part moved up together — head +0.075, neck
+//   +0.02, snout +0.075, nostrils with it — and the ears +0.05, because a head raised 0.075 would
+//   otherwise swallow them: an ear is visible only where its sphere leaves the head's own, and at the
+//   old height a raised head would have buried both. The crown now sits ~0.10 under the topline rather
+//   than ~0.18.
+// - The same pass read the legs as three beads, not a column: adjacent spheres are 0.135 apart with
+//   r 0.082, so they overlap by 0.029 — less than the joint's k of 0.07 — and the silhouette pinched
+//   0.018 at every join. Raising k to 0.12 widens the waist to the sphere's own radius without
+//   lengthening the leg or adding a node, and the column reads smooth from `side` and `low`.
 //
 // Hypothesis for docs/04, not a measurement: every blended join is a place the marcher cannot skip,
 // since ADR-024's k-aware skip refuses exactly the large-`k` case, so an authored creature is an R1
 // expense per part. Nothing here controls for that yet — the debug CPU raster's timings swing by more
 // than the effect under machine load, so the claim stays a hypothesis until someone times a hard-union
 // twin of this tree. docs/16 § Visual authoring records what the instrument did print for this tree
-// (36 nodes, ~2.2-2.6 s per 480x360 preview frame), and why it is not the price of a blend.
+// (36 nodes; 1.25-1.67 s per 480x360 release frame on 2026-10-23, measured after the third pass), and
+// why it is not the price of a blend.
 
 EntityDef(
     shape: SmoothUnion(
@@ -77,13 +91,13 @@ EntityDef(
                     k: 0.05,
                     a: Sphere(
                         r: 0.11,
-                        centre: (0.0, 0.27, -0.33),
+                        centre: (0.0, 0.29, -0.33),
                     ),
                     b: SmoothUnion(
                         k: 0.05,
                         a: Sphere(
                             r: 0.14,
-                            centre: (0.0, 0.225, -0.49),
+                            centre: (0.0, 0.30, -0.49),
                         ),
                         b: Subtract(
                             // Snout: two spheres smoothed sideways, because a single sphere reads as a
@@ -97,21 +111,21 @@ EntityDef(
                                 k: 0.035,
                                 a: Sphere(
                                     r: 0.072,
-                                    centre: (0.048, 0.15, -0.655),
+                                    centre: (0.048, 0.225, -0.645),
                                 ),
                                 b: Sphere(
                                     r: 0.072,
-                                    centre: (-0.048, 0.15, -0.655),
+                                    centre: (-0.048, 0.225, -0.645),
                                 ),
                             ),
                             cutter: Union(
                                 a: Sphere(
                                     r: 0.012,
-                                    centre: (0.032, 0.155, -0.717),
+                                    centre: (0.032, 0.23, -0.707),
                                 ),
                                 b: Sphere(
                                     r: 0.012,
-                                    centre: (-0.032, 0.155, -0.717),
+                                    centre: (-0.032, 0.23, -0.707),
                                 ),
                             ),
                         ),
@@ -132,9 +146,9 @@ EntityDef(
                         // All three spheres share one radius: a taper shows as a ring at every joint,
                         // because a blend can hide a change of position but not a change of width. The
                         // earlier tapered column read as a string of three balls, not as a leg.
-                        k: 0.07,
+                        k: 0.12,
                         a: SmoothUnion(
-                            k: 0.07,
+                            k: 0.12,
                             a: Sphere(
                                 r: 0.082,
                                 centre: (0.14, 0.135, -0.16),
@@ -151,9 +165,9 @@ EntityDef(
                     ),
                     b: SmoothUnion(
                         // Back leg: same column, under the rump, a touch wider to carry the haunch.
-                        k: 0.07,
+                        k: 0.12,
                         a: SmoothUnion(
-                            k: 0.07,
+                            k: 0.12,
                             a: Sphere(
                                 r: 0.09,
                                 centre: (0.14, 0.125, 0.28),
@@ -182,11 +196,11 @@ EntityDef(
             b: Union(
                 a: Sphere(
                     r: 0.055,
-                    centre: (0.105, 0.345, -0.44),
+                    centre: (0.105, 0.395, -0.45),
                 ),
                 b: Sphere(
                     r: 0.055,
-                    centre: (-0.105, 0.345, -0.44),
+                    centre: (-0.105, 0.395, -0.45),
                 ),
             ),
         ),

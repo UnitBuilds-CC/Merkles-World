@@ -237,12 +237,20 @@ the machine's, not the renderer's, and no number in this paragraph should be rea
 second". Both are why the examples are run with `--release`. No number here is an R1 measurement —
 §3's hot-path bans do not apply to a tool, but nothing it prints is evidence about a game frame.
 
-The same instrument on the re-authored pig measures **2.2–2.6 s** per 480×360 frame (2026-10-22, this
+The same instrument on the then re-authored pig measured **2.2–2.6 s** per 480×360 frame (2026-10-22, this
 machine, 36 nodes, every join a smooth union). That is roughly the doubling one would expect from four
 more parts and a leg column that went from two blended spheres to three, but it is not a measurement of
 the `k` cost the comment in `pig.ron` hypothesises: nothing here holds the node count fixed while it
 varies the blend, so the same machine's load confounds it exactly as it confounded the numbers above.
 It is a reason to build that control pair before anyone prices an authored creature into a frame budget.
+A third visual pass (2026-10-23) raised the head, which the `side` view showed grazing at chest height,
+and widened the leg columns' blend, which the `three_quarter` view showed as three beads; the node count
+stayed 36, and the same instrument then measured **1.25–1.67 s** per 480×360 release frame. Read that
+pair as the machine's spread rather than as a speed-up: no part of the edit removes work, and a 2×
+difference on the same tree earlier in this section is what this machine does between runs.
+The `low` view moved from distance 1.1 to 1.5 in the same pass. At 1.1 the frame edge cut through the
+shoulder, so the view an author uses to judge legs and belly could not show either whole in one picture.
+It shares the others' distance now; the negative pitch is what makes it low.
 
 ### Driving the editor over MCP
 
