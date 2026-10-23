@@ -253,13 +253,14 @@ anyone at the keyboard. `crates/editor/src/mcp.rs` holds the protocol and `handl
 it; the binary is a loop over lines, which is why a test can drive the module and a pipe can drive the
 same module rather than a mock of it.
 
-Twelve tools:
+Thirteen tools:
 
 | Tool | Answers |
 |------|---------|
 | `editor_state` | file, dirty flag, `preview_signature`, the selected route, the transform block, the material block, `node_count`, and every node's route, kind, current summary and the parameters `set_part` takes for it |
 | `list_materials` | every occupied slot, with all six authored fields |
 | `set_material` | one slot and at least one of the six fields a material carries — `base_color` (three lanes, `0..=1`), `roughness` (`0..=1`), `emissive` (`>= 0`), `index_ior` (`>= 1`), `noise` (one of `Voronoi`, `Value`, `Perlin`, `None`) or `noise_frequency` (`> 0`) — written only after every field on the call validates. The reply separates `changed_a_pixel` from `changed_no_pixel`, because only `base_color` has a reader yet (OQ-10), and says that the registry is not in the entity file: the slot the entity points at persists, the values in it do not |
+| `register_material` | a whole material into the registry's next free slot: all six fields at once, each held to the same range `set_material` is, because a field left off would stand as `Material::default`'s value rather than as one the caller chose. The slot is the registry's to hand out and not the call's — `register` is the only way to occupy one — so the reply reports where it landed; `set_transform`'s `material_id` is what points the entity at it. Registering paints nothing by itself, and the new material is as session-bound as a recolour |
 | `load_entity` | a `.ron` path in, the state out; a file that will not parse answers with `ron`'s own error and leaves the held state untouched |
 | `set_transform` | `position`, `rotation`, `scale`, `material_id` — every field validated before any field is applied |
 | `select_part` | a route as `editor_state` prints it (`root`, `root.b`, `root.b.kept`) in, the node's kind, summary and parameter list out. Selecting is not editing: it marks nothing dirty and leaves `preview_signature` alone |
@@ -270,7 +271,7 @@ Twelve tools:
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts. `view` names one of the six angles; only leaving it off steers by `yaw`, `pitch` and `distance`, and the file is then named `custom`. A `view` of any other type — a number, a boolean, an array, an object, `null` — is refused rather than read as "no view" |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
-Eleven of those decisions are about honesty rather than features:
+Twelve of those decisions are about honesty rather than features:
 
 - **`set_transform` refuses what `assetc::compile_entity` refuses**, at the same tolerance (`|q|` within
   1e-4 of 1; scale finite and positive; every `position` lane finite), and validates the whole call before
@@ -382,6 +383,22 @@ Eleven of those decisions are about honesty rather than features:
   registry field a shader reads with nothing noticing. The moment a pipe can write it, a key that omits it
   means an author edits a colour and the viewport keeps showing the old animal while every other field of
   the reply agrees the edit landed.
+- **A patch and a definition are two calls, because the registry says so.** `set_material` refuses an empty
+  slot with the reason the registry itself gives: `MaterialRegistry::set` takes the slot's previous value
+  first and only writes when there was one, so an empty slot stays empty and `register` is the only call
+  that occupies one. `register_material` is that call's surface, and it therefore demands the whole
+  definition: every field the table lists, all at once, validated before the slot is taken. A field left
+  off would not be "unchanged" — there is nothing to leave unchanged — it would be `Material::default`'s
+  value standing in for one the caller never wrote, which is the silent fabrication the range checks exist
+  to prevent. The slot is not an argument: `register` hands out the next free one, which is how the engine
+  builds its three presets, and a call that names a slot is refused by name rather than quietly ignored.
+  So the reply reports the slot and the entity's *current* `material_id` side by side, and the notice says
+  the assignment is the other call — registering paints nothing, because nothing points at the material
+  yet, and the `preview_signature` staying put is that sentence measured. A registered material is no more
+  durable than a recolour, with one consequence worth stating: an entity saved pointing at slot 3 loads
+  into a process whose registry holds the three presets, so the slot is empty and the viewport paints it
+  unlit white — which is why the notice names the new process rather than only repeating that the registry
+  is not in the file.
 
 A refusal says what was available. `select_part` with a name the node does not carry is refused with the
 children it does carry (`root.b has no child "kept"; it names "a", "b"`), and a route into a leaf is refused
@@ -428,8 +445,12 @@ increment 7 the answer to that is one call, not a subtree: the wrapper over it u
 Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them,
 `set_material` writes them, and writing them changes no pixel.
+The registry itself still has no file. A recolour and a registration are both session-scoped — the entity
+file carries `material_id` and nothing else about a slot — so an entity saved pointing at a slot a fresh
+process does not register loads into an empty slot, which the viewport paints unlit white and warns about.
+That is the gap a materials asset would close; it is a contract change, not a tool.
 
-`crates/editor/tests/mcp.rs` is 55 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 60 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -692,6 +713,35 @@ as no-pixel changes and does not invent a response. And the registry has no file
 persists, the slot's contents do not, so a material edit is session-scoped until someone decides what a
 materials asset is — a contract change, not a tool.
 
+Increment 11 gave the registry's empty slots a way in, and it is deliberately the opposite shape from
+`set_material`. That call refuses an empty slot with the registry's own reason — `set` will not write where
+nothing was — so the missing verb was a *definition*, not a patch. `register_material` therefore requires all
+six fields at once and validates every one of them before the registry moves: a field left off would not
+mean "keep what was there", because there was nothing there, it would mean `Material::default`'s value
+standing in for something the caller never wrote. The slot is not an argument, either; `register` hands out
+the next free one, which is how the engine builds its three presets, so the call that names a slot is refused
+by name and the reply reports where the material landed. Registering paints nothing — `preview_signature`
+does not move — and the notice says why: the entity still points at slot 0, and `set_transform`'s
+`material_id` is the call that assigns the slot. The five rows measure exactly that split: the panning row
+registers slot 3, reads every field back out of `list_materials`, requires the key to stay put, then assigns
+the slot and requires the frame's black pixels and sky pixels to partition it against the march's own
+`surface_pixels`; the refusal row walks six definitions that are not whole and reads the registry, the dirty
+flag and the key after each, then shows the refusals consumed no slot by landing the next whole call on
+slot 3; the schema row requires the definition to publish all six fields, the same per-field schemas the
+patch publishes, and to refuse `slot` the way `additionalProperties: false` says; the persistence row saves
+an entity pointing at the new slot and requires the file to carry `material_id: 3` and none of the colour,
+roughness, ior or frequency, with a fresh state loading that file to an *empty* slot 3 — which is the new
+consequence of the session-only registry, and the reason the notice names the new process rather than only
+the file; and the last row fills slots 3–255 until the 257th material is refused by the slot count.
+
+Four plants ran against these five rows, and each named its own. Skipping the `noise` write named the
+registration row's read-back (`"None"` where `"Value"` was asked for). Letting a partial definition past the
+completeness check named the refusal row — the fallback still refused, so the plant showed the difference
+between refusing and refusing with the sentence the caller needs. Reporting the new slot as the entity's
+`material_id` named the registration row's assignment assertion. Taking the unknown-key loop out named the
+schema row's `slot` refusal, which is the one place `additionalProperties: false` is executed rather than
+printed. All four were reverted and the suite re-run green at 314.
+
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
 a debug build on this machine, on the run that landed this section.
@@ -842,7 +892,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 55 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a wrap that discards part of what it holds says which part and against the same box the march measures, a render follows the state and refuses a `view` it cannot name, a material slot's fields are written from the same table the schema publishes — the one shaded field reaching exactly the pixels the march reports, the five unread ones moving the registry and neither pixel nor key — a new material is defined in full, held to the same table, and paints nothing until the entity is assigned to its slot — and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 60 tests |
 
 ## Migration from current code
 

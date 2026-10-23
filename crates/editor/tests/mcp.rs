@@ -4312,3 +4312,402 @@ fn set_materials_published_schema_is_the_table_the_refusals_quote() {
         ])
     );
 }
+
+#[test]
+fn register_material_fills_the_next_free_slot_and_the_entity_paints_with_it_once_assigned() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let presets = call(&mut state, "list_materials", json!({}));
+    assert_eq!(
+        presets["count"],
+        json!(3),
+        "this row counts from the registry's three presets, and the slot it expects below depends on that"
+    );
+    let key = call(&mut state, "editor_state", json!({}))["preview_signature"]
+        .as_u64()
+        .expect("a key");
+
+    let registered = call(
+        &mut state,
+        "register_material",
+        json!({
+            "base_color": [0.0, 0.0, 0.0],
+            "roughness": 0.5,
+            "emissive": 0.0,
+            "index_ior": 1.5,
+            "noise": "Value",
+            "noise_frequency": 3.0,
+        }),
+    );
+    let slot = registered["slot"]
+        .as_u64()
+        .expect("the slot the registry chose");
+    assert_eq!(
+        slot, 3,
+        "the registry hands out its next free slot, and the three presets hold 0, 1 and 2"
+    );
+    assert_eq!(registered["material_count"], json!(4));
+    assert_eq!(
+        registered["entity_material_id"],
+        json!(0),
+        "registering moved the entity onto the new slot, which is an edit the call never made"
+    );
+    assert_eq!(
+        registered["preview_signature"].as_u64(),
+        Some(key),
+        "registering moved the preview key: nothing points at the new slot yet, so no pixel can differ"
+    );
+    assert_eq!(
+        registered["dirty"],
+        json!(false),
+        "the registry is not in the entity file, so registering cannot be something a save carries"
+    );
+    assert!(
+        registered["notice"]
+            .as_str()
+            .expect("a notice")
+            .contains("no pixel changed"),
+        "a call that paints nothing answered without saying so: {}",
+        registered["notice"]
+    );
+
+    // Every field the call handed over is the field the slot holds: a writer that dropped one would leave
+    // `Material::default`'s value in its place, and the reply is where an author checks that.
+    let listed = call(&mut state, "list_materials", json!({}));
+    assert_eq!(listed["count"], json!(4));
+    let fresh_slot = listed["materials"]
+        .as_array()
+        .expect("materials")
+        .iter()
+        .find(|material| material["slot"] == json!(slot))
+        .expect("the slot just registered is in the list")
+        .clone();
+    assert_eq!(fresh_slot["base_color"], json!([0.0, 0.0, 0.0]));
+    near(
+        number_at(&fresh_slot["roughness"], "the registered roughness"),
+        0.5,
+        "the roughness the call asked for",
+    );
+    near(
+        number_at(&fresh_slot["index_ior"], "the registered ior"),
+        1.5,
+        "the ior the call asked for",
+    );
+    assert_eq!(fresh_slot["noise"], json!("Value"));
+    near(
+        number_at(&fresh_slot["noise_frequency"], "the registered frequency"),
+        3.0,
+        "the frequency the call asked for",
+    );
+
+    // Assignment is the other half, and it is a different tool: the entity moves onto the slot, the state
+    // turns dirty because `material_id` is in the file, and the key moves with the colour.
+    let assigned = call(&mut state, "set_transform", json!({ "material_id": slot }));
+    assert_eq!(assigned["changed"], json!(["material_id"]));
+    assert_ne!(
+        assigned["preview_signature"].as_u64(),
+        Some(key),
+        "pointing the entity at a black material left the preview key alone"
+    );
+
+    let view = json!({ "view": "front", "width": 64, "height": 48, "stage": false });
+    let frame = call(&mut state, "render_view", view);
+    let surface = frame["surface_pixels"].as_u64().expect("a count") as usize;
+    let total = frame["total_pixels"].as_u64().expect("a count") as usize;
+    assert!(
+        surface > 0 && surface < total,
+        "the front view covers {surface} of {total} pixels, so neither count proves anything"
+    );
+    let pixels = decoded_rgb(&frame);
+    assert_eq!(
+        count_colour(&pixels, [0, 0, 0]),
+        surface,
+        "the black pixels of the frame are not the surface the march reported, so the registered colour \
+         did not reach the pixels the entity covers"
+    );
+    assert_eq!(
+        count_colour(&pixels, [30, 30, 35]),
+        total - surface,
+        "the rest of the frame is not the sky, so the tint leaked past the entity"
+    );
+}
+
+#[test]
+fn register_material_refuses_a_definition_that_is_not_whole_and_occupies_no_slot() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let registry = call(&mut state, "list_materials", json!({}));
+    let key = call(&mut state, "editor_state", json!({}))["preview_signature"]
+        .as_u64()
+        .expect("a key");
+
+    let whole = json!({
+        "base_color": [0.0, 0.0, 0.0],
+        "roughness": 0.5,
+        "emissive": 0.0,
+        "index_ior": 1.5,
+        "noise": "Value",
+        "noise_frequency": 3.0,
+    });
+    let dropping = |key: &str| {
+        let mut map = whole.as_object().expect("an object").clone();
+        map.remove(key);
+        Value::Object(map)
+    };
+    let with = |key: &str, value: Value| {
+        let mut map = whole.as_object().expect("an object").clone();
+        map.insert(key.to_string(), value);
+        Value::Object(map)
+    };
+
+    let cases: Vec<(&str, Value, Vec<&str>)> = vec![
+        (
+            "a definition missing a field",
+            dropping("noise"),
+            vec!["leaves out \"noise\"", "set_material", "Material::default"],
+        ),
+        (
+            "a definition missing most of them",
+            json!({ "base_color": [0.0, 0.0, 0.0] }),
+            vec!["leaves out", "\"roughness\"", "\"noise_frequency\""],
+        ),
+        (
+            "a field a material does not have",
+            with("colour", json!([0.0, 0.0, 0.0])),
+            vec!["no field \"colour\"", "\"base_color\"", "\"index_ior\""],
+        ),
+        (
+            "a roughness past its contract",
+            with("roughness", json!(1.5)),
+            vec!["\"roughness\" must be >= 0 and <= 1", "lane 0 is 1.5"],
+        ),
+        (
+            "a noise kind that is not one of them",
+            with("noise", json!("perlin")),
+            vec!["no noise kind \"perlin\"", "\"Perlin\""],
+        ),
+        (
+            "a noise kind spelled as a number",
+            with("noise", json!(2)),
+            vec!["\"noise\" must be one of", "got 2"],
+        ),
+    ];
+
+    for (label, arguments, needles) in cases {
+        let (message, refused) = try_call(&mut state, "register_material", arguments);
+        assert!(refused, "{label} was accepted: {message}");
+        for needle in needles {
+            assert!(
+                message.contains(needle),
+                "{label} refused without saying {needle:?}: {message}"
+            );
+        }
+        // A half-validated definition that still occupied a slot would consume the registry's next one and
+        // hand back a material nobody finished; the list is where that shows, and the slot below is where
+        // the consumption would show even if the material looked right.
+        assert_eq!(
+            call(&mut state, "list_materials", json!({})),
+            registry,
+            "{label} occupied a slot it refused"
+        );
+        let state_block = call(&mut state, "editor_state", json!({}));
+        assert_eq!(
+            state_block["dirty"],
+            json!(false),
+            "{label} marked the entity dirty"
+        );
+        assert_eq!(
+            state_block["preview_signature"].as_u64().expect("a key"),
+            key,
+            "{label} moved the preview key while refusing"
+        );
+    }
+
+    // The refusals consumed nothing: the next whole call lands on the slot the first attempt would have
+    // taken, which is the only way to see that a refused `register` did not advance the registry.
+    let registered = call(&mut state, "register_material", whole);
+    assert_eq!(registered["slot"], json!(3));
+}
+
+#[test]
+fn register_materials_published_schema_publishes_the_same_limits_as_the_patch() {
+    let mut state = fresh();
+    let listing: Value = serde_json::from_str(&ask(
+        &mut state,
+        &json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}).to_string(),
+    ))
+    .expect("tools/list is JSON");
+    let tools = listing["result"]["tools"].as_array().expect("tools");
+    let find = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool["name"] == json!(name))
+            .unwrap_or_else(|| panic!("{name} is not listed"))
+            .clone()
+    };
+    let registered = find("register_material");
+    let patched = find("set_material");
+
+    let schema = &registered["inputSchema"];
+    assert_eq!(
+        schema["required"],
+        json!([
+            "base_color",
+            "roughness",
+            "emissive",
+            "index_ior",
+            "noise",
+            "noise_frequency"
+        ]),
+        "a registered material is a whole definition, so every field the table lists is required"
+    );
+    assert_eq!(schema["additionalProperties"], json!(false));
+    let properties = schema["properties"].as_object().expect("properties");
+    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "base_color",
+            "emissive",
+            "index_ior",
+            "noise",
+            "noise_frequency",
+            "roughness"
+        ],
+        "the definition's fields are the six a material carries, with no slot to name"
+    );
+    // One table, two tools: the patch's schema for a field and the definition's are the same object, so a
+    // limit cannot be published twice with two values.
+    for field in keys {
+        assert_eq!(
+            properties[field], patched["inputSchema"]["properties"][field],
+            "register_material and set_material publish different schemas for {field}"
+        );
+    }
+
+    // And the schema's `additionalProperties: false` is what the call does, not only what it says: a slot
+    // is the patch's argument and has no meaning here.
+    let (message, refused) = try_call(
+        &mut state,
+        "register_material",
+        json!({
+            "slot": 4,
+            "base_color": [0.0, 0.0, 0.0],
+            "roughness": 0.5,
+            "emissive": 0.0,
+            "index_ior": 1.5,
+            "noise": "Value",
+            "noise_frequency": 3.0,
+        }),
+    );
+    assert!(refused, "register_material took a slot: {message}");
+    assert!(
+        message.contains("no field \"slot\"") && message.contains("no field"),
+        "the refusal does not name the field it was handed: {message}"
+    );
+}
+
+#[test]
+fn a_registered_material_is_not_in_the_entity_file_while_the_slot_it_paints_with_is() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let registered = call(
+        &mut state,
+        "register_material",
+        json!({
+            "base_color": [0.25, 0.5, 0.75],
+            "roughness": 0.25,
+            "emissive": 0.0,
+            "index_ior": 1.33,
+            "noise": "Voronoi",
+            "noise_frequency": 7.0,
+        }),
+    );
+    let slot = registered["slot"].as_u64().expect("a slot");
+    call(&mut state, "set_transform", json!({ "material_id": slot }));
+
+    let out = temp_path("registered_entity.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": out.to_string_lossy() }),
+    );
+    let text = std::fs::read_to_string(&out).expect("the entity that was just saved");
+    assert!(
+        text.contains(&format!("material_id: {slot}")),
+        "the saved file does not carry the assignment, so nothing about this material persists:\n{text}"
+    );
+    // The half that does not persist, named by the values that would have to be in the file for it to.
+    for absent in ["base_color", "noise_frequency", "index_ior", "0.25"] {
+        assert!(
+            !text.contains(absent),
+            "the saved file carries {absent:?}, so the notice that the registry is not in the file is wrong:\n{text}"
+        );
+    }
+
+    let reloaded = call(
+        &mut fresh(),
+        "load_entity",
+        json!({ "path": out.to_string_lossy() }),
+    );
+    assert_eq!(
+        reloaded["state"]["transform"]["material_id"].as_u64(),
+        Some(slot),
+        "the assignment is the half that persists, and this file lost it"
+    );
+    assert_eq!(
+        reloaded["state"]["material_slot_occupied"],
+        json!(false),
+        "the reloaded state found something in slot {slot}: a new process rebuilds the registry from the \
+         three presets, which is what the call's notice says"
+    );
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn the_registry_refuses_a_two_hundred_and_fifty_seventh_material_by_name() {
+    let mut state = fresh();
+    let probe = json!({
+        "base_color": [0.0, 0.0, 0.0],
+        "roughness": 0.5,
+        "emissive": 0.0,
+        "index_ior": 1.5,
+        "noise": "None",
+        "noise_frequency": 1.0,
+    });
+    let mut filled = 0u32;
+    loop {
+        let (message, refused) = try_call(&mut state, "register_material", probe.clone());
+        if refused {
+            assert!(
+                message.contains("registry is full") && message.contains("256"),
+                "the registry refused a material without saying why: {message}"
+            );
+            break;
+        }
+        filled += 1;
+        assert!(
+            filled <= 253,
+            "the registry accepted {filled} materials into 256 slots that hold three presets"
+        );
+    }
+    // 3 presets + 253 = 256, which is the whole registry: the refusal is the slot count, not a policy.
+    assert_eq!(filled, 253);
+    assert_eq!(
+        call(&mut state, "list_materials", json!({}))["count"],
+        json!(256)
+    );
+}

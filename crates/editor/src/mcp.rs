@@ -56,6 +56,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "editor_state",
     "list_materials",
     "set_material",
+    "register_material",
     "load_entity",
     "set_transform",
     "select_part",
@@ -152,6 +153,7 @@ fn dispatch(
         "editor_state" => Some(Ok(state_json(state))),
         "list_materials" => Some(Ok(materials_json(state))),
         "set_material" => Some(set_material(state, arguments)),
+        "register_material" => Some(register_material(state, arguments)),
         "load_entity" => Some(load(state, arguments)),
         "set_transform" => Some(set_transform(state, arguments)),
         "select_part" => Some(select_part(state, arguments)),
@@ -366,38 +368,9 @@ fn set_material(state: &mut EditorState, arguments: &Value) -> Result<Value, Str
     let mut next = current;
     let mut changed: Vec<&'static str> = Vec::new();
     for field in &params::MATERIAL_FIELDS {
-        let Some(value) = arguments.get(field.name) else {
+        let Some(lanes) = material_field_lanes(arguments, field)? else {
             continue;
         };
-        let lanes = match field.choices {
-            // A choice is spelled, not numbered: `noise: 2` would be a call that works today and silently
-            // means something else the next time the list is reordered.
-            Some(choices) => {
-                let name = value.as_str().ok_or_else(|| {
-                    format!(
-                        "\"{}\" must be {}, got {value}",
-                        field.name,
-                        field.limit_text()
-                    )
-                })?;
-                let index = choices
-                    .iter()
-                    .position(|kind| *kind == name)
-                    .ok_or_else(|| {
-                        format!(
-                            "no noise kind {name:?}; {}",
-                            choices
-                                .iter()
-                                .map(|kind| format!("{kind:?}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    })?;
-                vec![index as f32]
-            }
-            None => material_lanes(value, field)?,
-        };
-        check_material_lanes(field, &lanes)?;
         if params::read_material_field(&next, field.name).as_deref() != Some(lanes.as_slice()) {
             changed.push(field.name);
         }
@@ -427,13 +400,6 @@ fn set_material(state: &mut EditorState, arguments: &Value) -> Result<Value, Str
         .copied()
         .filter(|name| !read.contains(name))
         .collect();
-    let quoted = |names: &[&str]| {
-        names
-            .iter()
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
     let mut notice = String::from(
         "the registry is not part of the entity file: save_entity writes the entity's `material_id`, not \
          these fields, so loading the file again restores the material this slot was registered with. \
@@ -470,6 +436,130 @@ fn set_material(state: &mut EditorState, arguments: &Value) -> Result<Value, Str
         "preview_signature": state.preview_signature(),
         "notice": notice,
     }))
+}
+
+/// Fill the registry's next free slot with a material the caller defines in full.
+///
+/// The two writers are a patch and a definition, and the split is the registry's own: `set` refuses an empty
+/// slot because a patch cannot mean one, and `register` is the only call that occupies a slot. So every field
+/// the table lists has to arrive, and a call missing one is refused rather than completed from
+/// `Material::default` — a lane the caller never chose is exactly the kind of value an author would read back
+/// and not recognise, and the reply prints the whole material precisely so it can be checked against the call.
+///
+/// The slot is not the caller's to choose: `register` hands out the registry's next free one, which is what
+/// the engine itself uses for its three presets, and the reply reports where the material landed so the
+/// caller can `set_transform` the entity onto it.
+fn register_material(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let known: Vec<&str> = params::MATERIAL_FIELDS
+        .iter()
+        .map(|field| field.name)
+        .collect();
+    if let Some(map) = arguments.as_object() {
+        for key in map.keys() {
+            if !known.contains(&key.as_str()) {
+                return Err(format!(
+                    "a material has no field {key:?}; it has {}",
+                    quoted(&known)
+                ));
+            }
+        }
+    }
+
+    let missing: Vec<&str> = known
+        .iter()
+        .copied()
+        .filter(|name| arguments.get(*name).is_none())
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "a registered material is a whole definition, and this call leaves out {}. `set_material` writes \
+             one field of a slot that already exists; `register_material` takes all six at once, because a \
+             field left off would stand as `Material::default`'s value and not as one the caller chose.",
+            quoted(&missing)
+        ));
+    }
+
+    let mut material = Material::default();
+    for field in &params::MATERIAL_FIELDS {
+        // Every field was required above, so `None` here would mean the table lists a field the call cannot
+        // carry — a disagreement a test walks the table to catch.
+        let lanes = material_field_lanes(arguments, field)?.ok_or_else(|| {
+            format!(
+                "\"{}\" is in the material table but was not read from this call",
+                field.name
+            )
+        })?;
+        params::write_material_field(&mut material, field.name, &lanes)
+            .expect("a field the table lists is a field the writer knows");
+    }
+
+    let Some(slot) = state.materials.register(material) else {
+        return Err(format!(
+            "the registry is full: all {} slots hold a material, so there is no free slot to register into",
+            state.materials.len()
+        ));
+    };
+
+    let (read, _) = params::material_names_by_shading();
+    Ok(json!({
+        "slot": slot,
+        "material": material_json(&material),
+        "material_count": state.materials.len(),
+        "entity_material_id": state.entity_def.material_id,
+        "renderer_reads": read,
+        "dirty": state.dirty,
+        "preview_signature": state.preview_signature(),
+        "notice": format!(
+            "slot {slot} is registered and no pixel changed: the entity still points at slot {}. \
+             `set_transform` with `material_id: {slot}` is the call that paints with it. The registry is not \
+             part of the entity file — `save_entity` writes `material_id` and none of these fields — so a new \
+             process starts from the three presets and would find slot {slot} empty.",
+            state.entity_def.material_id
+        ),
+    }))
+}
+
+/// The lanes a call handed over for one material field, or `None` when it left the field out.
+///
+/// Both material writers read a call through this, so a spelled choice and a lane outside the table's range
+/// are refused with the same words whether the value is a patch or part of a whole definition.
+fn material_field_lanes(
+    arguments: &Value,
+    field: &params::MaterialField,
+) -> Result<Option<Vec<f32>>, String> {
+    let Some(value) = arguments.get(field.name) else {
+        return Ok(None);
+    };
+    let lanes = match field.choices {
+        // A choice is spelled, not numbered: `noise: 2` would be a call that works today and silently means
+        // something else the next time the list is reordered.
+        Some(choices) => {
+            let name = value.as_str().ok_or_else(|| {
+                format!(
+                    "\"{}\" must be {}, got {value}",
+                    field.name,
+                    field.limit_text()
+                )
+            })?;
+            let index = choices
+                .iter()
+                .position(|kind| *kind == name)
+                .ok_or_else(|| {
+                    format!(
+                        "no noise kind {name:?}; {}",
+                        choices
+                            .iter()
+                            .map(|kind| format!("{kind:?}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
+            vec![index as f32]
+        }
+        None => material_lanes(value, field)?,
+    };
+    check_material_lanes(field, &lanes)?;
+    Ok(Some(lanes))
 }
 
 /// The numbers a caller handed over for one numeric material field, as exactly the lanes the table says
@@ -1735,9 +1825,19 @@ pub fn tool_specs() -> Value {
         "slot".to_string(),
         json!({ "type": "integer", "minimum": 0, "maximum": 255 }),
     );
+    // The six fields alone, for the call that has no slot to name: they are the same schemas the patch
+    // publishes, because both writers read the same table and a caller comparing the two should see one
+    // set of limits.
+    let mut material_fields = serde_json::Map::new();
     for field in params::MATERIAL_FIELDS {
-        material_properties.insert(field.name.to_string(), material_field_schema(&field));
+        let schema = material_field_schema(&field);
+        material_properties.insert(field.name.to_string(), schema.clone());
+        material_fields.insert(field.name.to_string(), schema);
     }
+    let material_field_names: Vec<&str> = params::MATERIAL_FIELDS
+        .iter()
+        .map(|field| field.name)
+        .collect();
     json!([
         {
             "name": "editor_state",
@@ -1756,6 +1856,16 @@ pub fn tool_specs() -> Value {
                 "type": "object",
                 "properties": material_properties,
                 "required": ["slot"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "register_material",
+            "description": "Define a whole material in the registry's next free slot. Every one of the six fields is required at once — a field left off would stand as `Material::default`'s value and not as one you chose — and each is limited by the range `entity::Material` states for it. The slot is the registry's to hand out, not the call's: the reply reports it, and `set_transform` with `material_id` is what points the entity at it. Registering paints nothing by itself, and the registry is not part of the entity file, so a new process starts from the three presets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": material_fields,
+                "required": material_field_names,
                 "additionalProperties": false
             }
         },
