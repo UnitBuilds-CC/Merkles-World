@@ -3734,8 +3734,10 @@ fn read_png(reply: &Value) -> Vec<u8> {
 fn count_colour(frame: &image::RgbImage, colour: [u8; 3]) -> usize {
     frame
         .as_raw()
-        .chunks_exact(3)
-        .filter(|pixel| *pixel == colour)
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|pixel| **pixel == colour)
         .count()
 }
 
