@@ -13,7 +13,9 @@
 //! - Editing the parameters of any node in the tree: the panel lists the parts by their authored route
 //!   (`root.b.kept`) with the node's kind beside it, and the sliders below the list write to the selected
 //!   one. The field names in a route are the ones `assetc`'s refusals use, so an error text and a row
-//!   point at the same part.
+//!   point at the same part. The fields themselves, and the range each one may take, are one table
+//!   (`params`) that the panel draws from and the MCP pipe validates against — two copies of a range would
+//!   drift into an edit an agent can make that the window cannot.
 //! - Material slot assignment and a swatch read out of the same registry the viewport shades with
 //! - RON load and save, with dirty tracking
 //!
@@ -27,6 +29,7 @@ pub mod gpu_renderer;
 pub mod inspector;
 pub mod material_panel;
 pub mod mcp;
+pub mod params;
 pub mod shape_path;
 pub mod viewport;
 

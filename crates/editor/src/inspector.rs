@@ -263,39 +263,50 @@ fn selected_widgets(ui: &mut egui::Ui, state: &mut EditorState) {
 /// Every parameter the node itself carries, and `true` if any of them moved. The node is a clone that
 /// gets written back whole, so a combinator keeps its children and no field-by-field write-back can
 /// miss one.
+///
+/// The rows come from `crate::params`, the same table the MCP pipe validates against, so a range cannot
+/// be one thing in the window and another over the wire.
 fn edit_params(ui: &mut egui::Ui, shape: &mut Shape) -> bool {
+    let specs = crate::params::params_of(shape);
+    if specs.is_empty() {
+        ui.label("No parameters of its own — pick one of its children.");
+        return false;
+    }
+
     let mut changed = false;
-    match shape {
-        Shape::Sphere { r, centre } => {
-            changed |= slider(ui, r, 0.01..=5.0, "radius");
-            changed |= vec3(ui, centre, -5.0..=5.0, "centre");
-        }
-        Shape::RoundedBox { half, r } => {
-            changed |= vec3(ui, half, 0.01..=5.0, "half extents");
-            changed |= slider(ui, r, 0.0..=2.0, "corner radius");
-        }
-        Shape::Plane { normal, offset } => {
-            changed |= vec3(ui, normal, -1.0..=1.0, "normal");
-            changed |= slider(ui, offset, -10.0..=10.0, "offset");
-        }
-        Shape::SmoothUnion { k, .. } => {
-            changed |= slider(ui, k, 0.0..=1.0, "blend k");
-        }
-        Shape::Repeat { period, .. } => {
-            changed |= slider(ui, period, 0.05..=10.0, "period");
-        }
-        Shape::Mirror { axis, .. } => {
-            let mut a = *axis as f32;
-            if ui
-                .add(egui::Slider::new(&mut a, 0.0..=2.0).text("axis (x y z)"))
-                .changed()
-            {
-                *axis = a.round() as u8;
-                changed = true;
+    for spec in specs {
+        let Some(mut lanes) = crate::params::read_param(shape, spec.name) else {
+            continue;
+        };
+        let mut moved = false;
+        if spec.lanes == 1 {
+            let mut value = lanes[0];
+            if spec.whole {
+                // The axis is a field of the grammar, not a length: the drag rounds to the lane the
+                // file will carry rather than storing 1.4 and letting the march guess.
+                if ui
+                    .add(egui::Slider::new(&mut value, spec.lo..=spec.hi).text(spec.label))
+                    .changed()
+                {
+                    lanes[0] = value.round();
+                    moved = true;
+                }
+            } else if slider(ui, &mut value, spec.lo..=spec.hi, spec.label) {
+                lanes[0] = value;
+                moved = true;
+            }
+        } else {
+            ui.label(spec.label);
+            for (lane, axis) in (0..spec.lanes as usize).zip(["X", "Y", "Z"]) {
+                let mut value = lanes[lane];
+                if slider(ui, &mut value, spec.lo..=spec.hi, axis) {
+                    lanes[lane] = value;
+                    moved = true;
+                }
             }
         }
-        Shape::Union { .. } | Shape::Subtract { .. } | Shape::Intersect { .. } => {
-            ui.label("No parameters of its own — pick one of its children.");
+        if moved && crate::params::write_param(shape, spec.name, &lanes).is_some() {
+            changed = true;
         }
     }
     changed
@@ -303,15 +314,6 @@ fn edit_params(ui: &mut egui::Ui, shape: &mut Shape) -> bool {
 
 fn slider(ui: &mut egui::Ui, value: &mut f32, range: RangeInclusive<f32>, text: &str) -> bool {
     ui.add(egui::Slider::new(value, range).text(text)).changed()
-}
-
-fn vec3(ui: &mut egui::Ui, v: &mut [f32; 3], range: RangeInclusive<f32>, label: &str) -> bool {
-    ui.label(label);
-    let mut changed = false;
-    for (axis, value) in ["X", "Y", "Z"].into_iter().zip(v.iter_mut()) {
-        changed |= slider(ui, value, range.clone(), axis);
-    }
-    changed
 }
 
 fn material_widgets(ui: &mut egui::Ui, state: &mut EditorState) {

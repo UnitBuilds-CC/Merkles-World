@@ -6,6 +6,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+use assetc::Shape;
 use editor::mcp::{self, TOOL_NAMES};
 use editor::EditorState;
 use serde_json::{json, Value};
@@ -452,6 +453,743 @@ fn save_entity_writes_where_it_is_told_and_refuses_to_guess() {
         !round_trip.1,
         "the file this wrote cannot be loaded back: {}",
         round_trip.0
+    );
+}
+
+#[test]
+fn a_route_from_the_parts_list_selects_that_node_and_edits_nothing() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let parts = before["parts"].as_array().expect("parts is a list");
+
+    // From the caller's own vantage point: the deepest part that carries a parameter is the row an author
+    // would click, and for the pig it sits well below the root's blend factor.
+    let picked = parts
+        .iter()
+        .filter(|part| {
+            !part["parameters"]
+                .as_array()
+                .expect("every part publishes its parameter list")
+                .is_empty()
+        })
+        .max_by_key(|part| part["depth"].as_u64().expect("a depth"))
+        .expect("the pig has parts a caller can edit");
+    let route = picked["route"].as_str().expect("a route").to_string();
+    assert!(
+        route.contains('.'),
+        "the deepest editable part should not be the root: {route}"
+    );
+
+    let selected = call(&mut state, "select_part", json!({ "route": route }));
+    assert_eq!(selected["selected"], json!(route));
+    assert_eq!(selected["kind"], picked["kind"]);
+    assert_eq!(selected["summary"], picked["summary"]);
+    assert_eq!(
+        selected["parameters"], picked["parameters"],
+        "select_part and editor_state describe one node's fields two ways, so a caller cannot tell which \
+         list set_part will accept"
+    );
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(after["selected"], json!(route));
+    assert_eq!(
+        after["dirty"],
+        json!(false),
+        "selecting is not an edit - a caller that only asked where the snout is must not leave the file \
+         changed and the next save overwrite it"
+    );
+    assert_eq!(
+        after["preview_signature"], before["preview_signature"],
+        "a pure selection moved the preview key, so the viewport would throw away a frame it never edited"
+    );
+
+    // The short spelling reaches the same node: `assetc`'s refusals name fields without the leading
+    // `root.`, and a caller holding one of those should be able to paste what it got.
+    let short = route.strip_prefix("root.").expect("a dotted route");
+    let again = call(&mut state, "select_part", json!({ "route": short }));
+    assert_eq!(
+        again["selected"],
+        json!(route),
+        "{short} and {route} reached different nodes"
+    );
+}
+
+#[test]
+fn a_refused_route_names_what_exists_and_leaves_the_selection_where_it_was() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    // Pin the selection somewhere known, so a refusal that moved it is visible.
+    call(&mut state, "select_part", json!({ "route": "root.a" }));
+    let before = call(&mut state, "editor_state", json!({}));
+    let parts = before["parts"].as_array().expect("parts").clone();
+
+    let (message, refused) = try_call(&mut state, "select_part", json!({ "route": "root.q" }));
+    assert!(
+        refused,
+        "root has no child q, and this read as a selection: {message}"
+    );
+    assert!(
+        message.contains("\"a\"") && message.contains("\"b\""),
+        "the refusal should name the children the node actually has, got: {message}"
+    );
+
+    // A leaf, asked for anything at all: the answer is that it is a leaf, plus the fields it does carry.
+    let leaf = parts
+        .iter()
+        .find(|part| part["kind"] == json!("Sphere"))
+        .expect("the pig is made of spheres");
+    let leaf_route = leaf["route"].as_str().expect("a route");
+    let (message, refused) = try_call(
+        &mut state,
+        "select_part",
+        json!({ "route": format!("{leaf_route}.kept") }),
+    );
+    assert!(
+        refused,
+        "{leaf_route} is a sphere - it has no `kept`: {message}"
+    );
+    assert!(
+        message.contains("no children")
+            && message.contains("\"r\"")
+            && message.contains("\"centre\""),
+        "a route off a leaf should say it is a leaf and name the fields it does have, got: {message}"
+    );
+
+    // An empty route is not "the root": the root is spelled, or a caller silently edits the whole entity.
+    let (message, refused) = try_call(&mut state, "select_part", json!({ "route": "  " }));
+    assert!(
+        refused,
+        "an empty route selected the root anyway: {message}"
+    );
+    assert!(
+        message.contains("parts list"),
+        "the refusal should point at the list that names the routes, got: {message}"
+    );
+
+    let (message, refused) = try_call(&mut state, "select_part", json!({}));
+    assert!(refused, "route is required, and this answered: {message}");
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        after["selected"], before["selected"],
+        "a refused select_part moved the selection, so the next set_part lands on a part the caller never \
+         asked about"
+    );
+    assert_eq!(after["preview_signature"], before["preview_signature"]);
+    assert_eq!(after["dirty"], json!(false));
+}
+
+#[test]
+fn set_part_writes_one_field_of_one_node_and_the_saved_file_reads_it_back() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let parts = before["parts"].as_array().expect("parts").clone();
+
+    // A node below the root's own operands: an edit here cannot be the transform in disguise.
+    let sphere = parts
+        .iter()
+        .find(|part| part["kind"] == json!("Sphere") && part["depth"].as_u64() == Some(2))
+        .or_else(|| parts.iter().find(|part| part["kind"] == json!("Sphere")))
+        .expect("the pig has a sphere to edit");
+    let route = sphere["route"].as_str().expect("a route").to_string();
+    let radius = sphere["parameters"]
+        .as_array()
+        .expect("a sphere publishes its fields")
+        .iter()
+        .find(|param| param["name"] == json!("r"))
+        .expect("a sphere publishes r")
+        .clone();
+    let range = radius["range"]
+        .as_array()
+        .expect("a published range")
+        .clone();
+    let (lo, hi) = (
+        range[0].as_f64().expect("lo"),
+        range[1].as_f64().expect("hi"),
+    );
+
+    let mut wrote = call(
+        &mut state,
+        "set_part",
+        json!({ "route": route, "parameter": "r", "value": hi }),
+    );
+    if wrote["changed"] == json!(false) {
+        wrote = call(
+            &mut state,
+            "set_part",
+            json!({ "route": route, "parameter": "r", "value": lo }),
+        );
+    }
+    assert_eq!(
+        wrote["changed"],
+        json!(true),
+        "neither endpoint of the published range moved {route}.r, so the write never landed"
+    );
+    assert_eq!(wrote["parameter"], json!("r"));
+    assert_ne!(
+        wrote["from"], wrote["to"],
+        "changed without a move: {:?} -> {:?}",
+        wrote["from"], wrote["to"]
+    );
+    assert_eq!(wrote["state"]["dirty"], json!(true));
+    assert_ne!(
+        wrote["preview_signature"], before["preview_signature"],
+        "a part edit left the preview key alone, so the viewport keeps showing the frame from before it"
+    );
+    assert_eq!(
+        wrote["state"]["transform"], before["transform"],
+        "editing {route}.r moved the entity's transform"
+    );
+    let edited_part = wrote["state"]["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .find(|part| part["route"] == json!(route))
+        .expect("the edited node is still in the outline")
+        .clone();
+    assert_eq!(edited_part["summary"], wrote["summary"]);
+
+    // The claim a save has to keep: the field this wrote is in the file, and loading that file puts it
+    // back where the route says it belongs.
+    let out = temp_path("increment2_round_trip.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": out.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    let loaded = call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": out.to_string_lossy() }),
+    );
+    let _ = std::fs::remove_file(&out);
+    let same_route = loaded["state"]["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .find(|part| part["route"] == json!(route))
+        .unwrap_or_else(|| {
+            panic!("the saved file has no {route} - the tree changed shape on the round trip")
+        });
+    assert_eq!(
+        same_route["summary"], wrote["summary"],
+        "the radius this wrote did not survive the file it saved: wrote {:?}, read back {:?}",
+        wrote["summary"], same_route["summary"]
+    );
+}
+
+#[test]
+fn a_parameter_the_node_does_not_carry_is_refused_with_the_ones_it_does() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let parts = before["parts"].as_array().expect("parts").clone();
+
+    // A combinator has no field of its own, and the refusal has to send the caller back to the routes.
+    let union = parts
+        .iter()
+        .find(|part| part["kind"] == json!("Union"))
+        .expect("the pig unions its parts");
+    assert!(
+        union["parameters"].as_array().expect("a list").is_empty(),
+        "a Union publishes {}, so it is not operand-only",
+        union["parameters"]
+    );
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": union["route"], "parameter": "r", "value": 1.0 }),
+    );
+    assert!(refused, "a Union took a radius: {message}");
+    assert!(
+        message.contains("reached by route"),
+        "the refusal should point at the operands instead of a radius, got: {message}"
+    );
+
+    // A node that does carry fields, asked for one belonging to a different kind.
+    let sphere = parts
+        .iter()
+        .find(|part| part["kind"] == json!("Sphere"))
+        .expect("the pig has a sphere");
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": sphere["route"], "parameter": "period", "value": 0.5 }),
+    );
+    assert!(
+        refused,
+        "a sphere has no period - that is a Repeat's field: {message}"
+    );
+    assert!(
+        message.contains("Sphere")
+            && message.contains("\"period\"")
+            && message.contains("\"r\"")
+            && message.contains("\"centre\""),
+        "the refusal should name the node's kind, the field asked for, and the two it takes, got: {message}"
+    );
+
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": sphere["route"], "parameter": "r" }),
+    );
+    assert!(refused, "a call with no value wrote something: {message}");
+    assert!(
+        message.contains("value is required"),
+        "say what is missing rather than a general failure, got: {message}"
+    );
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        after["parts"], before["parts"],
+        "a refused set_part left a field moved somewhere in the tree"
+    );
+    assert_eq!(after["dirty"], json!(false));
+}
+
+#[test]
+fn a_value_the_slider_would_not_reach_is_refused_quoting_the_range_it_offers() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "load_entity",
+        json!({ "path": pig_ron().to_string_lossy() }),
+    );
+    let before = call(&mut state, "editor_state", json!({}));
+    let parts = before["parts"].as_array().expect("parts").clone();
+    let sphere = parts
+        .iter()
+        .find(|part| part["kind"] == json!("Sphere"))
+        .expect("the pig has a sphere");
+    let route = sphere["route"].as_str().expect("a route").to_string();
+
+    // Just outside the top and the bottom of the published range.
+    for value in [5.5, -0.5] {
+        let (message, refused) = try_call(
+            &mut state,
+            "set_part",
+            json!({ "route": route, "parameter": "r", "value": value }),
+        );
+        assert!(
+            refused,
+            "r {value} is outside the 0.01..=5 the panel drags, and this took it: {message}"
+        );
+        assert!(
+            message.contains("0.01..=5"),
+            "the refusal should quote the same limits the published parameter carries, got: {message}"
+        );
+    }
+    let after_refusal = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        after_refusal["parts"], before["parts"],
+        "a refused r moved a node anyway - the range check ran after the write"
+    );
+    assert_eq!(after_refusal["dirty"], json!(false));
+
+    // A three-lane field asked for the wrong number of lanes.
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": route, "parameter": "centre", "value": [1.0, 2.0] }),
+    );
+    assert!(
+        refused,
+        "a two-lane centre would leave the third lane authored-but-invisible: {message}"
+    );
+    assert!(
+        message.contains("3 numbers"),
+        "say how many lanes the field takes, got: {message}"
+    );
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": route, "parameter": "centre", "value": 1.0 }),
+    );
+    assert!(refused, "a number cannot be a centre: {message}");
+    assert!(
+        message.contains("array"),
+        "the refusal should name the shape it wanted, got: {message}"
+    );
+
+    // `Mirror.axis` is the file's integer, so 1.5 must be refused rather than rounded to a different animal.
+    let mirror = parts
+        .iter()
+        .find(|part| part["kind"] == json!("Mirror"))
+        .expect("the pig mirrors its legs");
+    let mirror_route = mirror["route"].as_str().expect("a route").to_string();
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": mirror_route, "parameter": "axis", "value": 1.5 }),
+    );
+    assert!(
+        refused,
+        "a half axis is not a choice of x, y or z: {message}"
+    );
+    assert!(
+        message.contains("whole choice"),
+        "name the integrality, not the range, got: {message}"
+    );
+
+    let (message, refused) = try_call(
+        &mut state,
+        "set_part",
+        json!({ "route": mirror_route, "parameter": "axis", "value": 3 }),
+    );
+    assert!(
+        refused,
+        "axis 3 is off the end of the three axes: {message}"
+    );
+    assert!(
+        message.contains("0..=2"),
+        "the refusal should quote the axis range, got: {message}"
+    );
+
+    // The endpoint the range includes is reachable - `..=` that refused its own bound would make a field
+    // uneditable at its limit.
+    let at_limit = call(
+        &mut state,
+        "set_part",
+        json!({ "route": mirror_route, "parameter": "axis", "value": 2 }),
+    );
+    assert_eq!(at_limit["to"], json!([2.0]));
+    assert_eq!(
+        at_limit["changed"],
+        json!(true),
+        "the pig's mirror was already on axis z, so this proves nothing about the endpoint"
+    );
+
+    let after = call(&mut state, "editor_state", json!({}));
+    assert_ne!(
+        after["parts"], before["parts"],
+        "the accepted endpoint never reached the state"
+    );
+}
+
+#[test]
+fn every_kind_writes_the_parameters_it_publishes_and_refuses_the_ones_it_does_not() {
+    // The nine authored kinds, each with the fields its own `.ron` spelling gives them and the limits the
+    // panel's sliders stop at. These are written down here rather than read back out of `params`, because
+    // the point is to catch the table and the file drifting apart - and because a field a kind publishes
+    // but cannot write only shows up when something actually tries to write it.
+    // One authored field as (name, lo, hi, lanes), and one kind's whole row.
+    type Field = (&'static str, f32, f32, u8);
+    type Case = (
+        &'static str,
+        Shape,
+        &'static [&'static str],
+        &'static [Field],
+    );
+    let leaf = || {
+        Box::new(Shape::Sphere {
+            r: 0.5,
+            centre: [0.0, 0.0, 0.0],
+        })
+    };
+    let cases: Vec<Case> = vec![
+        (
+            "Sphere",
+            Shape::Sphere {
+                r: 1.0,
+                centre: [0.25, 0.25, 0.25],
+            },
+            &[],
+            &[("r", 0.01, 5.0, 1), ("centre", -5.0, 5.0, 3)],
+        ),
+        (
+            "RoundedBox",
+            Shape::RoundedBox {
+                half: [0.5, 0.5, 0.5],
+                r: 0.2,
+            },
+            &[],
+            &[("half", 0.01, 5.0, 3), ("r", 0.0, 2.0, 1)],
+        ),
+        (
+            "Plane",
+            Shape::Plane {
+                normal: [0.25, 0.5, 0.25],
+                offset: 0.0,
+            },
+            &[],
+            &[("normal", -1.0, 1.0, 3), ("offset", -10.0, 10.0, 1)],
+        ),
+        (
+            "Union",
+            Shape::Union {
+                a: leaf(),
+                b: leaf(),
+            },
+            &["a", "b"],
+            &[],
+        ),
+        (
+            "SmoothUnion",
+            Shape::SmoothUnion {
+                a: leaf(),
+                b: leaf(),
+                k: 0.4,
+            },
+            &["a", "b"],
+            &[("k", 0.0, 1.0, 1)],
+        ),
+        (
+            "Subtract",
+            Shape::Subtract {
+                kept: leaf(),
+                cutter: leaf(),
+            },
+            &["kept", "cutter"],
+            &[],
+        ),
+        (
+            "Intersect",
+            Shape::Intersect {
+                a: leaf(),
+                b: leaf(),
+            },
+            &["a", "b"],
+            &[],
+        ),
+        (
+            "Repeat",
+            Shape::Repeat {
+                period: 1.0,
+                child: leaf(),
+            },
+            &["child"],
+            &[("period", 0.05, 10.0, 1)],
+        ),
+        (
+            "Mirror",
+            Shape::Mirror {
+                axis: 1,
+                child: leaf(),
+            },
+            &["child"],
+            &[("axis", 0.0, 2.0, 1)],
+        ),
+    ];
+    let value_for = |lanes: u8, whole: bool, lane: f32| -> Value {
+        let lane = if whole { lane.round() } else { lane };
+        if lanes == 1 {
+            json!(lane)
+        } else {
+            json!([lane, lane, lane])
+        }
+    };
+
+    let mut params_checked = 0usize;
+    let mut child_routes_checked = 0usize;
+    for (kind, shape, kids, expected) in cases {
+        let mut state = fresh();
+        state.entity_def.shape = shape;
+        let snapshot = call(&mut state, "editor_state", json!({}));
+        let part = &snapshot["parts"].as_array().expect("parts")[0];
+        assert_eq!(part["route"], json!("root"));
+        assert_eq!(part["kind"], json!(kind));
+
+        let published = part["parameters"].as_array().expect("a list").clone();
+        assert_eq!(
+            published.len(),
+            expected.len(),
+            "{kind} publishes {} fields while this test expects {expected:?}: {published:?}",
+            published.len()
+        );
+        params_checked += published.len();
+
+        for (index, got) in published.iter().enumerate() {
+            let (name, lo, hi, lanes) = expected[index];
+            assert_eq!(got["name"], json!(name), "{kind} publishes {got:?}");
+            assert_eq!(
+                got["lanes"],
+                json!(lanes),
+                "{kind}.{name} is written with {} lanes by the panel and {} here",
+                lanes,
+                got["lanes"]
+            );
+            assert_eq!(
+                got["range"],
+                json!([lo, hi]),
+                "{kind}.{name} offers a range the slider does not stop at: {got:?}"
+            );
+            let whole = got["whole"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{kind}.{name} publishes no whole flag: {got:?}"));
+            assert_eq!(whole, kind == "Mirror", "{kind}.{name} is whole: {got:?}");
+            let range_text = format!("{lo}..={hi}");
+
+            // Both included endpoints, written for real.
+            for endpoint in [lo, hi] {
+                let written = call(
+                    &mut state,
+                    "set_part",
+                    json!({
+                        "route": "root",
+                        "parameter": name,
+                        "value": value_for(lanes, whole, endpoint),
+                    }),
+                );
+                assert_eq!(
+                    written["changed"],
+                    json!(true),
+                    "{kind}.{name} did not move when handed its own {range_text} endpoint {endpoint}"
+                );
+                assert_eq!(
+                    written["state"]["dirty"],
+                    json!(true),
+                    "{kind}.{name} = {endpoint} landed and the file still reads clean"
+                );
+            }
+
+            // Re-writing the value the node now holds must report no change. That is the only way to see a
+            // field the table publishes but the writer silently skips: it would answer `changed: true` to
+            // every write and never once keep one.
+            let settled = call(
+                &mut state,
+                "set_part",
+                json!({
+                    "route": "root",
+                    "parameter": name,
+                    "value": value_for(lanes, whole, hi),
+                }),
+            );
+            assert_eq!(
+                settled["changed"],
+                json!(false),
+                "{kind}.{name} did not keep the value it was last handed: wrote {:?}, read back {:?}",
+                settled["to"],
+                settled["from"]
+            );
+
+            // Just outside each end: refused, quoting the range, and moving nothing.
+            let current = call(&mut state, "editor_state", json!({}));
+            for outside in [lo - 1.0, hi + 1.0] {
+                let (message, refused) = try_call(
+                    &mut state,
+                    "set_part",
+                    json!({
+                        "route": "root",
+                        "parameter": name,
+                        "value": value_for(lanes, whole, outside),
+                    }),
+                );
+                assert!(
+                    refused,
+                    "{kind}.{name} took {outside}, outside its own {range_text}: {message}"
+                );
+                assert!(
+                    message.contains(&range_text),
+                    "the refusal for {kind}.{name} should quote {range_text}, got: {message}"
+                );
+            }
+            let still = call(&mut state, "editor_state", json!({}));
+            assert_eq!(
+                still["parts"], current["parts"],
+                "a refused {kind}.{name} left the tree changed"
+            );
+
+            if whole {
+                let (message, refused) = try_call(
+                    &mut state,
+                    "set_part",
+                    json!({ "route": "root", "parameter": name, "value": 0.5 }),
+                );
+                assert!(
+                    refused,
+                    "{kind}.{name} is the file's integer and 0.5 was rounded: {message}"
+                );
+                assert!(message.contains("whole choice"), "{message}");
+            }
+
+            // A field from another kind of the same tree is not this one's. `period` belongs to Repeat
+            // alone and `r` to the two primitives that round a corner, so each is foreign to the other's
+            // holders.
+            let other = if name == "period" { "r" } else { "period" };
+            let (message, refused) = try_call(
+                &mut state,
+                "set_part",
+                json!({ "route": "root", "parameter": other, "value": 1.0 }),
+            );
+            assert!(
+                refused,
+                "{kind} accepted a {other:?}, which is not one of {expected:?}: {message}"
+            );
+        }
+
+        // A combinator has no field of its own, and the refusal sends the caller back to the routes.
+        if expected.is_empty() {
+            let (message, refused) = try_call(
+                &mut state,
+                "set_part",
+                json!({ "route": "root", "parameter": "r", "value": 1.0 }),
+            );
+            assert!(
+                refused && message.contains("reached by route"),
+                "{kind} is a combinator, and an `r` request answered: {message}"
+            );
+        }
+
+        // The route grammar, per kind: the children the file names, and nothing else.
+        if kids.is_empty() {
+            let (message, refused) =
+                try_call(&mut state, "select_part", json!({ "route": "root.a" }));
+            assert!(
+                refused && message.contains("no children"),
+                "{kind} is a leaf and a route into it read as a selection: {message}"
+            );
+        } else {
+            for kid in kids {
+                let selected = call(
+                    &mut state,
+                    "select_part",
+                    json!({ "route": format!("root.{kid}") }),
+                );
+                assert_eq!(selected["selected"], json!(format!("root.{kid}")));
+                child_routes_checked += 1;
+            }
+            let (message, refused) =
+                try_call(&mut state, "select_part", json!({ "route": "root.q" }));
+            assert!(refused, "{kind} has no child q: {message}");
+            for kid in kids {
+                assert!(
+                    message.contains(&format!("{kid:?}")),
+                    "the refusal for {kind} should name {kid:?}, got: {message}"
+                );
+            }
+        }
+    }
+
+    // The coverage claim, as a number: nine kinds, nine authored fields, and the ten named child routes
+    // the six wrapper kinds open. A table that grows a field, or a kind this loop skips, moves one of these.
+    assert_eq!(
+        params_checked, 9,
+        "the nine authored kinds carry nine authored fields between them; {params_checked} were tested, \
+         so this list and `params` no longer describe the same grammar"
+    );
+    assert_eq!(
+        child_routes_checked, 10,
+        "the six wrapper kinds expose ten named child routes (two each for a, b, kept and cutter, and one \
+         child each on Repeat and Mirror)"
     );
 }
 

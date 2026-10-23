@@ -16,8 +16,10 @@ use serde_json::{json, Value};
 use render::raster::Frame;
 
 use crate::gpu_renderer::{CpuRenderer, Stage};
-use crate::shape_path;
+use crate::params;
+use crate::shape_path::{self, Step};
 use crate::EditorState;
+use assetc::Shape;
 use entity::{Material, NoiseKind};
 
 /// What `initialize` answers with. MCP clients refuse a server that speaks a version they do not know.
@@ -55,6 +57,8 @@ pub const TOOL_NAMES: &[&str] = &[
     "list_materials",
     "load_entity",
     "set_transform",
+    "select_part",
+    "set_part",
     "render_view",
     "save_entity",
 ];
@@ -145,6 +149,8 @@ fn dispatch(
         "list_materials" => Some(Ok(materials_json(state))),
         "load_entity" => Some(load(state, arguments)),
         "set_transform" => Some(set_transform(state, arguments)),
+        "select_part" => Some(select_part(state, arguments)),
+        "set_part" => Some(set_part(state, arguments)),
         "render_view" => Some(render_view(state, arguments)),
         "save_entity" => Some(save_entity(state, arguments)),
         _ => None,
@@ -276,6 +282,209 @@ fn set_transform(state: &mut EditorState, arguments: &Value) -> Result<Value, St
     }))
 }
 
+/// The route the panel prints for a node (`root.b.kept`) turned into the `Step` path it edits.
+///
+/// `root` may be spelled or omitted — `a.b` and `root.a.b` reach the same node — because the parts list
+/// prints the long form while `assetc`'s refusals print the field names without it, and a caller reading
+/// either should be able to paste what it got. A name that is not a child *at that node* is refused with
+/// the names that are, the same way an unknown view names the six it knows.
+fn route_of(shape: &Shape, route: &str) -> Result<Vec<Step>, String> {
+    let mut steps = Vec::new();
+    let mut node = shape;
+    let mut walked = "root".to_string();
+    for (index, segment) in route
+        .split('.')
+        .filter(|segment| !segment.is_empty())
+        .enumerate()
+    {
+        if index == 0 && segment == "root" {
+            continue;
+        }
+        let kids = shape_path::children(node);
+        let Some((_, step)) = kids.iter().find(|(name, _)| *name == segment) else {
+            return Err(if kids.is_empty() {
+                format!(
+                    "{walked} is a {} and has no children — it is a leaf; its own fields are {}",
+                    shape_path::kind(node),
+                    parameter_names(node)
+                )
+            } else {
+                format!(
+                    "{walked} has no child {segment:?}; it names {}",
+                    kids.iter()
+                        .map(|(name, _)| format!("{name:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            });
+        };
+        let Some(child) = shape_path::resolve(node, &[*step]) else {
+            // `children` and `resolve` are the same grammar read two ways. If they ever disagree that is
+            // a defect in this module, not a caller's typo, and it says so rather than editing a parent.
+            return Err(format!(
+                "{walked}.{segment} names a child the tree cannot reach"
+            ));
+        };
+        steps.push(*step);
+        walked = format!("{walked}.{segment}");
+        node = child;
+    }
+    Ok(steps)
+}
+
+/// The route a node's `Step` path is printed as, or `null` if the tree no longer holds it.
+fn route_name(shape: &Shape, steps: &[Step]) -> Value {
+    shape_path::outline(shape)
+        .into_iter()
+        .find(|entry| entry.path == steps)
+        .map(|entry| Value::String(entry.name))
+        .unwrap_or(Value::Null)
+}
+
+/// What one node can be asked for, in the words a caller has to answer with.
+fn parameter_names(node: &Shape) -> String {
+    let specs = params::params_of(node);
+    if specs.is_empty() {
+        return "none — a combinator's operands are reached by route".to_string();
+    }
+    specs
+        .iter()
+        .map(|spec| format!("{:?} ({:?})", spec.name, spec.range_text()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn parameters_json(node: &Shape) -> Vec<Value> {
+    params::params_of(node)
+        .iter()
+        .map(|spec| {
+            json!({
+                "name": spec.name,
+                "label": spec.label,
+                "lanes": spec.lanes,
+                "range": [spec.lo, spec.hi],
+                "whole": spec.whole,
+            })
+        })
+        .collect()
+}
+
+/// Point the editor at one node of the tree, which is what a click on a row of the panel's part list does.
+///
+/// Selecting is not an edit: nothing here marks the entity dirty or moves the preview key, so a caller can
+/// ask where the snout is without leaving the file changed.
+fn select_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let route = string_arg(arguments, "route")?;
+    if route.trim().is_empty() {
+        return Err("route is required; editor_state's parts list names them, and \"root\" is the whole entity".to_string());
+    }
+    let steps = route_of(&state.entity_def.shape, &route)?;
+    state.select(steps);
+
+    let snapshot = state_json(state);
+    let selected = snapshot["selected"].clone();
+    let node = state
+        .selected_shape()
+        .expect("route_of walked to this node, so the selection resolves");
+    Ok(json!({
+        "selected": selected,
+        "kind": shape_path::kind(node),
+        "summary": shape_path::summary(node),
+        "parameters": parameters_json(node),
+        "state": snapshot,
+    }))
+}
+
+/// Write one authored parameter of one node — the field a slider in the panel would drag.
+///
+/// The route is optional: with none this writes the node the editor already holds selected, so
+/// `select_part` then `set_part` is the same two gestures as clicking a row and dragging its slider. The
+/// range refused here is the range the slider offers, because both read `crate::params` — an edit an agent
+/// can make that the window cannot is exactly the disagreement gate E7 exists to catch.
+fn set_part(state: &mut EditorState, arguments: &Value) -> Result<Value, String> {
+    let name = string_arg(arguments, "parameter")?;
+    let steps = match arguments.get("route") {
+        Some(value) => {
+            let route = value
+                .as_str()
+                .ok_or_else(|| "route must be a string".to_string())?;
+            route_of(&state.entity_def.shape, route)?
+        }
+        None => state.selected.clone(),
+    };
+
+    let node = shape_path::resolve(&state.entity_def.shape, &steps)
+        .ok_or_else(|| "the selected node is no longer in the tree; pass a route".to_string())?;
+    let spec = *params::params_of(node)
+        .iter()
+        .find(|spec| spec.name == name)
+        .ok_or_else(|| {
+            format!(
+                "{} carries no parameter {name:?}; it takes {}",
+                shape_path::kind(node),
+                parameter_names(node)
+            )
+        })?;
+
+    let given = arguments
+        .get("value")
+        .ok_or_else(|| "value is required".to_string())?;
+    // A single-lane field takes a number, a three-lane one takes an array of exactly three — `element`
+    // checks the length on its first read, so a four-lane `centre` is refused rather than truncated.
+    let lanes = if spec.lanes == 1 {
+        [scalar(given, "value")?, 0.0, 0.0]
+    } else {
+        [
+            element(given, 0, "value")?,
+            element(given, 1, "value")?,
+            element(given, 2, "value")?,
+        ]
+    };
+
+    for lane in lanes.iter().take(spec.lanes as usize) {
+        if !lane.is_finite() {
+            return Err(format!("{name} must be finite, got {lanes:?}"));
+        }
+        if spec.whole && *lane != lane.trunc() {
+            return Err(format!("{name} is a whole choice, got {lane}"));
+        }
+        if !(spec.lo..=spec.hi).contains(lane) {
+            return Err(format!(
+                "{name} must be inside {}, got {lane}",
+                spec.range_text()
+            ));
+        }
+    }
+
+    let from = params::read_param(node, name.as_str()).expect("the spec came from this node");
+    let kind_name = shape_path::kind(node);
+    let moved = from[..spec.lanes as usize] != lanes[..spec.lanes as usize];
+    if moved {
+        let slot = shape_path::resolve_mut(&mut state.entity_def.shape, &steps)
+            .expect("resolve() reached this node, so resolve_mut() does too");
+        // A field the table publishes but the writer cannot set is a defect in `params`, and it refuses
+        // here rather than taking the transport down with a panic.
+        params::write_param(slot, name.as_str(), &lanes[..spec.lanes as usize]).ok_or_else(
+            || format!("{name} is listed for a {kind_name} but this build cannot write it"),
+        )?;
+        state.mark_dirty();
+    }
+
+    let route = route_name(&state.entity_def.shape, &steps);
+    let node =
+        shape_path::resolve(&state.entity_def.shape, &steps).expect("the write kept the node");
+    Ok(json!({
+        "route": route,
+        "parameter": name,
+        "from": from[..spec.lanes as usize],
+        "to": lanes[..spec.lanes as usize],
+        "changed": moved,
+        "summary": shape_path::summary(node),
+        "preview_signature": state.preview_signature(),
+        "state": state_json(state),
+    }))
+}
+
 /// March the current state on the CPU reference and write the PNG where it can be looked at.
 ///
 /// The filename carries `preview_signature`, so a reader can tell which state produced the frame they are
@@ -382,6 +591,10 @@ fn state_json(state: &EditorState) -> Value {
                 "kind": entry.kind,
                 "summary": entry.summary,
                 "depth": entry.depth,
+                // What `set_part` will take for this node, with the range the panel's slider drags it in.
+                "parameters": shape_path::resolve(&def.shape, &entry.path)
+                    .map(parameters_json)
+                    .unwrap_or_default(),
             })
         })
         .collect();
@@ -544,6 +757,28 @@ pub fn tool_specs() -> Value {
                     "material_id": { "type": "integer", "minimum": 0, "maximum": 255 }
                 },
                 "additionalProperties": false
+            }
+        },
+        {
+            "name": "select_part",
+            "description": "Point the editor at one node of the tree by the route editor_state prints for it (root, root.b, root.b.kept). Selecting is not editing: nothing is marked dirty. Answers the node's kind, its current summary and the parameters set_part accepts for it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "route": { "type": "string" } },
+                "required": ["route"]
+            }
+        },
+        {
+            "name": "set_part",
+            "description": "Write one authored parameter of the selected node, or of the node a route names: a Sphere's r or centre, a RoundedBox's half or r, a Plane's normal or offset, a SmoothUnion's k, a Repeat's period, a Mirror's axis (a whole 0, 1 or 2). A value outside the range the panel's slider offers is refused with that range, and a parameter the kind does not carry is refused with the ones it does.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "route": { "type": "string" },
+                    "parameter": { "type": "string" },
+                    "value": { "oneOf": [ { "type": "number" }, { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } ] }
+                },
+                "required": ["parameter", "value"]
             }
         },
         {
