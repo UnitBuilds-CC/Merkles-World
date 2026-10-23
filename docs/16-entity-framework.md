@@ -266,7 +266,7 @@ Eleven tools:
 | `add_part` | grows the tree one of two ways. `Union`, `Subtract`, `Intersect` or `SmoothUnion` wraps the node a route names in that combinator, joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `Mirror` or `Repeat` wraps it alone — no `shape`, no `keep`, and the wrapper's own `axis` or `period` beside `combine`, from the same table `set_part` writes. `route` optional: without one it wraps the selected node |
 | `delete_part` | a route in, the node out. A one-child wrapper goes by **unwrapping**, at any depth: the node it held takes the wrapper's place, the subtree below it comes along, and the selection stays on the route the wrapper held because that route still names a node — the promoted one. A two-operand combinator cannot hold one operand, so there its surviving operand takes the combinator's place, the tree loses two nodes, and the selection goes back to `root`, because every path under a collapse now means something else. Deleting the sole child of a wrapper is refused, and the refusal names the route that wrapper actually holds as the call that works |
 | `move_part` | two routes in, both ends out. It is an **exchange**, not a reparent: the node at `from` and the node at `to` trade places, every other route keeps resolving to the same node it did, and `node_count` is unchanged. Refused: a pair on one line from the root (one holds the other, so one write would land inside the other and a subtree would be lost rather than moved), `root` as either end for the same reason, the same route twice, and two routes holding identical content — an exchange of equals moves nothing |
-| `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts |
+| `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts. `view` names one of the six angles; only leaving it off steers by `yaw`, `pitch` and `distance`, and the file is then named `custom`. A `view` of any other type — a number, a boolean, an array, an object, `null` — is refused rather than read as "no view" |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
 
 Ten of those decisions are about honesty rather than features:
@@ -374,6 +374,19 @@ front view" would be looking at a different picture from the one the dump was de
 capped at 768 on a side, because this is a CPU march and a 4096² request is a way to wedge a tool that is
 supposed to answer.
 
+The camera a frame is taken from has two ways to be asked for, and the tool keeps them apart. An unknown
+*name* is refused with all six spelled out (`no view "profile"; the names are "front", "back", …`), because
+the caller offered a name and one of the six was meant. A `view` that is not a string at all — `0`, `true`,
+`["front"]`, `{"name": "front"}`, `null` — was offered too, and is refused in that same voice rather than
+falling into the steer-me-myself arm: beside a complete `yaw`/`pitch`/`distance` camera, the old fallthrough
+answered `{"view": 0, "yaw": 3.14159, …}` with a picture from an angle nobody asked for, filed under that
+camera's own name (`custom-f68a37b65d24d271.png`, 85 surface pixels of 768) and every field of the reply
+consistent with the render that was actually done. Only the key left out means the caller steers, and that is
+the whole difference: a missing argument is an instruction, a malformed one is not. `route` and `keep` have
+always read the same way — a `null` there answers "must be a string" — and so does the published schema,
+which types `view` as a string; the fallthrough was the one place in the pipe where a schema violation could
+turn into a picture.
+
 What the pipe still does **not** do: it can exchange two routes but it cannot *re-parent* one — no call
 lifts a finished subtree out and grafts it under a different parent while the tree stays whole, because
 there is no slot to hold a node in transit. A symmetric creature is still authored by building one side and
@@ -386,11 +399,12 @@ Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
 setting them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 45 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 46 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
-exist, a save that round-trips back through load, and a transport test that runs the real binary as a
+exist and a `view` that is not a name refused instead of read as none, a save that round-trips back
+through load, and a transport test that runs the real binary as a
 child process and reads its replies off a pipe. Increment 2 adds six: a route taken from the parts list
 selects the node it prints, does not dirty the entity, and is reached the same way with or without the
 leading `root.`; a refused route names the children or fields that exist and leaves the selection where it
@@ -480,6 +494,17 @@ be un-saturated, with zero undrawn), and taking the `Repeat` out must leave stri
 still refuses nothing. That fixture was authored twice: a 1.0 sphere in a 1.6 cell measured **72** tiled
 against **709** unwrapped, because the cell clips the part it tiles and the big sphere was mostly outside it —
 a frame that grows when a node is deleted is the test failing, not the editor.
+Increment 8 adds one, and it sits on the difference between an argument that is absent and an argument that
+is malformed. A `render_view` call carrying `view: 0` beside a complete `yaw`/`pitch`/`distance` camera is
+required to refuse, and to refuse in the same voice as an unknown name — all six spelled out, plus the
+sentence that says how to ask for a custom angle (`Leave "view" off entirely`). The five spellings the field
+is given in — a number, a boolean, an array, an object, `null` — each get that treatment, so the test runs
+them in a loop rather than picking one; the array and object cases are the ones that would survive a fix
+that only swapped `as_str()` for a null check, since both *contain* the word `front`, and `null` is there
+because the pipe reads it that way for `route` and `keep` and the schema types `view` as a string. Then the
+spelling that does mean "steer myself" is required to still work: the call with the key left out renders the
+custom camera, reports `view == "custom"` with zero undrawn pixels, and its file is required to carry the
+`custom-` prefix — the name being the half of the old defect that made the reply self-consistent.
 
 Each of those checks was run against a planted defect in the clause it is meant to police, on this machine,
 and each plant is recorded with the one test it named: dropping `assetc::lower` from `commit` named the
@@ -534,6 +559,16 @@ node than the one in the way. The row that cannot see it is a hole, so increment
 `a_nested_wrappers_refusal_names_the_wrapper_where_it_actually_is` asserts the quoted route is `root.child` and
 requires that the message not say `at "root"`, and re-running the plant against 45 named that one row and
 nothing else. Every plant was reverted and the suite re-run green afterwards.
+Increment 8's plants were the defect itself, restored, and then its narrower half. Merging the third arm
+back into the second so a non-string `view` falls through to the custom camera named the new row and nothing
+else, and its panic carried the whole old behaviour as evidence — `{"view": 0, …}` answering with
+`custom-f68a37b65d24d271.png`, 85 surface pixels of 768, and a `yaw` of `3.1415927410125732` in a reply whose
+every field agrees with the render that was actually done. The second plant left the refusal in and made only
+`null` read as no view — the defect a fix that treated null as absence would have shipped — and named the
+same row from its `null` entry with the same picture in the panic. No frame assertion anywhere in the suite
+can see either: the picture a fallthrough draws, its path and its pixel counts are exactly what the same
+camera produces when it is asked for legitimately, so the only observable is whether the call answers with a
+result or with a refusal. Both reverted and the suite re-run green afterwards.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
@@ -685,7 +720,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 45 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a render follows the state and refuses a `view` it cannot name, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 46 tests |
 
 ## Migration from current code
 

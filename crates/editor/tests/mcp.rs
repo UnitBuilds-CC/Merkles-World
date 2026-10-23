@@ -423,6 +423,59 @@ fn an_unknown_view_names_the_six_it_knows_and_a_oversized_frame_is_refused() {
 }
 
 #[test]
+fn a_view_that_is_not_a_string_is_refused_rather_than_read_as_no_view_at_all() {
+    let mut state = fresh();
+    // The hazard is not a missing argument. Beside a complete custom camera, a `view` the tool cannot name
+    // used to fall into the custom arm and answer with a picture from an angle nobody asked for, filed under
+    // that camera's own name — which is the disagreement this pipe refuses everywhere else.
+    let camera = json!({
+        "yaw": core::f32::consts::PI, "pitch": 0.12, "distance": 6.0,
+        "width": 32, "height": 24,
+    });
+    for offered in [
+        json!(0),
+        json!(true),
+        json!(["front"]),
+        json!({ "name": "front" }),
+        // `null` is offered-and-failed rather than absent — the same reading `route` and `keep` give it, and
+        // the schema publishes `"type": "string"`.
+        Value::Null,
+    ] {
+        let mut arguments = camera.as_object().expect("a camera object").clone();
+        arguments.insert("view".to_string(), offered.clone());
+        let (message, refused) = try_call(&mut state, "render_view", Value::Object(arguments));
+        assert!(
+            refused,
+            "a render_view handed {offered} as its view answered by rendering: {message}"
+        );
+        for name in mcp::VIEWS.iter().map(|(v, ..)| *v) {
+            assert!(
+                message.contains(name),
+                "the refusal should name the views that do work, and {name} is missing from: {message}"
+            );
+        }
+        assert!(
+            message.contains("Leave \"view\" off entirely"),
+            "the refusal does not say how to get the custom camera it is describing: {message}"
+        );
+    }
+
+    // Absence is the only spelling that steers, and the reply says which arm it took rather than leaving the
+    // caller to infer it.
+    let steered = call(&mut state, "render_view", camera.clone());
+    assert_eq!(steered["view"], json!("custom"));
+    assert_eq!(steered["undrawn_pixels"], json!(0));
+    assert!(
+        steered["path"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("custom-"),
+        "the file should be named for the camera it came from: {}",
+        steered["path"]
+    );
+}
+
+#[test]
 fn save_entity_writes_where_it_is_told_and_refuses_to_guess() {
     let mut state = fresh();
     call(

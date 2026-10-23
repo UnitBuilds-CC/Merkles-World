@@ -1089,14 +1089,16 @@ fn render_view(state: &EditorState, arguments: &Value) -> Result<Value, String> 
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    let (name, yaw, pitch, distance) = match arguments.get("view").and_then(Value::as_str) {
-        Some(name) => {
+    let (name, yaw, pitch, distance) = match arguments.get("view") {
+        // A view named by one of the six.
+        Some(Value::String(name)) => {
             let (_, yaw, pitch, distance) = VIEWS
                 .iter()
-                .find(|(view, ..)| *view == name)
+                .find(|(view, ..)| *view == name.as_str())
                 .ok_or_else(|| {
                     format!(
-                        "no view {name:?}; the names are {}",
+                        "no view {:?}; the names are {}",
+                        name.as_str(),
                         VIEWS
                             .iter()
                             .map(|(v, ..)| format!("{v:?}"))
@@ -1104,14 +1106,29 @@ fn render_view(state: &EditorState, arguments: &Value) -> Result<Value, String> 
                             .join(", ")
                     )
                 })?;
-            (name, *yaw, *pitch, *distance)
+            (name.as_str(), *yaw, *pitch, *distance)
         }
+        // Absent is the caller saying "I steer". A `view` of any other type — `null` included, exactly as
+        // `route` and `keep` refuse it — *is* an offered name that failed to be one, and answering it by
+        // rendering the yaw/pitch/distance camera instead would hand back a picture from an angle the caller
+        // never asked for, under a filename naming that camera.
         None => (
             "custom",
             number(arguments, "yaw")?,
             number(arguments, "pitch")?,
             number(arguments, "distance")?,
         ),
+        Some(offered) => {
+            return Err(format!(
+                "\"view\" must be one of {}; it is {offered}. Leave \"view\" off entirely to steer by \
+                 `yaw`, `pitch` and `distance`.",
+                VIEWS
+                    .iter()
+                    .map(|(v, ..)| format!("{v:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
     };
 
     let def = &state.entity_def;
