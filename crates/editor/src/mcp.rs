@@ -897,41 +897,55 @@ fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
         shape_path::summary(gone),
         route_name(tree, &steps),
     );
-    const NO_STEPS: &[Step] = &[];
-    // Where the survivor goes, and what it is.
-    let (parent_path, survivor_path) = match steps.split_last() {
-        // A node below the root goes with the combinator that held it, and that combinator's other
-        // operand takes its place.
-        Some((&last, parent_path)) => {
-            let parent =
-                shape_path::resolve(tree, parent_path).expect("route_of walked through here");
-            if shape_path::children(parent).len() != 2 {
-                let wrapper = shape_path::kind(parent);
-                return Err(format!(
-                    "{} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. \
-                     Delete the {wrapper} itself from its own parent, or set its parameter.",
-                    gone_route.as_str().unwrap_or(route.as_str())
-                ));
+    // Where the survivor goes, what it is reached by, and where the selection lands.
+    let (slot_path, survivor_path, select_path) = if shape_path::children(gone).len() == 1 {
+        // A one-child wrapper is deleted by *unwrapping* it: the node it held takes the wrapper's place, at
+        // any depth. This is the exact inverse of `add_part`'s wrapper gesture, and it is not root-only
+        // because a `Repeat` wrapped inside a `Mirror` was otherwise only ever removable together with the
+        // `Mirror` over it. The route the wrapper held still names a node after the call — the promoted
+        // child — so the selection stays on it rather than retreating to `root`.
+        (
+            steps.clone(),
+            [steps.as_slice(), &[Step::Sole]].concat(),
+            steps.clone(),
+        )
+    } else {
+        match steps.split_last() {
+            // A node below the root goes with the combinator that held it, and that combinator's other
+            // operand takes its place.
+            Some((&last, parent_path)) => {
+                let parent =
+                    shape_path::resolve(tree, parent_path).expect("route_of walked through here");
+                if shape_path::children(parent).len() != 2 {
+                    let wrapper = shape_path::kind(parent);
+                    return Err(format!(
+                        "{} is {wrapper}'s only child; deleting it would leave a {wrapper} holding nothing. \
+                         Delete the {wrapper} at \"{}\" instead — that takes the wrapper out and leaves this \
+                         node where it is — or set this node's parameter.",
+                        gone_route.as_str().unwrap_or(route.as_str()),
+                        route_name(tree, parent_path).as_str().unwrap_or("root")
+                    ));
+                }
+                let survivor_step = if last == Step::First {
+                    Step::Second
+                } else {
+                    Step::First
+                };
+                (
+                    parent_path.to_vec(),
+                    [parent_path, &[survivor_step]].concat(),
+                    Vec::new(),
+                )
             }
-            let survivor_step = if last == Step::First {
-                Step::Second
-            } else {
-                Step::First
-            };
-            (parent_path, [parent_path, &[survivor_step]].concat())
-        }
-        // The root is its own holder, so deleting it leaves nothing only when what it holds cannot stand
-        // alone: a `Mirror` or `Repeat` at the root can be deleted, and its child becomes the tree. A
-        // two-operand root cannot, because one operand of a `Union` is not a shape.
-        None => {
-            if shape_path::children(tree).len() != 1 {
+            // A root that is not a one-child wrapper cannot be deleted: one operand of a `Union` is not a
+            // shape, and a root leaf would leave the editor holding nothing at all.
+            None => {
                 return Err(
                     "\"root\" is the whole entity — deleting it leaves an editor holding nothing; delete \
                      its parts until the tree is the one you want"
                         .to_string(),
                 );
             }
-            (NO_STEPS, vec![Step::Sole])
         }
     };
     let survivor = shape_path::resolve(tree, &survivor_path)
@@ -939,19 +953,19 @@ fn delete_part(state: &mut EditorState, arguments: &Value) -> Result<Value, Stri
         .clone();
 
     let mut candidate = tree.clone();
-    *shape_path::resolve_mut(&mut candidate, parent_path).expect("route_of walked through here") =
+    *shape_path::resolve_mut(&mut candidate, &slot_path).expect("route_of walked through here") =
         survivor;
-    // The paths below the collapsed combinator have all shifted, so nothing the caller had selected can
-    // be trusted to still mean what it meant: the selection goes back to the root rather than being kept
-    // as a path into an unrelated node.
-    let before = commit(state, candidate, Vec::new())?;
+    // The paths below a collapsed combinator have all shifted, so nothing the caller had selected can be
+    // trusted to still mean what it meant and the selection goes back to the root; an unwrap leaves every
+    // route outside the wrapper alone, so it lands on the promoted node.
+    let before = commit(state, candidate, select_path)?;
     let snapshot = state_json(state);
-    let now = shape_path::resolve(&state.entity_def.shape, parent_path)
-        .expect("the survivor took its parent's place in the tree");
+    let now = shape_path::resolve(&state.entity_def.shape, &slot_path)
+        .expect("the survivor took the slot this deletion named");
     Ok(json!({
         "deleted": { "route": gone_route, "kind": gone_kind, "summary": gone_summary },
         "its_parent": {
-            "route": route_name(&state.entity_def.shape, parent_path),
+            "route": route_name(&state.entity_def.shape, &slot_path),
             "replaced_by": shape_path::kind(now),
             "summary": shape_path::summary(now),
         },

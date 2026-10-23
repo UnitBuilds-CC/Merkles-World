@@ -264,7 +264,7 @@ Eleven tools:
 | `select_part` | a route as `editor_state` prints it (`root`, `root.b`, `root.b.kept`) in, the node's kind, summary and parameter list out. Selecting is not editing: it marks nothing dirty and leaves `preview_signature` alone |
 | `set_part` | one authored field of one node — a `Sphere`'s `r` or `centre`, a `RoundedBox`'s `half` or `r`, a `Plane`'s `normal` or `offset`, a `SmoothUnion`'s `k`, a `Repeat`'s `period`, a `Mirror`'s `axis` — with the route optional: without one it writes the node the editor already holds selected |
 | `add_part` | grows the tree one of two ways. `Union`, `Subtract`, `Intersect` or `SmoothUnion` wraps the node a route names in that combinator, joined to a leaf authored on the call (`shape` as `{"kind": "Sphere", "r": 0.4, "centre": [...]}`), and `keep` says which slot the existing node stays in. `Mirror` or `Repeat` wraps it alone — no `shape`, no `keep`, and the wrapper's own `axis` or `period` beside `combine`, from the same table `set_part` writes. `route` optional: without one it wraps the selected node |
-| `delete_part` | a route in, the node out. A two-operand combinator cannot hold one operand, so its surviving operand takes the combinator's place and the tree loses two nodes; the selection goes back to `root`, because every path under a collapse now means something else. `root` itself goes only when it holds one node: deleting a root `Mirror` unwraps the tree |
+| `delete_part` | a route in, the node out. A one-child wrapper goes by **unwrapping**, at any depth: the node it held takes the wrapper's place, the subtree below it comes along, and the selection stays on the route the wrapper held because that route still names a node — the promoted one. A two-operand combinator cannot hold one operand, so there its surviving operand takes the combinator's place, the tree loses two nodes, and the selection goes back to `root`, because every path under a collapse now means something else. Deleting the sole child of a wrapper is refused, and the refusal names the route that wrapper actually holds as the call that works |
 | `move_part` | two routes in, both ends out. It is an **exchange**, not a reparent: the node at `from` and the node at `to` trade places, every other route keeps resolving to the same node it did, and `node_count` is unchanged. Refused: a pair on one line from the root (one holds the other, so one write would land inside the other and a subtree would be lost rather than moved), `root` as either end for the same reason, the same route twice, and two routes holding identical content — an exchange of equals moves nothing |
 | `render_view` | marches the current state, writes a PNG to the temp dir, returns the path and the pixel counts |
 | `save_entity` | writes where it is told to. It refuses to default the path, because the path it would default to is `assets/entities/pig.ron` — the engine's own input |
@@ -311,8 +311,10 @@ Ten of those decisions are about honesty rather than features:
   honest *add* is a new wrapper around the node the route names. The reply then reads both slots back out
   of the tree it left (`kept` and `added`, each with its route, kind and summary), so `Subtract.kept`
   versus `Subtract.cutter` — a hole and an animal — is stated, not implied. `delete_part` answers with the
-  node it removed *and* the combinator that held it, and resets the selection to `root`: a path kept across
-  a collapse would edit some unrelated node.
+  node it removed *and* the combinator that held it. Over a collapse it resets the selection to `root`: a
+  path kept across a collapse would edit some unrelated node. Over an unwrap it keeps the selection where it
+  is, because the route the wrapper held still names a node — the one promoted into its place — and an
+  author who was editing a part before deleting its `Mirror` expects to still be editing that part after.
 - **Moving is exchanging, and `root` is not a destination.** For the same reason there is no free slot to
   fill, there is no slot to *put* a node into — the only total move between two routes is a swap, where each
   end takes the other's content. A swap keeps every route outside the two ends resolving to the node it
@@ -329,9 +331,10 @@ Ten of those decisions are about honesty rather than features:
   handed a `shape` or a `keep` instead of quietly dropping the argument the caller did not need, and asks
   for `axis` or `period` the way it asks a `SmoothUnion` for `k` — beside `combine`, validated against the
   same published range. Its reply reports the wrapper at the route the caller named and the node now held
-  one level below it, because the wrapped node kept its route and gained a prefix. The inverse is why
-  `delete_part` can delete a root that holds one node: without it, wrapping the root would be the one edit
-  in this pipe an author cannot take back.
+  one level below it, because the wrapped node kept its route and gained a prefix. The inverse is
+  `delete_part` taking a one-child wrapper out by unwrapping it, wherever it sits: without it, wrapping a
+  node would be the one edit in this pipe an author cannot take back, and the only way out of a `Repeat`
+  under a `Mirror` was deleting the `Mirror` over it and everything else it held.
 - **A `Repeat` tiles its fold cell, not the part.** The compiler folds the *query point* into
   `[-period/2, period/2)` on every axis before the child is evaluated (`render::wrap`, transcribed
   identically in `interp.wgsl`), so the copies are of whatever the child has inside that cell — not of the
@@ -360,8 +363,10 @@ refuse in the same voice: `add_part` with `keep: "hole"` answers `Subtract has n
 "kept", "cutter"`, a shape field spelled `radious` is refused with the two a `Sphere` does take, a half
 `Sphere` missing `centre` is refused by name, a `Mirror` with no `axis` is refused with the one field it
 takes and its range, an `axis` of `1.5` is refused as a whole choice and one of `3` as outside `0..=2`, a
-`Mirror` handed a `shape` is refused because it joins nothing, and `delete_part` on a `Mirror`'s child says
-which wrapper would be left holding nothing and names the node to delete instead.
+`Mirror` handed a `shape` is refused because it joins nothing, and `delete_part` on a wrapper's only child
+says which wrapper would be left holding nothing and names the route that wrapper holds — `root.child` for a
+`Repeat` under a `Mirror`, not the `root` that is the `Mirror` — because advice that points at the wrong node
+is a dead end wearing the shape of a refusal.
 
 The six angles come from `mcp::VIEWS`, one table of `(name, yaw, pitch, distance)` that
 `examples/render_png` now reads as well; two lists of the same six would drift, and a reader handed "the
@@ -373,14 +378,15 @@ What the pipe still does **not** do: it can exchange two routes but it cannot *r
 lifts a finished subtree out and grafts it under a different parent while the tree stays whole, because
 there is no slot to hold a node in transit. A symmetric creature is still authored by building one side and
 wrapping it in a `Mirror`, which is what the shipped pig's tree does; `move_part` rearranges two parts that
-already have parents. Nor can it undo one wrapper from inside another: deleting the sole child of a `Mirror`
-or `Repeat` would leave that wrapper holding nothing, so the smallest deletion there is the wrapper together
-with everything it holds, and a `Repeat` nested under a `Mirror` can only come out with the `Mirror` over it.
+already have parents. The one thing a wrapper's sole child still cannot do is go away by itself — deleting it
+would leave the wrapper holding nothing, which is the grammar's refusal rather than this pipe's — and since
+increment 7 the answer to that is one call, not a subtree: the wrapper over it unwraps wherever it sits, so a
+`Repeat` inside a `Mirror` comes out and leaves the `Mirror` standing.
 Material fields other than `base_color` are read by no shader
 (see the `authored_but_not_shaded` block `editor_state` prints), so `list_materials` reports them and
 setting them changes no pixel.
 
-`crates/editor/tests/mcp.rs` is 39 tests — the handshake and a notification's silence, a schema and an
+`crates/editor/tests/mcp.rs` is 45 tests — the handshake and a notification's silence, a schema and an
 answer for every claimed tool, protocol errors kept distinct from tool failures, the shipped pig's tree
 and the five material fields no shader reads, a broken file, a refused edit that moves nothing followed
 by a real one that moves `preview_signature`, the two pixel counts, an unknown view naming the six that
@@ -452,6 +458,28 @@ hardcoding the number; and the picture two operands make, which is a `Subtract` 
 `Union`'s operands are commutative and its frame would look identical however they were swapped — a sphere
 biting a sphere, then the bite exchanged into a crescent, both frames positive, both below their
 `total_pixels`, both with zero undrawn pixels and different paths against the signature the move returned.
+Increment 7 adds six, and they all sit on the inverse of the wrap gesture. A `Repeat` wrapped inside a
+`Mirror` comes out on its own: `delete_part` on `root.child` unwraps it, the `Union` it held takes that route,
+and the whole subtree below is required to arrive content for content — every node's authored fields compared
+against the parts list captured *before* the call, sorted so the order a combinator's children print in cannot
+be what the assertion is actually checking — with the node count down by exactly one, `its_parent.replaced_by`
+naming the promoted kind, `its_parent.route` still `root.child`, the selection left on `root.child` rather than
+retreating, and the result compiling out of the file it saves. Wrapping a route and deleting that wrapper is
+required to be the identity at that depth — same `preview_signature`, same per-route fingerprints, same node
+count — and a `set_part` through the re-opened route proves the node underneath is the one that went in, not a
+copy of its slot. A wrapper under a wrapper comes out one at a time, from both ends: `Mirror{Repeat{Sphere}}`
+loses the `Repeat` and keeps the `Mirror`, then loses the `Mirror` and keeps the sphere, and only then does
+`delete_part` on `root` answer that the whole entity cannot go; the same two kinds stacked the other way
+unwraps its inner `Mirror` and leaves a `Repeat` holding the sphere with its radius intact. The refusal that
+survives is the one for a node that is *not* a wrapper sitting under one that is, and it is tested as advice
+rather than as text: it quotes the wrapper's own route, and making the call it names is required to succeed and
+to leave the refused node exactly where it stood. And because a `Repeat` draws the tiles of its fold cell, the
+frame is measured across the unwrap rather than the tree alone — a 0.15 sphere at x = 0.3 inside a period-1.2
+cell under a `Mirror` must show tiled surface (positive, and below a `total_pixels` the test first requires to
+be un-saturated, with zero undrawn), and taking the `Repeat` out must leave strictly less of it while the frame
+still refuses nothing. That fixture was authored twice: a 1.0 sphere in a 1.6 cell measured **72** tiled
+against **709** unwrapped, because the cell clips the part it tiles and the big sphere was mostly outside it —
+a frame that grows when a node is deleted is the test failing, not the editor.
 
 Each of those checks was run against a planted defect in the clause it is meant to police, on this machine,
 and each plant is recorded with the one test it named: dropping `assetc::lower` from `commit` named the
@@ -489,6 +517,23 @@ a combinator are told apart by the number beside the route; and writing the cand
 `commit`'s compile named only the cap test — the row that says the exchange path really does go through the
 gate the other two structural tools use. Every plant was
 reverted and the suite re-run green afterwards.
+Increment 7's plants are recorded one by one, because the sixth of them is the reason the increment has a
+sixth test: allowing the unwrap only at the root (adding `&& steps.is_empty()` to the one-child condition)
+named the four nested-unwrap tests; retreating the selection to `root` from the unwrap arm named the two rows
+that assert `selected` is the promoted route; resolving the survivor one level too deep (`[Sole, Sole]`, the
+child's child rather than the child) named all six unwrap rows including the two root ones, since the slot it
+writes is one the wrapper's grandchild may not exist in; making the rule `Mirror`-only instead of
+one-child-any-kind named exactly the four rows that carry a `Repeat` and left every `Mirror` row green, which
+is the difference between a rule and a kind being what the suite polices; and deleting the parent-wrapper guard
+from the refusal arm named the two refusal rows — including the older one, `a_node_that_cannot_be_deleted_says_why_and_leaves_the_tree_alone`,
+which panics at the slot the guard used to refuse rather than answering with a sentence. The sixth plant was
+the one worth the round trip: writing `"root"` where the message interpolates the wrapper's own route passed
+the suite at 44 **green**. It is not a cosmetic slip — in `Mirror{Repeat{Sphere}}` it tells the author to
+delete the `Repeat` *at the root*, and the root is the `Mirror`, so following the advice takes out a different
+node than the one in the way. The row that cannot see it is a hole, so increment 7 carries a test for it:
+`a_nested_wrappers_refusal_names_the_wrapper_where_it_actually_is` asserts the quoted route is `root.child` and
+requires that the message not say `at "root"`, and re-running the plant against 45 named that one row and
+nothing else. Every plant was reverted and the suite re-run green afterwards.
 
 The dumps live in `temp_dir` (§6), and the march is the CPU reference, so what it prints describes
 authoring and never a frame budget (§7): the 64×48 front view of the 36-node `pig.ron` measured 494 ms in
@@ -640,7 +685,7 @@ waiting:
 | E4 | Entity state persists across save/load (ledger round-trip) | Persistence test |
 | E5 | Compiled entity `.bin` is deterministic across platforms (byte-identical) | AS2 gate for entities |
 | E6 | Over-budget entity (>64 nodes) rejected by `assetc` with span-accurate error | Validation test |
-| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed and exchanged with another route only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 39 tests |
+| E7 | An agent reaches the same state the window edits over MCP, with no window, device or human: refusals refuse, a part is editable by route inside the same limits the panel's sliders offer, a node is added, wrapped, removed — a wrapper at any depth taken out by unwrapping what it holds — and exchanged with another route only in a tree `assetc::lower` still compiles, a render follows the state, and the transport answers on a pipe | `crates/editor/tests/mcp.rs` — 45 tests |
 
 ## Migration from current code
 

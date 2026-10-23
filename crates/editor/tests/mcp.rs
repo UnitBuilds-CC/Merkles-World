@@ -2977,3 +2977,439 @@ fn exchanging_a_subs_two_halves_turns_a_bite_into_a_crescent() {
         crescent,
     );
 }
+
+#[test]
+fn deleting_a_nested_wrapper_unwraps_it_and_carries_the_subtree_it_held() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.4, 0.0, 0.0] }),
+    );
+    // What the wrapper holds is a subtree rather than a leaf, so this measures whether the unwrap carries
+    // all of it up one level or only the node immediately inside the wrapper.
+    call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Union", "keep": "a",
+                "shape": { "kind": "Sphere", "r": 0.2, "centre": [0.9, 0.0, 0.0] } }),
+    );
+    call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Repeat", "period": 1.2 }),
+    );
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 0 }),
+    );
+    let before_parts = wrapped["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(part_at(&before_parts, "root")["kind"], json!("Mirror"));
+    assert_eq!(
+        part_at(&before_parts, "root.child")["kind"],
+        json!("Repeat")
+    );
+    assert_eq!(
+        part_at(&before_parts, "root.child.child")["kind"],
+        json!("Union")
+    );
+    assert_eq!(
+        before_parts.len(),
+        5,
+        "the fixture is not the tree the unwrap is meant to act on: {before_parts:?}"
+    );
+    // The wrapper's subtree, node for node, counted from the node it holds.
+    let mut held = vec![content_of(part_at(&before_parts, "root.child.child"))];
+    held.extend(contents_under(&before_parts, "root.child.child"));
+    held.sort();
+
+    let deleted = call(&mut state, "delete_part", json!({ "route": "root.child" }));
+    assert_eq!(deleted["deleted"]["kind"], json!("Repeat"));
+    assert_eq!(
+        deleted["node_count"].as_u64().expect("a count") + 1,
+        deleted["nodes_before"].as_u64().expect("a count"),
+        "unwrapping removes the wrapper and nothing else: {}",
+        deleted["node_count"]
+    );
+    let after_parts = deleted["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    // The wrapper's own route now names the node it held — the survivor moved up one level, and the route
+    // it moved up to is the one the caller deleted.
+    assert_eq!(deleted["its_parent"]["route"], json!("root.child"));
+    assert_eq!(deleted["its_parent"]["replaced_by"], json!("Union"));
+    let mut carried = vec![content_of(part_at(&after_parts, "root.child"))];
+    carried.extend(contents_under(&after_parts, "root.child"));
+    carried.sort();
+    assert_eq!(
+        carried, held,
+        "the unwrap promoted the node inside the wrapper and left the rest of that node's subtree behind"
+    );
+    assert_eq!(part_at(&after_parts, "root")["kind"], json!("Mirror"));
+    assert_eq!(
+        deleted["selected"],
+        json!("root.child"),
+        "the selection should follow the node that was promoted, not retreat from a route that still means it"
+    );
+    // Nothing outside the wrapper survives by luck: the Mirror kept its axis and the tree is one node
+    // shorter by exactly the wrapper.
+    assert_eq!(
+        part_at(&after_parts, "root")["summary"],
+        part_at(&before_parts, "root")["summary"],
+        "the wrapper over the one that came out moved"
+    );
+    assert!(!after_parts
+        .iter()
+        .any(|part| route_of(part).starts_with("root.child.child.child")));
+    assert!(deleted["state"]["dirty"].as_bool().expect("a flag"));
+    assert_ne!(
+        deleted["preview_signature"], wrapped["preview_signature"],
+        "a node was removed and the preview key did not move"
+    );
+
+    let saved = temp_path("incr7_unwrap.ron");
+    call(
+        &mut state,
+        "save_entity",
+        json!({ "path": saved.to_string_lossy() }),
+    );
+    let mut reloaded = fresh();
+    call(
+        &mut reloaded,
+        "load_entity",
+        json!({ "path": saved.to_string_lossy() }),
+    );
+    let read = call(&mut reloaded, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&read["parts"]),
+        fingerprints(&deleted["state"]["parts"]),
+        "the file reads back as a different tree than the unwrap reported"
+    );
+    assert_eq!(read["dirty"], json!(false));
+    // And it is a tree the compiler accepts, not only one the editor is holding.
+    assetc::compile_entity(&reloaded.entity_def)
+        .expect("the tree an unwrap left cannot compile into an asset");
+    let _ = std::fs::remove_file(saved);
+}
+
+#[test]
+fn wrapping_and_unwrapping_the_same_route_is_the_identity_at_any_depth() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.4, 0.0, 0.0] }),
+    );
+    let mirrored = call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 1 }),
+    );
+    // The nested case: wrap the node *inside* the Mirror, at a route that is not the root.
+    let nested = call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root.child", "combine": "Repeat", "period": 0.9 }),
+    );
+    assert_eq!(
+        nested["node_count"].as_u64().expect("a count"),
+        mirrored["node_count"].as_u64().expect("a count") + 1,
+        "the nested wrap did not add its one node: {}",
+        nested["state"]
+    );
+
+    let undone = call(&mut state, "delete_part", json!({ "route": "root.child" }));
+    assert_eq!(
+        undone["preview_signature"], mirrored["preview_signature"],
+        "wrapping a route and deleting the wrapper left a different entity than the one the wrap started from"
+    );
+    assert_eq!(
+        fingerprints(&undone["state"]["parts"]),
+        fingerprints(&mirrored["state"]["parts"]),
+        "the unwrap changed a node it should not have touched"
+    );
+    assert_eq!(
+        undone["node_count"], mirrored["node_count"],
+        "the node count did not come back"
+    );
+
+    // The promoted node is still the editor's own part: reachable, selectable, editable through its route.
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root.child", "parameter": "r", "value": 0.35 }),
+    );
+    let now = call(&mut state, "editor_state", json!({}));
+    let now_parts = now["parts"].as_array().expect("a list").clone();
+    assert_eq!(part_at(&now_parts, "root.child")["kind"], json!("Sphere"));
+    assert!(
+        part_at(&now_parts, "root.child")["summary"]
+            .as_str()
+            .expect("a summary")
+            .starts_with("r 0.35"),
+        "the radius edit did not land on the node the unwrap promoted: {}",
+        part_at(&now_parts, "root.child")["summary"]
+    );
+}
+
+#[test]
+fn a_wrapper_under_a_wrapper_comes_out_one_at_a_time() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.4, 0.0, 0.0] }),
+    );
+    call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Repeat", "period": 1.1 }),
+    );
+    let stacked = call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 2 }),
+    );
+    let stacked_parts = stacked["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(stacked["node_count"], json!(3));
+    let sphere = content_of(part_at(&stacked_parts, "root.child.child"));
+
+    let inner = call(&mut state, "delete_part", json!({ "route": "root.child" }));
+    assert_eq!(inner["node_count"], json!(2));
+    let middle_parts = inner["state"]["parts"].as_array().expect("a list").clone();
+    assert_eq!(part_at(&middle_parts, "root")["kind"], json!("Mirror"));
+    assert_eq!(content_of(part_at(&middle_parts, "root.child")), sphere);
+
+    // And the root wrapper the same rule already allowed: one at a time, until the tree is the leaf.
+    let outer = call(&mut state, "delete_part", json!({ "route": "root" }));
+    assert_eq!(outer["node_count"], json!(1));
+    let last_parts = outer["state"]["parts"].as_array().expect("a list").clone();
+    assert_eq!(last_parts.len(), 1, "a leaf should be the whole list");
+    assert_eq!(content_of(&last_parts[0]), sphere);
+    assert_eq!(outer["selected"], json!("root"));
+
+    // The leaf that came out of two unwraps is the entity, so it cannot itself be deleted.
+    let (message, refused) = try_call(&mut state, "delete_part", json!({ "route": "root" }));
+    assert!(refused, "the last node was deleted: {message}");
+    assert!(
+        message.contains("the whole entity"),
+        "deleting a root leaf refused without saying why: {message}"
+    );
+
+    // The other nesting order, because the rule is about the node being deleted and not about which
+    // wrapper it is: a `Mirror` inside a `Repeat` has to come out the same way.
+    let mut other = fresh();
+    call(
+        &mut other,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.4, 0.0, 0.0] }),
+    );
+    call(
+        &mut other,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 1 }),
+    );
+    let swapped = call(
+        &mut other,
+        "add_part",
+        json!({ "route": "root", "combine": "Repeat", "period": 1.3 }),
+    );
+    let before_swap = swapped["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(part_at(&before_swap, "root")["kind"], json!("Repeat"));
+    assert_eq!(part_at(&before_swap, "root.child")["kind"], json!("Mirror"));
+    let inner = call(&mut other, "delete_part", json!({ "route": "root.child" }));
+    assert_eq!(inner["deleted"]["kind"], json!("Mirror"));
+    assert_eq!(inner["node_count"], json!(2));
+    let after_swap = inner["state"]["parts"].as_array().expect("a list").clone();
+    assert_eq!(part_at(&after_swap, "root")["kind"], json!("Repeat"));
+    assert_eq!(
+        content_of(part_at(&after_swap, "root.child")),
+        content_of(part_at(&before_swap, "root.child.child")),
+        "the sphere that came out of a nested Mirror is not the one that went in"
+    );
+    assert_eq!(inner["selected"], json!("root.child"));
+    assetc::compile_entity(&other.entity_def).expect("the unwrapped Repeat cannot compile");
+}
+
+#[test]
+fn the_refusal_for_a_wrappers_child_names_the_call_that_actually_works() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.4, 0.0, 0.0] }),
+    );
+    let wrapped = call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 0 }),
+    );
+    let before_parts = wrapped["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    let sphere = content_of(part_at(&before_parts, "root.child"));
+
+    let (message, refused) = try_call(&mut state, "delete_part", json!({ "route": "root.child" }));
+    assert!(refused, "a Mirror's only child was deleted: {message}");
+    assert!(
+        message.contains("only child"),
+        "the refusal does not say what would be left holding nothing: {message}"
+    );
+    assert!(
+        message.contains("Mirror") && message.contains("\"root\""),
+        "the refusal does not name the wrapper and the route that would take it out: {message}"
+    );
+    let untouched = call(&mut state, "editor_state", json!({}));
+    assert_eq!(
+        fingerprints(&untouched["parts"]),
+        fingerprints(&wrapped["state"]["parts"]),
+        "a refused delete changed the tree"
+    );
+
+    // Follow the advice. A refusal an author cannot act on is a dead end, not a refusal.
+    let unwrapped = call(&mut state, "delete_part", json!({ "route": "root" }));
+    assert_eq!(unwrapped["node_count"], json!(1));
+    let after_parts = unwrapped["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(content_of(part_at(&after_parts, "root")), sphere);
+}
+
+#[test]
+fn a_nested_wrappers_refusal_names_the_wrapper_where_it_actually_is() {
+    let mut state = fresh();
+    call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 0 }),
+    );
+    let twice = call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root.child", "combine": "Repeat", "period": 1.2 }),
+    );
+    // Mirror { Repeat { Sphere } }: the sphere the author is trying to delete sits two levels down, and the
+    // wrapper that would refuse it is `root.child`, not `root`.
+    let before_parts = twice["state"]["parts"].as_array().expect("a list").clone();
+    assert_eq!(part_at(&before_parts, "root")["kind"], json!("Mirror"));
+    assert_eq!(
+        part_at(&before_parts, "root.child")["kind"],
+        json!("Repeat")
+    );
+    let sphere = content_of(part_at(&before_parts, "root.child.child"));
+
+    let (message, refused) = try_call(
+        &mut state,
+        "delete_part",
+        json!({ "route": "root.child.child" }),
+    );
+    assert!(refused, "a Repeat's only child was deleted: {message}");
+    assert!(
+        message.contains("only child") && message.contains("Repeat"),
+        "the refusal does not say which wrapper would be left holding nothing: {message}"
+    );
+    assert!(
+        message.contains("\"root.child\""),
+        "the refusal does not name the route the wrapper actually holds, so the call it suggests is \
+         one the caller cannot make: {message}"
+    );
+    assert!(
+        !message.contains("at \"root\" "),
+        "the refusal sends the caller to the root, which is the Mirror over the whole thing and not the \
+         wrapper in the way: {message}"
+    );
+
+    // Follow the advice: the named route is the call that works, and it leaves the sphere exactly where it
+    // stands inside the Mirror.
+    let unwrapped = call(&mut state, "delete_part", json!({ "route": "root.child" }));
+    assert_eq!(unwrapped["deleted"]["kind"], json!("Repeat"));
+    assert_eq!(unwrapped["node_count"], json!(2));
+    let after_parts = unwrapped["state"]["parts"]
+        .as_array()
+        .expect("a list")
+        .clone();
+    assert_eq!(part_at(&after_parts, "root")["kind"], json!("Mirror"));
+    assert_eq!(content_of(part_at(&after_parts, "root.child")), sphere);
+    assert_eq!(unwrapped["selected"], json!("root.child"));
+    assetc::compile_entity(&state.entity_def)
+        .expect("the tree the refusal sent the caller to compiles");
+}
+
+#[test]
+fn unwrapping_a_repeat_out_of_a_mirror_loses_the_tiles_it_drew() {
+    let mut state = fresh();
+    // The part has to sit wholly inside the fold cell, because a `Repeat` clips its child to the cell and
+    // then tiles it: an r-1.0 sphere in a period-1.6 cell draws *less* than the sphere alone, which is the
+    // trap the first draft of this test fell into when it measured 72 tiled against 709 unwrapped. A 0.15
+    // sphere at x = 0.3 spans 0.15 to 0.45 and is entirely inside -0.6 to 0.6, so every copy is a whole one.
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "r", "value": 0.15 }),
+    );
+    call(
+        &mut state,
+        "set_part",
+        json!({ "route": "root", "parameter": "centre", "value": [0.3, 0.0, 0.0] }),
+    );
+    call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Repeat", "period": 1.2 }),
+    );
+    call(
+        &mut state,
+        "add_part",
+        json!({ "route": "root", "combine": "Mirror", "axis": 0 }),
+    );
+    let view = json!({
+        "yaw": core::f32::consts::PI, "pitch": 0.12, "distance": 6.0,
+        "width": 96, "height": 72, "stage": false,
+    });
+    let tiled = call(&mut state, "render_view", view.clone());
+    let tiled_surface = tiled["surface_pixels"].as_u64().expect("a count");
+    assert!(
+        tiled_surface > 0 && tiled_surface < tiled["total_pixels"].as_u64().expect("a count"),
+        "the tiled frame is blank or saturated, so a smaller frame after the unwrap would prove nothing: \
+         {tiled_surface} of {}",
+        tiled["total_pixels"]
+    );
+    assert_eq!(tiled["undrawn_pixels"], json!(0));
+
+    let undone = call(&mut state, "delete_part", json!({ "route": "root.child" }));
+    let alone = call(&mut state, "render_view", view);
+    assert_eq!(
+        alone["preview_signature"], undone["preview_signature"],
+        "the frame rendered is not the state the unwrap left behind"
+    );
+    assert_ne!(alone["path"], tiled["path"]);
+    assert_eq!(
+        alone["undrawn_pixels"],
+        json!(0),
+        "the march refused to draw the unwrapped frame, which reads the same as an empty one"
+    );
+    let alone_surface = alone["surface_pixels"].as_u64().expect("a count");
+    assert!(
+        alone_surface > 0,
+        "the mirror of one sphere should still draw a sphere, and drew {alone_surface} pixels"
+    );
+    assert!(
+        alone_surface < tiled_surface,
+        "the copy the Repeat was drawing survived the unwrap: {} -> {}",
+        tiled_surface,
+        alone_surface,
+    );
+}
