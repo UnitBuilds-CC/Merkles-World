@@ -8,6 +8,7 @@ pub mod component;
 pub mod manager;
 pub mod material;
 pub mod query;
+pub mod rig;
 
 pub use component::{EntityId, EntityState, Transform, AABB};
 pub use manager::EntityManager;

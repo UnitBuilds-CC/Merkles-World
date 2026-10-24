@@ -221,6 +221,27 @@ four lines of WGSL have no tree to live in, and a walking animal would be a host
 is not hypothetical, it is
 what the AS4 path already does (`600 edits, zero divergences`, each one a re-upload of a rebuilt tree).
 
+**Update the same day, after the fact: the animation half of that framing is now too strong.** A *rigid*
+walking animal turned out to need no new kind. `crates/entity/src/rig.rs` poses a limb by rewriting the
+parameters of the primitives riding it — a sphere's centre is three `f32`s, so a hinge is arithmetic on the
+pool, and the sole plane travels as a rotated normal plus a re-solved `d` — and
+`crates/editor/examples/render_gait.rs` marches eight frames of one stride off a single compile, printing
+`74 nodes` at every phase. Doc 07 § Animation carries the law. So reading (c) below is no longer "locomotion
+is whole-entity motion plus a rebuild per pose"; it is whole-entity motion plus a **parameter patch** per
+pose, which costs the march nothing. What the node is still for narrows to three named things:
+
+- **A per-part *warp*** — a breathing belly, a floppy ear, fat that moves. `rig` poses rigid parts; the
+  surface between them is unchanged, which is precisely the smooth deformation doc 07 chose over skinning.
+- **Turning a primitive that stores no orientation.** A `RoundedBox` has no rotation to write, so it is
+  immobile under a parameter patch; the fifth-pass pig needed a rotated ear slab and got it by intersecting
+  two planes (see the cost bullet below).
+- **Independent phase per side.** The authored leg column is `Mirror`-reflected about X and an X-parallel
+  hinge moves nothing in X, so a pair swings as one — a pace. A diagonal trot needs both sides authored,
+  which is the node-count argument option (b) already makes.
+
+None of that touches the row's own streaming motivation: a placed region still costs a field evaluation per
+region per march step, and that is what the `Placement` arm is primarily for.
+
 **The drafted addition, which is the smallest thing that unblocks it:**
 
 > `NODE_PLACE = 21`, arity `1`. Its parameter run is `[tx, ty, tz, qx, qy, qz, qw, s]` — a translation, a unit

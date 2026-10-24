@@ -914,6 +914,41 @@ authoring and never a frame budget (§7): the 64×48 front view of the then-36-n
 tree's release numbers sit in the paragraph above. A tool's wall time is not R1 evidence in either
 direction.
 
+## Rigging: a pose is a parameter patch
+
+`crates/entity/src/rig.rs` animates an entity without a skeleton, a warp, or a contract change.
+A-07's sphere record stores its centre as three parameters, so a limb authored as a column of spheres
+can be swung by rotating each centre about a hinge, and the plane that cuts a hoof flat travels with it
+as a rotated normal plus a re-solved `d`. `Leg::pose` writes parameters and nothing else: the record
+count, the tree shape and every offset in the pool stay put, which is what makes the difference show up
+in cost rather than in taste — doc 04's march law is `steps × nodes`, so a stride pays parameter writes
+where a per-pose tree rebuild pays a compile and a walk. The full argument, the three laws the instrument
+produced (selection is rest-pose-only; forward kinematics floats the body unless the body carries the
+support; one mirrored leg paces and cannot trot) and what still needs OQ-55 are in
+[doc 07 § Animation](07-physics-audio-animation.md).
+
+- **`select_leg(tree, spec)`** finds a limb geometrically — spheres in a `z` band, split at the knee, the
+  sole plane attached by the limb's own `subtree_len` — and refuses rather than guessing: an empty band, a
+  bone with nothing above or below the knee, a hip inside the flesh it should hide in, a non-unit plane
+  normal. A hand-written list of record indices would be valid at every wrong index and fail silently.
+- **`Gait::angles(phase)`** is a pure function of phase, so an animal is drawable at `t = 3.7` by a peer
+  that never saw `t = 3.6`. Two `f32`s of pose, and no root depends on either (§4: a pose is presentation;
+  the ledger hashes the 12-bit integer payload).
+- **`Leg::support_y`** is the height the limb stands on, which is the sole *cut* where there is one and the
+  widest sphere's bottom where there is not. It exists because the first stride strip floated the animal.
+- **The instrument** is `cargo run --release -p editor --example render_gait`: one compile, eight frames of
+  one stride, each posed tree re-`validate`d, dumped to `temp_dir` as a verification artifact and never as
+  content (§6). It prints `74 nodes` on every row of every phase, which is the claim above in evidence form,
+  and the body drop that keeps a hoof on the grid (`body −0.0079` at maximum reach).
+  `CpuRenderer::render_pose` is the seam that makes it possible: a preview that recompiled each pose would
+  be measuring `assetc`, not the march.
+- **The tests** are `crates/entity/tests/rig.rs`, fourteen of them on a hand-counted eleven-record fixture,
+  and they are rigid invariants — bone lengths, a hoof's constant depth inside its own cut, bytes the
+  identity pose must not touch — rather than asserted `f32` centres.
+  `a_hip_only_swing_carries_the_whole_limb` is the one that names this section's own bug: a knee angle of
+  zero is "the shank keeps its angle to the thigh", not "the shank stays where it was authored", and the
+  first `pose` got that wrong in a way no other test in the file could see.
+
 ## Runtime lifecycle
 
 ### Spawning
@@ -1017,9 +1052,11 @@ crates/entity/
 │   ├── component.rs    # Component traits (Position, Velocity, Health, etc.)
 │   ├── manager.rs      # EntityManager: spawn/despawn/update lifecycle
 │   ├── query.rs        # Spatial queries: nearest, within_radius, frustum_cull
+│   ├── rig.rs          # Poses as parameter patches: joints, legs, gaits (§ Rigging)
 │   └── spawn.rs        # Procedural spawning logic (biome matching, density limits)
 ├── tests/
 │   ├── spawn_despawn.rs    # Lifecycle tests
+│   ├── rig.rs              # Rigid invariants on a hand-counted two-bone fixture
 │   └── spatial_query.rs    # BVH/culling tests
 └── examples/
     └── pig_simulation.rs   # Demo: spawn 10 pigs, simulate movement, measure FPS impact

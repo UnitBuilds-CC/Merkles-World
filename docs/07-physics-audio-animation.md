@@ -110,6 +110,36 @@ only if [OQ-55](13-risks-open-questions.md) is decided in favour of a placement 
 wording is there, and the alternative reading is that locomotion is whole-entity motion plus a
 host-side tree rebuild per pose, which is what the AS4 asset-reupload path already measures.
 
+**Rigid per-part animation exists today, and it is not a warp (2026-10-24).**
+`crates/entity/src/rig.rs` poses a limb by rewriting the parameters of the primitives that ride it.
+A-07's sphere stores its centre as three `f32`s (`params = [r, cx, cy, cz]`, read by the evaluator arm
+in `crates/render/src/lib.rs`), so a two-bone leg is one hinge applied to a column of sphere centres,
+and the sole cut that flattens a hoof travels with its foot as a rotated normal plus a re-solved `d`.
+The reason to prefer this over the paragraph above is a cost, not a taste: **record count, tree shape
+and march budget are unchanged by a pose.** Doc 04's law is `steps × nodes`, so a stride buys
+parameter writes where a tree rebuild per pose — or one walk per placed part — pays a full walk.
+`cargo run --release -p editor --example render_gait` dumps eight frames of one stride and prints the
+node count on every row (74 at every phase for the pig), so the claim is visible rather than asserted.
+
+Three laws that instrument produced:
+
+- **Selection is a rest-pose operation.** `select_leg` is geometric — a column of spheres at an
+  authored `z` — and a swung limb no longer sits at that `z`, so the record indices are taken once from
+  the rest tree and reused for every frame after it.
+- **Forward kinematics floats the animal.** A limb hinged above its own foot raises that foot by
+  `L(1 − cos θ)` at *any* non-zero angle, straight knee or not, so a body that stays put hovers in every
+  frame but stance. `Leg::support_y` reports where a limb stands — the sole *cut*, not the sphere bottom,
+  since the `Intersect` removed everything below it — and the caller keeps a hoof on the floor by moving
+  the body. The first strip had no such line and floated; the frames now print the drop (`body −0.0079`
+  at maximum reach).
+- **One authored leg cannot trot.** The pig's column is `Mirror`-reflected about X, and an X-parallel
+  hinge moves nothing in X, so both sides of a pair are the same records and swing in unison: a **pace**.
+  A diagonal gait needs both sides authored (twice the nodes) or OQ-55's placement node.
+
+What it does not buy: a primitive that stores no orientation cannot be turned by a parameter patch, so a
+`RoundedBox` limb is immobile here, and soft-tissue deformation — a breathing belly, a floppy ear — still
+needs the per-part warp OQ-55 exists to make expressible. `rig` poses rigid parts and nothing else.
+
 **Consequences to watch:**
 - Silhouette-changing animation (a mob opening its mouth wide, a tail swaying far) costs march
   steps, since the SDF gets deeper/branchier. Keep warp amplitudes modest.

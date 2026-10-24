@@ -55,14 +55,6 @@ impl CpuRenderer {
         camera_distance: f32,
         stage: Option<Stage>,
     ) -> Frame {
-        let camera = create_orbit_camera(
-            camera_yaw,
-            camera_pitch,
-            camera_distance,
-            self.width,
-            self.height,
-        );
-
         // A refused lowering draws nothing rather than a guess: an invented sphere in the viewport
         // would be judged as if it were the authored shape. `compile_entity` is the contract's own
         // gate, so a non-unit quaternion or a zero scale is refused here too instead of being ignored.
@@ -75,16 +67,49 @@ impl CpuRenderer {
                 return refused_frame(self.width, self.height);
             }
         };
+        self.render_pose(
+            &compiled.asset.tree,
+            entity_def,
+            materials,
+            camera_yaw,
+            camera_pitch,
+            camera_distance,
+            stage,
+        )
+    }
+
+    /// Render a tree the caller already compiled — and, in [`entity::rig`]'s case, already posed.
+    ///
+    /// The seam exists because a gait rewrites `Tree::params` between frames. A preview that recompiled
+    /// each pose would be measuring `assetc` rather than the march, and a tree built by no compiler at all
+    /// could not be shown; both would hide exactly the cost the instrument is there to reveal. `entity_def`
+    /// supplies the placement and the material, not the geometry.
+    ///
+    /// The one extra argument over [`Self::render_on_stage`] is the point of the seam, not an accident to be
+    /// struct-ed away: folding the camera triple into a type would either make the two siblings spell the
+    /// same thing two ways or rewrite fifteen call sites that pass three floats, neither of which buys a frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_pose(
+        &self,
+        tree: &Tree,
+        entity_def: &EntityDef,
+        materials: &MaterialRegistry,
+        camera_yaw: f32,
+        camera_pitch: f32,
+        camera_distance: f32,
+        stage: Option<Stage>,
+    ) -> Frame {
+        let camera = create_orbit_camera(
+            camera_yaw,
+            camera_pitch,
+            camera_distance,
+            self.width,
+            self.height,
+        );
         let place = Placement::from(entity_def);
 
         let start = std::time::Instant::now();
-        let frame = render_frame(
-            &compiled.asset.tree,
-            &camera,
-            stage,
-            tint_of(entity_def, materials),
-            &place,
-        );
+        let frame = render_frame(tree, &camera, stage, tint_of(entity_def, materials), &place);
         let elapsed = start.elapsed();
 
         if elapsed.as_millis() > 100 {
@@ -93,7 +118,7 @@ impl CpuRenderer {
                 elapsed.as_millis(),
                 self.width,
                 self.height,
-                compiled.asset.tree.nodes.len()
+                tree.nodes.len()
             );
         }
 
