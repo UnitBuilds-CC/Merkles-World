@@ -101,6 +101,15 @@ problem, no rig, no skinning weights.
 **Rejected:** bone rigs and skinned meshes (contradicts ADR-011); baked keyframe geometry (same,
 and can't hot-reload); per-frame mesh regeneration from SDFs (reintroduces the mesh pipeline).
 
+**What the grammar can and cannot say today (2026-10-24).** The snippet above shifts the domain
+of a *leg*, which means warping one subtree and not the animal, and A-07 has no node that names a
+part's placement: `Twist` and `Bend` are unary and both act about the origin, and the only
+transform that exists is `EntityDef.position/rotation/scale`, applied host-side to the ray, once
+per entity (`editor::gpu_renderer::Placement`). So this section's model is implementable per-part
+only if [OQ-55](13-risks-open-questions.md) is decided in favour of a placement node — its drafted
+wording is there, and the alternative reading is that locomotion is whole-entity motion plus a
+host-side tree rebuild per pose, which is what the AS4 asset-reupload path already measures.
+
 **Consequences to watch:**
 - Silhouette-changing animation (a mob opening its mouth wide, a tail swaying far) costs march
   steps, since the SDF gets deeper/branchier. Keep warp amplitudes modest.
