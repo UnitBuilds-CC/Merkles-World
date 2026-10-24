@@ -181,7 +181,9 @@ presentation is a contract check, not gate P1.5 or R4 evidence (ADR-017).
 half-height (so ray generation needs no trigonometry at all), one `march` per pixel, and colour from the
 surface normal. The colour is deliberately **not** a material model - `material_eval` and lighting are
 [OQ-10](13-risks-open-questions.md)'s open question, so inventing shading here would answer a question the
-project has not answered. `cargo run --release -p render --example raster_probe` prints the numbers and
+project has not answered. (This stays true of the CPU probe. The editor's viewport does shade, by a law named
+and costed further down in this doc and in doc 16 § Visual authoring; it is an instrument's choice, not this
+doc's answer.) `cargo run --release -p render --example raster_probe` prints the numbers and
 writes a PPM into the temp directory, so there is a picture to look at as well as counts to argue with - and
 since 2026-10-13 it reads that file back and requires every byte to equal the frame in memory, because a
 printed path is a claim about a file nobody opened. The shipped binary does the same for the demo's own
@@ -846,6 +848,67 @@ in stages of 1 / 100 / 1,000 / 6,000 records — 6,000 is ten minutes at ten edi
 the same 64×48 frame is marched (3 warm-up passes discarded, 21 timed), with P1.7's placement invariant
 asserted per frame inside the loop: the newest edit's surface must sit at `HEIGHT - 0.5`, and it does at every
 occupancy.
+
+### What each shading term costs, before anyone picks one (2026-10-24) — OQ-10 priced from the rows above
+
+Two places in this doc say the picture is deliberately unshaded: `render::raster` maps a normal to rgb and
+names [OQ-10](13-risks-open-questions.md) as the open question, because "inventing shading here would answer
+a question the project has not answered", and `present.wgsl` refuses a normal on the shipped path because it
+"would cost six more tree walks per pixel". Both are true of the shipped paths. Neither is the whole state of
+play, because **the authoring instrument already chose a shading law**: every dump `render_png` wrote while
+the pig was being judged is lit by `gpu_renderer::key_light` (crates/editor/src/gpu_renderer.rs:384), whose
+direction is `-forward + 0.75·up − 0.45·right` — the view ray reversed, tipped up and to one side, so the key
+travels with the camera — and `shade_at` (:521), which
+turns a normal into a single scalar by `0.20 + 0.80·max(d,0) + 0.22·max(−d,0)` capped at 235 and then
+multiplies it by the entity's `Material::base_color`. Four constants picked by eye against the pig's front
+view; doc 16 describes the tint, and nothing until now described the light. It is not OQ-10's answer — no doc
+has signed off a light story — but it is what the project's only visual instrument *is*, so the honest
+sentence is that OQ-10 has a de-facto preview law and no shipped law.
+
+The pricing below is **arithmetic on the published rows above, not a new measurement**, and it needs only two
+of them: a full 1080p grid of `interp.wgsl` tree-walks is the **9.30 ms** denominator the frontier table
+publishes — of that example's three-node scene, a scale the last bullet below returns to — and that same
+frame's surfaces are **80,964 of 2,073,600 pixels**, a 3.90% hit share. So one walk
+charged only to pixels that found surface is 9.30 × 0.0390 = **0.36 ms**, and a shading term is a count of
+walks per hit pixel.
+
+| term | walks per *hit* pixel | DERIVED cost at a 3.90% hit share | against the provisional **≤ 4 ms** shading allocation |
+|---|---|---|---|
+| central-difference normal (six walks) | 6 | 6 × 0.36 = **2.2 ms** | fits |
+| tetrahedral normal (four) | 4 | **1.5 ms** | fits |
+| analytic AO: three taps of the field along the normal | 3 | **1.1 ms** | fits |
+| one shadow **march** per hit pixel, priced as a camera ray (88.20 ms ÷ 2,073,600 = 42.5 ns at cap 64) | 1 ray | **3.4 ms** | fits alone, not beside the six-walk normal |
+
+Four things that says, in descending order of usefulness.
+
+- **`present.wgsl`'s refusal is a per-pixel sentence in a per-hit-pixel world.** Six walks on *every* pixel is
+  55.8 ms by the same denominator; six walks on the 3.90% that hit is 2.2 ms. The shader is right that a
+  normal is not free — the number it quotes is the cost of a frame that is mostly ground, and at this hit
+  share it is the cheapest part of lighting.
+- **A normal is affordable and a light is not, and the difference is a walk versus a march.** A gradient is a
+  handful of field evaluations at a point the march already found; a shadow is a second march from that point.
+  That is also why the preview's `0.22·max(−d,0)` counter term is doing, as one multiply, the work of an
+  occlusion term it never computes.
+- **The allocation is not what blocks shading today — geometry has already spent it.** The cap-1 1080p march
+  is 15.92 ms against a 16.67 ms frame, 0.96×, so none of the four rows above has anywhere to go *as the frame
+  stands*. What makes them affordable is fewer walked pixels: at a tenth of this hit share the six-walk normal
+  costs 0.22 ms and the shadow march 0.34 ms. The device-side cull is therefore not a competitor to OQ-10, it
+  is its precondition, and it is the same 96.1% the frontier table points at.
+- **What this does not price — and the row that changes the verdict.** The 9.30 ms denominator is a walk of
+  `r1_march_alone`'s **three-node** scene (a union of one sphere and one rounded box). The measured frame law
+  is `steps × nodes`, the step count barely moves as the tree grows, and the sweep above charges ~1.6 ns per
+  extra node per step, so a walk of a 74-node authored tree costs on the order of **25×** that denominator and
+  every row in the table scales with it: on a pig-sized scene a single extra walk per hit pixel is already
+  ~9 ms and the six-walk normal is ~54 ms. So "fits" above is a statement about a demo-sized field, not about
+  authored content — and the lever that could make it true is the one doc 04's own mechanism table names as
+  **distance LOD: fewer SDF terms for distant entities**, because a distant pig has no business marching 74
+  nodes. One asymmetry is worth stating while it is cheap: the pig's joins are `SmoothUnion`s, and the device's
+  bound-skip arm asks only plain `NODE_UNION` (OQ-54's ruling, which keeps the `k`-aware arm CPU-only), so a
+  blended authored tree gets *less* relief from the cull than the demo scene it is being priced against. R1
+  stays unmet; no new timing is asserted here, only arithmetic on the GTX 1070 rows; and the art direction
+  itself — one key? a sky term? AO analytic or marched? day-night at all? — is still the owner's call. What is
+  new is that the call can now be made against a cost per term, and against the fact that on authored content
+  that cost is dominated by the node count of the thing being shaded rather than by the number of lights.
 
 ### Hardware acceleration approaches explored (2026-10-18)
 

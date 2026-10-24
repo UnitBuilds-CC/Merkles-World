@@ -176,6 +176,14 @@ pixels instead:
   cloven hooves, and the curled tail. What the earlier passes had left wrong was visible only in the
   profiles: the ears stood up like a rabbit's, and the feet were full spheres because their sole cut
   barely grazed the bottom. Both were geometry mistakes in `pig.ron`, not defects in the instrument.
+  **The six views are shape references, not lighting references.** `key_light` points the key at
+  `-forward + 0.75·up − 0.45·right` — the view ray reversed, tipped up and to one side — so the light travels
+  with the camera and each of the six dumps is lit from its own viewing direction; no two of them agree about
+  where the light is. `shade_at`'s four constants (`0.20` ambient, `0.80`
+  diffuse, `0.22` counter, a 235 cap) were chosen by eye against the front view and are part of the
+  instrument rather than of OQ-10's answer. A revision that only shows up under a different light — a neck
+  shadow, a contact darkening — is invisible to this instrument, and docs/04 § What each shading term costs
+  prices what adding one would take.
 - **The interactive window** (`--example entity_editor`, run in release) adds orbit, zoom, the inspector,
   the material panel, and a facing compass projected through the same camera basis as the raster. It
   repaints only when `EditorState::preview_signature` moves — that digest covers the shape, the
