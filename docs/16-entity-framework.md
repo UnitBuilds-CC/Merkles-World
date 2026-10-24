@@ -179,7 +179,10 @@ pixels instead:
   **The six views are shape references, not lighting references.** `key_light` points the key at
   `-forward + 0.75·up − 0.45·right` — the view ray reversed, tipped up and to one side — so the light travels
   with the camera and each of the six dumps is lit from its own viewing direction; no two of them agree about
-  where the light is. `shade_at`'s four constants (`0.20` ambient, `0.80`
+  where the light is. That was chosen, not missed: one direction shared by six views around one animal
+  necessarily backlights at least one of them, and `key_light`'s own comment records that the fixed world light
+  it replaced left the face — which points away from it — at ambient, so the front view read as a black
+  silhouette (crates/editor/src/gpu_renderer.rs:382). Readability bought with comparability. `shade_at`'s four constants (`0.20` ambient, `0.80`
   diffuse, `0.22` counter, a 235 cap) were chosen by eye against the front view and are part of the
   instrument rather than of OQ-10's answer. A revision that only shows up under a different light — a neck
   shadow, a contact darkening — is invisible to this instrument, and docs/04 § What each shading term costs
