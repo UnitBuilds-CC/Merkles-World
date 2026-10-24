@@ -233,7 +233,7 @@ what the AS4 path already does (`600 edits, zero divergences`, each one a re-upl
 > bumps it for "a change to the record layout or to any kind's meaning", and an added kind is neither. The ADR
 > should say so out loud rather than leave the version question to be re-litigated by the next reader.
 
-Why this is the shape to approve, and the four things it costs:
+Why this is the shape to approve, and what it costs:
 
 - **The law is already written and already tested.** `Placement::to_shape`/`to_world` is asserted as an exact
   round trip, the quaternion order is pinned by the quarter-turn test, and a non-unit quaternion or zero scale is
