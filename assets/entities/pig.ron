@@ -88,11 +88,18 @@
 //     same shape the legs and the tail already use: a chain of shrinking spheres whose tops lie on one
 //     line. A bridge sphere (r 0.115 at y 0.30, z -0.60) sits between the skull's crown and the snout
 //     disc, and the profile is now one continuous slope — a pig's roman nose.
-//   · The ear's flattening slab was cutting along the cone's own axis, not across it. Its normal
-//     (0.643, 0, -0.766) came within 1.2 degrees of parallel to the base→tip direction, so the 0.08
-//     band did not thin the ear at all: it sliced a puck out of the middle of the cone and left a thick
-//     wall with a scoop in its front. The normal is now perpendicular to that axis, which keeps the
-//     cone's whole length and shaves its width, and the ear reads as a leaf.
+//   · The ear's flattening slab thinned the ear along the wrong direction. A slab only shaves across
+//     the length you want flatter, and the length here is the cone's own run, so the normal had to be
+//     *across* it. The old normal (0.643, 0, -0.766) stood 8.8 degrees from the cone's horizontal run
+//     — parallel to it — and so the 0.08 band sheared a diagonal slice through the cone and left a
+//     thick wall with a flat scoop in its front. The new normal (0.659, 0, 0.752) stands 86.2 degrees
+//     from that run, so the band is thin front-to-back, keeps the cone's whole length, and the ear
+//     reads as a leaf. One limit is worth keeping: measured in 3D these two normals are 45.3° and
+//     87.2° from base→tip, not 8.8° and 86.2°, because the cone rises 44.6° out of the horizontal and
+//     a plane normal here has no y unless the author writes one. Perpendicular to the run is therefore
+//     the *ceiling* for a flat slab, not a given — the new normal is 3.8° under it, the old one was as
+//     far the other way as the range allows, and both hold every sphere centre inside the band. What
+//     differs is how much of each sphere the band can reach.
 //   · The eye's dish was measured against the skull, and the bridge is what the eye now sits on. The
 //     old cutter left a 0.016-deep, 0.034-wide hollow in a surface that had moved 0.0228 outward, so
 //     the eyeball drowned in it. At r 0.034 the dish is 0.011 deep with a 0.025 rim.
@@ -216,15 +223,18 @@ EntityDef(
                                                         ),
                                                     ),
                                                     b: Intersect(
-                                                        // Slab 0.08 thick, with its thin direction
-                                                        // *across* the cone rather than along it: the
-                                                        // normal here is perpendicular to the base→tip
-                                                        // axis, so the band keeps the cone's whole
-                                                        // length and shaves its width. The previous
-                                                        // normal ran almost parallel to that axis, which
-                                                        // did not flatten the ear at all — it sliced a
-                                                        // 0.08 puck out of the middle of the cone and
-                                                        // left a thick wall with a scoop in its front.
+                                                        // Slab 0.08 thick, with its thin direction across
+                                                        // the cone's run rather than along it: this normal
+                                                        // stands 86.2 degrees from that run, so the band
+                                                        // contains the cone's whole length and shaves its
+                                                        // width. The previous normal stood 8.8 degrees from
+                                                        // it — as along the cone as a flat normal gets —
+                                                        // and sheared half the cone off on a diagonal
+                                                        // plane, leaving a thick wall with a flat scoop in
+                                                        // its front. Both hold every sphere centre inside
+                                                        // the band; what differs is how much of each sphere
+                                                        // the band can reach. See this file's sixth-pass
+                                                        // note for why perpendicular is the ceiling here.
                                                         a: Plane(
                                                             normal: (0.659, 0.0, 0.752),
                                                             offset: -0.2472,

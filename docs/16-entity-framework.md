@@ -289,10 +289,15 @@ question: the cap does not only bound what an author may write, it bounds what t
 what they wrote.
 
 Two of the pass's three other findings are worth keeping as authoring notes. The ear's flattening slab
-had been cutting *along* the cone's axis (its normal came within 1.2 degrees of parallel to base→tip),
-which does not thin an ear at all — it slices a puck out of the middle of it and leaves a thick wall
-with a scoop; a slab only flattens when its normal is perpendicular to the length it is meant to
-shave. And the first bridge had the snout large and high, which fixed the profile and turned the
+was thinning the ear in the wrong direction: a slab shaves only *across* the length you want flatter,
+and its normal then stood 8.8 degrees from the cone's own horizontal run — as along it as a flat normal
+gets — so the band sheared the cone diagonally and left a thick wall with a scoop in its front. Turning
+the normal to 86.2 degrees across the run keeps the cone's whole length and shaves its width, and the
+ear reads as a leaf. The finding behind the finding is a limit on the primitive: measured in 3D those
+two normals are 45.3° and 87.2° from base→tip, not 8.8° and 86.2°, because the ear leans 44.6° up out
+of the horizontal and a cut plane's normal has no `y` unless the author writes one. Perpendicular to the
+length is the *ceiling* for a slab on a leaning part, not a given — worth knowing before blaming the
+blend. And the first bridge had the snout large and high, which fixed the profile and turned the
 `front` view into a frog: a disc whose top stood above the eye line swallows the eyes. The two views
 constrain each other, and neither is a proxy for the other.
 
