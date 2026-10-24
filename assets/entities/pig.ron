@@ -80,6 +80,35 @@
 //     0.08 so the taper survives instead of being smoothed away.
 //   Both are single-node re-centrings and a cut-plane offset: the node count and depth are unchanged.
 //
+// - A sixth pass went after the profile, which is the view the first five were tuned by and the one the
+//   head still failed: at `side` the animal read as a dog. Three causes, and only one of them was the
+//   snout's size.
+//   · There is no nose bridge. Skull-then-muzzle is two circles, so the top line dips concave between
+//     them — a stop — and a muzzle of any radius reads as a ball stuck under the face. The fix is the
+//     same shape the legs and the tail already use: a chain of shrinking spheres whose tops lie on one
+//     line. A bridge sphere (r 0.115 at y 0.30, z -0.60) sits between the skull's crown and the snout
+//     disc, and the profile is now one continuous slope — a pig's roman nose.
+//   · The ear's flattening slab was cutting along the cone's own axis, not across it. Its normal
+//     (0.643, 0, -0.766) came within 1.2 degrees of parallel to the base→tip direction, so the 0.08
+//     band did not thin the ear at all: it sliced a puck out of the middle of the cone and left a thick
+//     wall with a scoop in its front. The normal is now perpendicular to that axis, which keeps the
+//     cone's whole length and shaves its width, and the ear reads as a leaf.
+//   · The eye's dish was measured against the skull, and the bridge is what the eye now sits on. The
+//     old cutter left a 0.016-deep, 0.034-wide hollow in a surface that had moved 0.0228 outward, so
+//     the eyeball drowned in it. At r 0.034 the dish is 0.011 deep with a 0.025 rim.
+//   The bridge is one level of depth, and that is what it cost: at 15 the editor's own re-parent begins
+//   to refuse (`graft_part` answers "SmoothUnion is 17 levels deep, past the grammar's cap of 16",
+//   because lifting a branch onto a deep route adds two levels), so the ear's third sphere paid for it.
+//   74 nodes and depth 14, unchanged — the head's budget was moved, not grown.
+//   What the renders rejected on the way: the first bridge had the muzzle at r 0.088 and y 0.285, which
+//   fixed the profile and turned the front view into a frog — a disc 0.207 wide whose top stood above
+//   the eye line, so the eyes disappeared into the snout. The accepted disc is 0.184 wide, spans
+//   y 0.205 to 0.325, and leaves the eyes clear above it.
+//
+//   Note on the instrument: at `side` the whole head is ~80 px of a 480-wide frame, which is enough to
+//   see that a snout is wrong and not enough to see why. Each judgement below the fifth pass was made
+//   on a crop of that corner, which any viewer can make of `pig_side.png`.
+//
 // Hypothesis for docs/04, not a measurement: every blended join is a place the marcher cannot skip,
 // since ADR-024's k-aware skip refuses exactly the large-`k` case, so an authored creature is an R1
 // expense per part. Nothing here controls for that yet — the debug CPU raster's timings swing by more
@@ -145,57 +174,72 @@ EntityDef(
                                     // later blend.
                                     k: 0.035,
                                     a: SmoothUnion(
-                                        k: 0.03,
-                                        a: Sphere(
-                                            r: 0.15,
-                                            centre: (0.0, 0.315, -0.50),
-                                        ),
-                                        b: Mirror(
-                                            // Ear: a cone of three shrinking spheres, then a slab cut
-                                            // that flattens it front-to-back. The cone alone read as a
-                                            // horn — a pig's ear is a *blade*, broad in the front view
-                                            // and thin in the side view, and no union of spheres can be
-                                            // thin. The two cut planes are nested inside the ear's own
-                                            // `Intersect`, whose first operand keeps the enclosure
-                                            // bounded. The base sits inside the skull, so only the leaf
-                                            // grows out of the head; the tip clears the topline.
-                                            axis: 0,
-                                            child: Intersect(
-                                                a: SmoothUnion(
-                                                    k: 0.03,
-                                                    a: Sphere(
-                                                        r: 0.075,
-                                                        centre: (0.1, 0.355, -0.47),
-                                                    ),
-                                                    b: SmoothUnion(
+                                        // The nose bridge: the sphere that turns skull-then-muzzle from
+                                        // two balls into one wedge. Without it the profile line dips
+                                        // concave between the crown and the snout — a dog's stop — and
+                                        // the muzzle, however large, reads as a ball stuck under the
+                                        // face. Its top sits on the straight line from the skull's crown
+                                        // to the snout disc, which is a pig's roman nose.
+                                        k: 0.05,
+                                        a: SmoothUnion(
+                                            k: 0.03,
+                                            a: Sphere(
+                                                r: 0.15,
+                                                centre: (0.0, 0.315, -0.50),
+                                            ),
+                                            b: Mirror(
+                                                // Ear: a cone of shrinking spheres, then a slab cut that
+                                                // flattens it across the cone. The cone alone read as a
+                                                // horn — a pig's ear is a *blade*, and no union of spheres
+                                                // can be thin. The two cut planes are nested inside the
+                                                // ear's own `Intersect`, whose first operand keeps the
+                                                // enclosure bounded. The base sits inside the skull, so
+                                                // only the leaf grows out of the head.
+                                                axis: 0,
+                                                child: Intersect(
+                                                    a: SmoothUnion(
+                                                        // Two spheres, not three: the nose bridge below is
+                                                        // worth more to the silhouette than this cone's
+                                                        // third step, and the tree's depth is the budget
+                                                        // they share. `MAX_TREE_DEPTH` is 16 and a
+                                                        // re-parent costs two levels on top of the
+                                                        // authored tree, so the pig has to ship at 14 —
+                                                        // see docs/16 § Visual authoring.
                                                         k: 0.03,
                                                         a: Sphere(
-                                                            r: 0.056,
-                                                            centre: (0.127, 0.392, -0.492),
+                                                            r: 0.075,
+                                                            centre: (0.1, 0.355, -0.47),
                                                         ),
                                                         b: Sphere(
-                                                            r: 0.034,
-                                                            centre: (0.148, 0.418, -0.512),
+                                                            r: 0.04,
+                                                            centre: (0.135, 0.398, -0.505),
                                                         ),
                                                     ),
-                                                ),
-                                                b: Intersect(
-                                                    // Slab 0.08 thick, turned 40 degrees outward, offset to
-                                                    // cover the cone's whole span now that the tip leans
-                                                    // forward. Wider than it is deep, because a pig's ear is
-                                                    // broad at the base: the earlier, narrower leaf read as
-                                                    // a horn from the side, which is the silhouette the
-                                                    // extra width and the shorter tip are here to break.
-                                                    a: Plane(
-                                                        normal: (0.643, 0.0, -0.766),
-                                                        offset: 0.496,
-                                                    ),
-                                                    b: Plane(
-                                                        normal: (-0.643, 0.0, 0.766),
-                                                        offset: -0.416,
+                                                    b: Intersect(
+                                                        // Slab 0.08 thick, with its thin direction
+                                                        // *across* the cone rather than along it: the
+                                                        // normal here is perpendicular to the base→tip
+                                                        // axis, so the band keeps the cone's whole
+                                                        // length and shaves its width. The previous
+                                                        // normal ran almost parallel to that axis, which
+                                                        // did not flatten the ear at all — it sliced a
+                                                        // 0.08 puck out of the middle of the cone and
+                                                        // left a thick wall with a scoop in its front.
+                                                        a: Plane(
+                                                            normal: (0.659, 0.0, 0.752),
+                                                            offset: -0.2472,
+                                                        ),
+                                                        b: Plane(
+                                                            normal: (-0.659, 0.0, -0.752),
+                                                            offset: 0.3272,
+                                                        ),
                                                     ),
                                                 ),
                                             ),
+                                        ),
+                                        b: Sphere(
+                                            r: 0.115,
+                                            centre: (0.0, 0.30, -0.60),
                                         ),
                                     ),
                                     b: Subtract(
@@ -208,50 +252,56 @@ EntityDef(
                                             a: SmoothUnion(
                                                 k: 0.03,
                                                 a: Sphere(
-                                                    r: 0.062,
-                                                    centre: (0.035, 0.225, -0.645),
+                                                    r: 0.078,
+                                                    centre: (0.032, 0.265, -0.720),
                                                 ),
                                                 b: Sphere(
-                                                    r: 0.062,
-                                                    centre: (-0.035, 0.225, -0.645),
+                                                    r: 0.078,
+                                                    centre: (-0.032, 0.265, -0.720),
                                                 ),
                                             ),
-                                            // Cut only 0.019 behind each sphere's front, where the two
-                                            // cross-sections still overlap by 0.019: a cut nearer the
-                                            // front pinches the disc into a figure eight.
+                                            // Cut 0.050 out from each sphere's pole, where the two
+                                            // cross-sections still overlap by 0.056: nearer the front
+                                            // pinches the disc into a figure eight, nearer the centre
+                                            // makes the face a cylinder.
                                             b: Plane(
                                                 normal: (0.0, 0.0, -1.0),
-                                                offset: 0.688,
+                                                offset: 0.770,
                                             ),
                                         ),
                                         // Nostrils: shallow dimples pressed into the flat face, set just
-                                        // in front of it so they remove 7 mm of snout and nothing else.
+                                        // in front of it so they remove 6.5 mm of snout and nothing else.
                                         cutter: Mirror(
                                             axis: 0,
                                             child: Sphere(
                                                 r: 0.014,
-                                                centre: (0.024, 0.225, -0.6955),
+                                                centre: (0.033, 0.265, -0.7775),
                                             ),
                                         ),
                                     ),
                                 ),
                                 cutter: Mirror(
-                                    // Socket: centred 0.028 outside the head's surface, so it cuts a
-                                    // dish 0.016 deep with a 0.031 rim — the shadow ring that names it.
+                                    // Socket: the dish is measured against the nose bridge, not the
+                                    // skull — the bridge's own surface now stands 0.0228 inside this
+                                    // cutter's centre, so the old r 0.044 carved a 0.016-deep hollow
+                                    // with a 0.034 rim and the eye drowned in it. At 0.034 the dish is
+                                    // 0.011 deep with a 0.025 rim: still a shadow ring, no longer a
+                                    // wound.
                                     axis: 0,
                                     child: Sphere(
-                                        r: 0.044,
+                                        r: 0.034,
                                         centre: (0.1174, 0.3684, -0.6227),
                                     ),
                                 ),
                             ),
                             b: Mirror(
-                                // Eyeball: smaller than its socket and proud of the rim by 0.012, so it
-                                // catches a highlight without becoming a googly eye.
+                                // Eyeball: on the socket's own axis, its centre 0.008 outside the
+                                // bridge's surface so the dish holds it and proud of the flesh by
+                                // 0.015, which is the highlight.
                                 axis: 0,
                                 child: Sphere(
-                                    r: 0.021,
-                                    centre: (0.091, 0.3564, -0.5951),
+                                    r: 0.018,
+                                    centre: (0.0954, 0.3556, -0.6185),
                                 ),
                             ),
                         ),

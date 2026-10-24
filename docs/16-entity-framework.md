@@ -275,6 +275,33 @@ measured **5.2–12.2 s**, with the three-quarter row the slowest at 12.2 s. Not
 work — the second run is the same node count on a busier machine — so the two ranges are a warning
 about quoting this instrument to one significant figure, not a price for either pass.
 
+A sixth pass (also 2026-10-24) went after the `side` view, which the first five had tuned by and the
+head still failed: the animal read as a dog, because skull-then-muzzle is two circles and the line
+between them dips concave. A bridge sphere fixed the profile, and it is the first edit in this file's
+history that could not be made for free. **It costs one level of depth, and the last two levels are
+spoken for**: at depth 15 the editor's own `graft_part` starts refusing the shipped pig with
+`SmoothUnion is 17 levels deep, past the grammar's cap of 16`, because lifting a branch onto a deep
+route adds two levels of wrapper on top of whatever the file already reaches. So the tree stays at
+**74 nodes and depth 14** by paying for the bridge with the ear's third sphere — the budget moved, and
+the ear is a two-step cone now — rather than by growing into the headroom the editing tools need.
+That is a measured cost of `MAX_TREE_DEPTH`'s draft number, and it belongs beside OQ-55's version
+question: the cap does not only bound what an author may write, it bounds what the editor may do to
+what they wrote.
+
+Two of the pass's three other findings are worth keeping as authoring notes. The ear's flattening slab
+had been cutting *along* the cone's axis (its normal came within 1.2 degrees of parallel to base→tip),
+which does not thin an ear at all — it slices a puck out of the middle of it and leaves a thick wall
+with a scoop; a slab only flattens when its normal is perpendicular to the length it is meant to
+shave. And the first bridge had the snout large and high, which fixed the profile and turned the
+`front` view into a frog: a disc whose top stood above the eye line swallows the eyes. The two views
+constrain each other, and neither is a proxy for the other.
+
+One limit on the instrument itself: at `side` the whole head is ~80 px of a 480-wide frame, which is
+enough to see that a snout is wrong and not enough to see *why*. Every judgement in this pass was made
+on a crop of that corner of `pig_side.png`, which any image viewer can produce; the example does not
+offer a close-up, and adding a camera-distance override would put the camera inside the animal for
+every view but the one it was added for.
+
 ### Driving the editor over MCP
 
 `cargo run -p editor --bin editor_mcp` speaks MCP over stdin and stdout: one JSON-RPC line in, one reply

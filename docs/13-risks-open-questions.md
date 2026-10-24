@@ -287,7 +287,13 @@ Why this is the shape to approve, and what it costs:
   hip→thigh→shank→hoof chain of wrappers spends four more levels on one leg. Meanwhile docs/04 has since
   measured the law the cap should be derived from — `steps × nodes`, with the step count barely moving as the
   tree grows and ~1.6 ns charged per extra node per step. So approval should name both: the arm, and what the
-  cap becomes on that measurement.
+  cap becomes on that measurement. **And the cap has a second cost nobody had priced: it bounds what the
+  editor may do, not only what an author may write.** The sixth authoring pass wanted one more sphere in the
+  pig's head and could not have it — at depth 15 `graft_part` refuses the shipped file with "SmoothUnion is 17
+  levels deep, past the grammar's cap of 16", because re-parenting adds two levels of wrapper to whatever the
+  tree already reaches, so the deepest authored route leaves the editor no room to work. The pass paid for the
+  sphere out of the ear instead, and the file stayed at 74 nodes and depth 14. Read that as the cap's real
+  headroom: `16 − (authored depth) − 2` is what an editing session can spend, which at today's pig is zero.
 
 The three ways out, priced: **(a)** add `NODE_PLACE` (+ the folding pass, + the bound rule, + the cap
 re-derivation) — unblocks doc 07's per-part warp, makes part placement an authored fact rather than a
